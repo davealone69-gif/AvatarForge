@@ -31,6 +31,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # "tools" is no longer a valid sdkmanager package on current SDK repositories.
+          packages: "platform-tools"
 
       - name: Install Android build packages
         run: |
