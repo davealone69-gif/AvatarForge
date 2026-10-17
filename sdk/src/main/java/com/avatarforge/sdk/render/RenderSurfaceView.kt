@@ -160,6 +160,13 @@ class RenderSurfaceView @JvmOverloads constructor(
                 renderer?.setCamera(camera)
                 renderer?.applyOptions(settings)
                 if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
+                /*
+                 * The view can become visible before Android creates its Surface. In that order,
+                 * frameLoop exits because renderer is null and never schedules itself again.
+                 * Restart it only after the renderer and Surface are both ready.
+                 */
+                handler.removeCallbacks(frameLoop)
+                if (visible) handler.post(frameLoop)
             } catch (t: Throwable) {
                 renderer = null
                 _rendererInfo.value = null
@@ -169,7 +176,13 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        handler.post { renderer?.resize(width, height) }
+        handler.post {
+            renderer?.resize(width, height)
+            if (visible && renderer != null) {
+                handler.removeCallbacks(frameLoop)
+                handler.post(frameLoop)
+            }
+        }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
