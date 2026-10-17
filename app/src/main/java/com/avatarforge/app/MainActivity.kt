@@ -21,6 +21,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -92,6 +93,7 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val health = remember { AvatarEngine.health() }
 
+        var surfaceViewState by remember { mutableStateOf<RenderSurfaceView?>(null) }
         var screen by remember { mutableStateOf(Screen.INPUT) }
         var prompt by remember { mutableStateOf("") }
         var spec by remember { mutableStateOf(AvatarSpec()) }
@@ -109,6 +111,17 @@ class MainActivity : ComponentActivity() {
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
         var pickedRegion by remember { mutableStateOf(-1) }
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
+
+        BackHandler(enabled = screen != Screen.INPUT) {
+            when (screen) {
+                Screen.VIEWER -> screen = Screen.INPUT
+                Screen.PROGRESS -> {
+                    job?.cancel()
+                    screen = Screen.INPUT
+                }
+                Screen.INPUT -> Unit
+            }
+        }
 
         val expressionNames = remember { engine.blendshapeNames() }
 
@@ -135,10 +148,17 @@ class MainActivity : ComponentActivity() {
             screen = Screen.PROGRESS
             scope.launch {
                 val outcome = runCatching { started.await() }
-                outcome.getOrNull()?.let {
+                outcome.onSuccess {
                     result = it
                     surfaceView?.attachEngine(engine.nativeHandle)
                     screen = Screen.VIEWER
+                }.onFailure { error ->
+                    Toast.makeText(
+                        context,
+                        "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    screen = Screen.INPUT
                 }
             }
         }
@@ -212,12 +232,15 @@ class MainActivity : ComponentActivity() {
                 if (finished == null) {
                     screen = Screen.INPUT
                 } else {
-                    val rendererInfo by surfaceView?.rendererInfo?.collectAsState() ?: remember { mutableStateOf(null) }
-                    val stats by surfaceView?.stats?.collectAsState()
+                    val rendererInfo by surfaceViewState?.rendererInfo?.collectAsState() ?: remember { mutableStateOf(null) }
+                    val stats by surfaceViewState?.stats?.collectAsState()
                         ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
+                    val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
                     ViewerScreen(
                         result = finished,
                         engine = engine,
+                        rendererError = rendererError,
+                        onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,
                         camera = camera,
@@ -291,6 +314,7 @@ class MainActivity : ComponentActivity() {
                                 factory = { ctx ->
                                     RenderSurfaceView(ctx).also { view ->
                                         surfaceView = view
+                                        surfaceViewState = view
                                         view.bind(engine)
                                         view.applySettings(settings)
                                         view.applyCamera(camera)
