@@ -214,3 +214,14 @@ class AssetRegistry private constructor(private val root: File, private val reco
 }
 
 class AssetRegistryException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+
+/** Load one installed JSON preset and hand its typed spec to the existing native generation pipeline. */
+fun AvatarEngine.generateFromPreset(
+    context: Context,
+    assetId: String,
+    memoryBudgetBytes: Long = 1536L * 1024 * 1024
+): JobHandle {
+    val preset = AssetRegistry.open(context).loadCharacterPreset(assetId)
+    return generateFromText(preset.prompt, preset, memoryBudgetBytes)
+}
