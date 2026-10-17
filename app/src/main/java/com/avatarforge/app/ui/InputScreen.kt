@@ -3,15 +3,14 @@
  *
  * Where a generation starts. Three inputs, matching exactly what the engine can consume:
  *
- *   1. a text prompt            -> af_engine_analyze_prompt()  (keyword grammar, measured)
- *   2. Image A: the identity    -> af_engine_analyze_images(role = IDENTITY)
- *   3. Image B: the equipment   -> af_engine_analyze_images(role = CLOTHING)
+ *   1. a text prompt              -> af_engine_analyze_prompt()  (keyword grammar, measured)
+ *   2. Image A: appearance hint   -> af_engine_analyze_images(role = IDENTITY, ABI-stable name)
+ *   3. Image B: outfit hint       -> af_engine_analyze_images(role = CLOTHING)
  *
- * The spec panel below the inputs is not decoration: the engine's image analysis is observational
- * and the app is expected to show the user what it measured (skin tone from CIE L*a*b*, stature from
- * the head-to-body ratio, garment metalness) and let them correct it. A generator that silently
- * builds the wrong person from a good photo is worse than one that says "I read your subject as
- * 1.71 m with medium-brown skin - is that right?".
+ * The spec panel below the inputs is not decoration: the current deterministic image analyser is
+ * deliberately coarse and reports framing, optional head-count stature, median colours and garment
+ * metalness for correction. It does not reconstruct a face, preserve identity, copy a garment, or
+ * project source pixels into textures, and the UI must never imply that it does.
  */
 package com.avatarforge.app.ui
 
@@ -74,7 +73,7 @@ import com.avatarforge.sdk.Sex
 private val PROMPT_EXAMPLES = listOf(
     "athletic woman, ponytail, full plate armour",
     "tall male bodybuilder in a leather jacket and boots",
-    "slim teenage girl, t-shirt and sneakers, short hair",
+    "slim adult woman, t-shirt and sneakers, short hair",
     "spacesuit explorer, heavy build, buzz cut",
 )
 
@@ -141,8 +140,8 @@ fun InputScreen(
         item {
             Text("Reference images (optional)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                "Image A is the identity: a portrait or half-body shot is enough - the lower body is inferred from the subject's proportions. " +
-                    "Image B is the equipment: armour or clothing, segmented from its background and transferred onto the body.",
+                "Image A samples coarse framing, optional full-body stature, and skin/hair colours. It does not copy or preserve the face. " +
+                    "Image B supplies garment colour, metal confidence, and a generic outfit hint; it does not transfer garment geometry.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -150,8 +149,8 @@ fun InputScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 ImageSlot(
-                    label = "A · identity",
-                    role = "Portrait or half body",
+                    label = "A · appearance hint",
+                    role = "Portrait or full body",
                     bitmap = imageA,
                     onClick = { pickA.launch("image/*") },
                     onClear = { onImageA(null) },
@@ -159,8 +158,8 @@ fun InputScreen(
                     modifier = Modifier.weight(1f),
                 )
                 ImageSlot(
-                    label = "B · equipment",
-                    role = "Armour / clothing",
+                    label = "B · outfit hint",
+                    role = "Garment / material",
                     bitmap = imageB,
                     onClick = { pickB.launch("image/*") },
                     onClear = { onImageB(null) },
@@ -194,10 +193,10 @@ fun InputScreen(
                     onClick = onGenerateImages,
                     enabled = enabled && imageA != null,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (imageB != null) "Generate from both images" else "Generate from photo") }
+                ) { Text(if (imageB != null) "Generate using both hints" else "Generate using image measurements") }
                 if (imageB != null && imageA == null) {
                     Text(
-                        "Image B needs an identity image: the garment is transferred onto the body Image A describes.",
+                        "Image B needs Image A because the coarse analysis flow starts from the primary appearance/proportion reference.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -270,14 +269,35 @@ private fun SpecEditor(spec: AvatarSpec, onChange: (AvatarSpec) -> Unit, enabled
                 EnumRow("Sex", Sex.entries, spec.sex, enabled) { onChange(spec.copy(sex = it)) }
                 EnumRow("Build", Build.entries, spec.build, enabled) { onChange(spec.copy(build = it)) }
                 EnumRow("Hair", HairStyle.entries, spec.hairStyle, enabled) { onChange(spec.copy(hairStyle = it)) }
-                EnumRow("Outfit", Outfit.entries, spec.outfit, enabled) { onChange(spec.copy(outfit = it)) }
+                EnumRow("Outfit", Outfit.entries, spec.outfit, enabled) {
+                    onChange(
+                        if (it == Outfit.NONE) {
+                            spec.copy(outfit = it, footwear = Footwear.NONE, ageYears = maxOf(18f, spec.ageYears))
+                        } else {
+                            spec.copy(outfit = it)
+                        },
+                    )
+                }
+                if (spec.outfit == Outfit.NONE) {
+                    Text(
+                        "Adult-only nude anatomical base selected. This is the real unclothed base surface. " +
+                            "Detailed sexual-anatomy controls stay hidden until each one changes real geometry or material output.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 EnumRow("Footwear", Footwear.entries, spec.footwear, enabled) { onChange(spec.copy(footwear = it)) }
                 LabeledSlider(
-                    "Height", spec.heightM.takeIf { it > 0f } ?: 1.75f, 1.40f..2.10f, enabled
+                    "Height", spec.heightM, AvatarSpec.MIN_HEIGHT_M..AvatarSpec.MAX_HEIGHT_M, enabled
                 ) { onChange(spec.copy(heightM = it)) }
                 LabeledSlider("Body fat", spec.bodyFat, 0.06f..0.45f, enabled) { onChange(spec.copy(bodyFat = it)) }
                 LabeledSlider("Muscle", spec.muscle, 0f..1f, enabled) { onChange(spec.copy(muscle = it)) }
-                LabeledSlider("Age", spec.ageYears, 16f..70f, enabled) { onChange(spec.copy(ageYears = it)) }
+                LabeledSlider(
+                    "Age",
+                    spec.ageYears,
+                    (if (spec.outfit == Outfit.NONE) 18f else 16f)..70f,
+                    enabled,
+                ) { onChange(spec.copy(ageYears = it)) }
                 LabeledSlider("Skin melanin", spec.skinMelanin, 0.02f..0.98f, enabled) { onChange(spec.copy(skinMelanin = it)) }
                 LabeledSlider("Cloth roughness", if (spec.clothRoughness < 0f) 0.6f else spec.clothRoughness, 0.2f..1f, enabled) {
                     onChange(spec.copy(clothRoughness = it))
@@ -300,12 +320,12 @@ private fun <T> EnumRow(label: String, values: List<T>, selected: T, enabled: Bo
                 selected = true,
                 onClick = { open = true },
                 enabled = enabled,
-                label = { Text(selected.toString().lowercase().replace('_', ' ')) },
+                label = { Text(enumLabel(selected)) },
             )
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 values.forEach { value ->
                     DropdownMenuItem(
-                        text = { Text(value.toString().lowercase().replace('_', ' ')) },
+                        text = { Text(enumLabel(value)) },
                         onClick = { onSelect(value); open = false },
                     )
                 }
@@ -330,6 +350,11 @@ private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPoin
     }
 }
 
+private fun enumLabel(value: Any?): String = when (value) {
+    Outfit.NONE -> "nude anatomical base (18+)"
+    else -> value.toString().lowercase().replace('_', ' ')
+}
+
 private fun formatValue(label: String, value: Float): String = when (label) {
     "Height" -> "%.2f m".format(value)
     "Age" -> "%.0f".format(value)
@@ -345,11 +370,11 @@ private fun summaryLine(spec: AvatarSpec): String = buildString {
     append(" · ")
     append(spec.hairStyle.name.lowercase())
     append(" · ")
-    append(spec.outfit.name.lowercase().replace('_', ' '))
+    append(enumLabel(spec.outfit))
     if (spec.footwear != Footwear.NONE) append(" + " + spec.footwear.name.lowercase())
     append(" · melanin %.2f".format(spec.skinMelanin))
     if (spec.prompt.isNotBlank()) append("  —  \"").append(spec.prompt.take(60)).append('"')
 }
 
-/** Which role an image slot is analysed as: slot A is the identity, slot B the equipment. */
-fun roleFor(slotIsIdentity: Boolean): ImageRole = if (slotIsIdentity) ImageRole.IDENTITY else ImageRole.CLOTHING
+/** ABI role mapping: slot A is the primary appearance hint; slot B is the outfit/material hint. */
+fun roleFor(slotIsPrimary: Boolean): ImageRole = if (slotIsPrimary) ImageRole.IDENTITY else ImageRole.CLOTHING

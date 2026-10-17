@@ -160,6 +160,7 @@ private:
 
     /* ================= state ================= */
     RendererOptions options_{};
+    RendererOptions activeTargetOptions_{};  /* last target/pipeline set that built successfully */
     RendererInfo info_{};
     RendererStats stats_{};
 
@@ -367,6 +368,7 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     stats_.msaaSamples = options_.msaaSamples;
     stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
     stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
+    activeTargetOptions_ = options_;
     return true;
 }
 
@@ -2484,25 +2486,59 @@ void VulkanRenderer::applyOptionChanges() {
     targetsDirty_ = false;
     if (!device_) return;
     vkDeviceWaitIdle(device_);
+    const RendererOptions rollback = activeTargetOptions_;
+
+    const auto rebuild = [&](std::string* error) {
+        return createShadowTarget(error) && createHdrTargets(error) && createPipelines(error) &&
+               writeDescriptorSets(error);
+    };
+
     destroyTargets();
     destroyPipelines();
     std::string error;
-    if (!createShadowTarget(&error) || !createHdrTargets(&error) || !createPipelines(&error)) {
-        /* A failed rebuild leaves the renderer unable to draw; the caller sees an empty frame
-           rather than a crash, and AvatarEngine.health() reports the reason from the app side. */
+    if (rebuild(&error)) {
+        activeTargetOptions_ = options_;
+        stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
+        stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
         return;
     }
-    writeDescriptorSets(&error);
+
+    /* Tier changes are opportunistic. If one target or pipeline allocation fails, reconstruct the
+       last known-good configuration immediately instead of presenting an empty swapchain forever. */
+    destroyTargets();
+    destroyPipelines();
+    options_ = rollback;
+    std::string rollbackError;
+    if (rebuild(&rollbackError)) {
+        activeTargetOptions_ = options_;
+        stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
+        stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
+    }
 }
 
 void VulkanRenderer::setOptions(const RendererOptions& options) {
+    RendererOptions normalized = options;
+    /* Runtime AUTO steps can request a sample count the device did not expose. Clamp every change,
+       not only init, or an upgrade from 2x to 4x can build mismatched colour/depth attachments. */
+    if (phys_ != VK_NULL_HANDLE) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(phys_, &props);
+        const VkSampleCountFlags supported =
+            props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+        int chosen = 1;
+        const int wanted = std::max(1, std::min(8, normalized.msaaSamples));
+        for (int s : {8, 4, 2}) {
+            if (wanted >= s && (supported & VkSampleCountFlagBits(s))) { chosen = s; break; }
+        }
+        normalized.msaaSamples = chosen;
+    }
     const bool needsRebuild =
-        options.msaaSamples != options_.msaaSamples ||
-        (options.enableShadows != options_.enableShadows) ||
-        (options.enableShadows && options.shadowMapSize != options_.shadowMapSize) ||
-        (options.enableBloom != options_.enableBloom) ||
-        (options.enableBloom && options.bloomLevels != options_.bloomLevels);
-    options_ = options;
+        normalized.msaaSamples != options_.msaaSamples ||
+        (normalized.enableShadows != options_.enableShadows) ||
+        (normalized.enableShadows && normalized.shadowMapSize != options_.shadowMapSize) ||
+        (normalized.enableBloom != options_.enableBloom) ||
+        (normalized.enableBloom && normalized.bloomLevels != options_.bloomLevels);
+    options_ = normalized;
     if (needsRebuild) targetsDirty_ = true;
     stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
     stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
@@ -2544,6 +2580,7 @@ bool VulkanRenderer::resize(int width, int height) {
     if (!createHdrTargets(&error)) return false;
     if (!createPipelines(&error)) return false;
     if (!writeDescriptorSets(&error)) return false;
+    activeTargetOptions_ = options_;
     return true;
 }
 

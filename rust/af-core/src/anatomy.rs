@@ -349,8 +349,14 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
     m.age = clampf(if spec.age_years > 0.0 { spec.age_years } else { 30.0 }, 16.0, 70.0);
     m.seed = if spec.seed > 0 { spec.seed as u32 } else { 1337 };
 
-    let default_height = if m.sex == AF_SEX_FEMALE { 1.63 } else { 1.756 };
-    m.height = clampf(if spec.height_m > 0.0 { spec.height_m } else { default_height }, 1.30, 2.25);
+    let population_height = if m.sex == AF_SEX_FEMALE { 1.63 } else { 1.756 };
+    /* `partial_cmp` is not enough here: NaN must resolve before it reaches any landmark. */
+    let requested_height = if spec.height_m.is_finite() && spec.height_m > 0.0 {
+        spec.height_m
+    } else {
+        AF_DEFAULT_HEIGHT_M
+    };
+    m.height = clampf(requested_height, 1.30, 2.25);
     let h = m.height;
 
     /* Landmark heights: Drillis & Contini stature fractions, with the two sexual-dimorphism
@@ -370,39 +376,49 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
     m.y.armpit_y = (0.752 - torso_bias) * h;
     m.y.shoulder_y = (0.818 - torso_bias + shoulder_bias) * h;
     m.y.neck_base_y = (0.855 - torso_bias + shoulder_bias * 0.5) * h;
-    m.y.jaw_y = (0.893 - torso_bias * 0.5) * h;
+    /* +Y is up: chin is below the jaw corner. */
     m.y.chin_y = (0.870 - torso_bias * 0.5) * h;
+    m.y.jaw_y = (0.893 - torso_bias * 0.5) * h;
     m.y.eye_y = (0.936 - torso_bias * 0.25) * h;
     m.y.crown_y = h;
     m.y.calf_max_y = lerpf(m.y.ankle_y, m.y.knee_y, 0.34);
     m.y.mid_thigh_y = lerpf(m.y.crotch_y, m.y.knee_y, 0.55);
 
-    m.thigh_len = m.y.hip_y - m.y.knee_y;
-    m.shank_len = m.y.knee_y - m.y.ankle_y;
     m.upper_arm_len = 0.186 * h;
     m.forearm_len = 0.146 * h;
     m.hand_length = 0.108 * h;
     m.foot_length = 0.152 * h;
     m.foot_width = 0.055 * h;
 
-    /* Inseam, when given, pins the crotch height and re-partitions the leg. */
-    if spec.inseam_cm > 1.0 {
-        let inseam = spec.inseam_cm / 100.0;
-        let ratio = clampf(inseam / m.y.crotch_y.max(1e-3), 0.80, 1.20);
+    /* Convert centimetres exactly once, then remap the entire lower and upper landmark chains
+       around the new crotch while preserving sole=0 and crown=height. */
+    if spec.inseam_cm.is_finite() && spec.inseam_cm > 1.0 {
+        let base = m.y;
+        let inseam = clampf(spec.inseam_cm * 0.01, 0.36 * h, 0.58 * h);
+        let leg_scale = inseam / base.crotch_y.max(1e-3);
+        let torso_scale = (h - inseam) / (h - base.crotch_y).max(1e-3);
+        let above = |y: f32| inseam + (y - base.crotch_y) * torso_scale;
+
+        m.y.sole_y = 0.0;
+        m.y.ankle_y = base.ankle_y * leg_scale;
+        m.y.knee_y = base.knee_y * leg_scale;
         m.y.crotch_y = inseam;
-        m.y.hip_y = inseam + 0.050 * h * ratio;
-        m.y.waist_y = inseam + 0.135 * h * ratio;
-        m.y.underbust_y = inseam + 0.180 * h * ratio;
-        m.y.bust_y = inseam + 0.240 * h * ratio;
-        m.y.armpit_y = inseam + 0.272 * h * ratio;
-        m.y.shoulder_y = inseam + 0.338 * h * ratio;
-        m.y.neck_base_y = inseam + 0.375 * h * ratio;
-        m.y.jaw_y = inseam + 0.413 * h * ratio;
-        m.y.chin_y = inseam + 0.390 * h * ratio;
-        m.y.eye_y = inseam + 0.456 * h * ratio;
-        m.thigh_len = m.y.hip_y - m.y.knee_y;
-        m.shank_len = m.y.knee_y - m.y.ankle_y;
+        m.y.hip_y = above(base.hip_y);
+        m.y.waist_y = above(base.waist_y);
+        m.y.underbust_y = above(base.underbust_y);
+        m.y.bust_y = above(base.bust_y);
+        m.y.armpit_y = above(base.armpit_y);
+        m.y.shoulder_y = above(base.shoulder_y);
+        m.y.neck_base_y = above(base.neck_base_y);
+        m.y.chin_y = above(base.chin_y);
+        m.y.jaw_y = above(base.jaw_y);
+        m.y.eye_y = above(base.eye_y);
+        m.y.crown_y = h;
+        m.y.calf_max_y = lerpf(m.y.ankle_y, m.y.knee_y, 0.34);
+        m.y.mid_thigh_y = lerpf(m.y.crotch_y, m.y.knee_y, 0.55);
     }
+    m.thigh_len = m.y.hip_y - m.y.knee_y;
+    m.shank_len = m.y.knee_y - m.y.ankle_y;
     m.y.arm_fold_y = m.y.waist_y - 0.02 * h;
     m.y.wrist_rest_y = m.y.hip_y - 0.19 * h;
 
@@ -421,7 +437,7 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
     c.forearm += mus_delta * 5.0;
     c.neck += mus_delta * 5.0 + fat_delta * 7.0;
 
-    let stature_scale = (h / default_height).powf(0.72);
+    let stature_scale = (h / population_height).powf(0.72);
     c.neck *= stature_scale;
     c.chest *= stature_scale;
     c.underbust *= stature_scale;
@@ -468,7 +484,7 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
        acquire a heavy person's shoulders. */
     let biacromial_cm = (if female { 36.6 } else { 41.5 })
         + (c.chest - (if female { 0.935 } else { 1.023 })) * 100.0 * 0.16
-        + (h - default_height) * 100.0 * 0.10;
+        + (h - population_height) * 100.0 * 0.10;
     m.biacromial_half = clampf(biacromial_cm / 100.0, 0.28, 0.60) * 0.5;
     m.arm_pit_half = m.chest.rx * 0.86;
     if spec.shoulder_width_cm > 1.0 {
@@ -480,7 +496,7 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
     let head_circumference_m = (if spec.head_circumference_cm > 1.0 {
         spec.head_circumference_cm
     } else {
-        (if female { 55.0 } else { 57.0 }) * (h / default_height).powf(0.5)
+        (if female { 55.0 } else { 57.0 }) * (h / population_height).powf(0.5)
     }) * 0.01;
     let head_radius_eq = head_circumference_m / (2.0 * K_PI);
     m.head.rx = head_radius_eq * 0.78;
@@ -490,7 +506,7 @@ pub fn solve(spec: &AfSpec) -> BodyMetrics {
     m.jaw.rx = m.head.rx * 0.86;
     m.jaw.rz = m.head.rz * 0.90;
     m.face_width = m.head.rx * 1.42;
-    m.nose_length = (m.y.chin_y - m.y.eye_y) * 0.42;
+    m.nose_length = (m.y.eye_y - m.y.chin_y) * 0.42;
     m.lip_width = m.face_width * 0.42;
     m.ear_length = (m.y.crown_y - m.y.chin_y) * 0.24;
     m.eye_separation = m.head.rx * 0.72;
@@ -656,10 +672,35 @@ mod tests {
             assert!(m.y.knee_y < m.y.crotch_y);
             assert!(m.y.crotch_y < m.y.waist_y);
             assert!(m.y.waist_y < m.y.shoulder_y);
-            assert!(m.y.shoulder_y < m.y.chin_y);
-            assert!(m.y.chin_y < m.y.eye_y);
+            assert!(m.y.shoulder_y < m.y.neck_base_y);
+            assert!(m.y.neck_base_y < m.y.chin_y);
+            assert!(m.y.chin_y < m.y.jaw_y); /* +Y up: chin is lower than jaw corner */
+            assert!(m.y.jaw_y < m.y.eye_y);
             assert!(m.y.eye_y < m.y.crown_y);
+            assert!(m.nose_length.is_finite() && m.nose_length > 0.0);
         }
+    }
+
+    #[test]
+    fn default_and_inseam_override_keep_one_coherent_chain() {
+        let default_metrics = solve(&AfSpec::defaulted());
+        assert!((default_metrics.height - AF_DEFAULT_HEIGHT_M).abs() < 1e-6);
+
+        let mut legacy = AfSpec::defaulted();
+        legacy.height_m = 0.0;
+        assert!((solve(&legacy).height - AF_DEFAULT_HEIGHT_M).abs() < 1e-6);
+
+        let mut s = spec(AF_SEX_FEMALE, AF_BUILD_ATHLETIC, 1.70);
+        let base = solve(&s);
+        s.inseam_cm = 79.0;
+        let m = solve(&s);
+        let scale = m.y.crotch_y / base.y.crotch_y;
+        assert!((m.y.crotch_y - 0.79).abs() < 1e-6);
+        assert!((m.y.ankle_y - base.y.ankle_y * scale).abs() < 1e-6);
+        assert!((m.y.knee_y - base.y.knee_y * scale).abs() < 1e-6);
+        assert!(m.y.ankle_y < m.y.calf_max_y && m.y.calf_max_y < m.y.knee_y);
+        assert!(m.y.knee_y < m.y.mid_thigh_y && m.y.mid_thigh_y < m.y.crotch_y);
+        assert!((m.y.crown_y - 1.70).abs() < 1e-6);
     }
 
     #[test]

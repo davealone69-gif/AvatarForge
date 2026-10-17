@@ -225,13 +225,12 @@ class JobHandle internal constructor(
 /**
  * One generation request: a spec plus the optional reference images.
  *
- * The two-image flow the generator implements is exactly this: an identity image (imageA) and an
- * optional detail/equipment image (imageB). Image A gives the face, skin tone, hair and upper-body
- * proportions; when it is a portrait or half-body shot the kernel infers the missing lower body
- * from the anthropometry it measured (head-to-body ratio, shoulder width, inseam estimate). Image B
- * is segmented from its background, classified as cloth or hard surface, and transferred onto the
- * body - geometrically (the garment volume is unioned into the body field) and texturally (its
- * dominant colour and metalness drive the material bake).
+ * The current two-image flow performs deterministic, coarse classical analysis. Image A supplies
+ * subject framing, an optional full-body stature estimate, and median skin/hair/garment colours.
+ * Image B can override garment colour and metal confidence, selecting a generic outfit class. It
+ * does **not** reconstruct or preserve a face, fit a mesh to facial landmarks, copy garment
+ * geometry, project reference pixels into UVs, or fuse calibrated views. The enum name IDENTITY is
+ * retained for ABI compatibility; it describes caller intent, not a supported identity embedding.
  */
 data class GenerationRequest(
     val spec: AvatarSpec,
@@ -296,6 +295,49 @@ class ImageReference private constructor(
 
         internal fun withAnalysis(base: ImageReference, analysis: Analysis) =
             ImageReference(base.role, base.width, base.height, base.pixels, analysis)
+    }
+}
+
+/**
+ * Versioned wire codec shared by image analysis allocation and unpacking.
+ *
+ * JNI reports its native stride before every call. A mismatch is rejected before a buffer is
+ * allocated, so a future schema edit cannot regress into a native write overrun or a Kotlin read
+ * past the end. The order mirrors af_image_analysis and includes all three background-Lab values.
+ */
+internal object ImageAnalysisPacking {
+    const val FLOAT_COUNT = 28
+
+    fun unpack(packed: FloatArray, index: Int): ImageReference.Analysis {
+        require(index >= 0) { "analysis index must be non-negative" }
+        val start = Math.multiplyExact(index, FLOAT_COUNT)
+        require(start <= packed.size - FLOAT_COUNT) {
+            "analysis record $index needs $FLOAT_COUNT floats at $start, but array length is ${packed.size}"
+        }
+
+        var i = start
+        fun f() = packed[i++]
+        val result = ImageReference.Analysis(
+            subjectCoverage = f(),
+            headBox = floatArrayOf(f(), f(), f(), f()),
+            shoulderY = f(),
+            hipY = f(),
+            ankleY = f(),
+            kneeY = f(),
+            isFullBody = f() > 0.5f,
+            poseConfidence = f(),
+            skinLab = floatArrayOf(f(), f(), f()),
+            hairLab = floatArrayOf(f(), f(), f()),
+            garmentLab = floatArrayOf(f(), f(), f()),
+            metalConfidence = f(),
+            keyLight = floatArrayOf(f(), f(), f()),
+            keyLightIntensity = f(),
+            backgroundLab = floatArrayOf(f(), f(), f()),
+        )
+        check(i == start + FLOAT_COUNT) {
+            "analysis decoder consumed ${i - start} floats, expected $FLOAT_COUNT"
+        }
+        return result
     }
 }
 
@@ -409,13 +451,13 @@ class AvatarEngine private constructor(private val appContext: Context) {
     }
 
     /**
-     * The two-image flow.
+     * The two-image coarse-analysis flow.
      *
-     * [identity] is Image A - a portrait or half-body shot is expected and the missing lower body is
-     * inferred from the subject's proportions. [detail] is Image B - armour, clothing or equipment,
-     * segmented from its background and transferred onto the body. Both are analysed before the
-     * build starts, and the measurements the kernel derived are handed to [specFromImages] so the
-     * caller can show or override them.
+     * [identity] is the ABI-stable name for Image A, which currently contributes only framing,
+     * approximate full-body stature when available, and sampled appearance colours. [detail] is
+     * Image B, which contributes garment colour/metal confidence and may select a generic outfit.
+     * Neither path reconstructs identity or reference garment geometry. The measured values are
+     * handed to [specFromImages] so the caller can inspect or override them before building.
      */
     fun generateFromImage(
         identity: ImageReference,
@@ -454,11 +496,17 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val roles = IntArray(n) { images[it].role.value }
         @Suppress("UNCHECKED_CAST")
         val pixels = Array<ByteBuffer?>(n) { images[it].pixels }
-        val packed = FloatArray(n * ANALYSIS_FLOATS)
+        val nativeStride = NativeBridge.imageAnalysisFloatCount()
+        check(nativeStride == ImageAnalysisPacking.FLOAT_COUNT) {
+            "native image-analysis stride $nativeStride does not match SDK stride ${ImageAnalysisPacking.FLOAT_COUNT}"
+        }
+        val packed = FloatArray(Math.multiplyExact(n, nativeStride))
         val rc = NativeBridge.engineAnalyzeImages(h, widths, heights, channels, roles, pixels, packed)
-        check(rc >= 0) { "image analysis failed: ${NativeBridge.engineLastError(h)}" }
+        check(rc == n) {
+            "image analysis produced $rc of $n records: ${NativeBridge.engineLastError(h)}"
+        }
         return images.mapIndexed { index, image ->
-            ImageReference.withAnalysis(image, unpackAnalysis(packed, index))
+            ImageReference.withAnalysis(image, ImageAnalysisPacking.unpack(packed, index))
         }
     }
 
@@ -468,18 +516,26 @@ class AvatarEngine private constructor(private val appContext: Context) {
      * explicitly is kept - the images fill in, they do not overwrite.
      */
     fun specFromImages(images: List<ImageReference>, base: AvatarSpec): AvatarSpec {
-        var spec = base
+        var spec = if (base.heightM.isFinite() && base.heightM > 0f) base
+                   else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
         val identity = images.firstOrNull()
         val detail = images.getOrNull(1)
         if (identity?.analysis != null) {
             val a = identity.analysis
-            /* Head-box height in the frame x 7.4 heads = the subject's stature. The kernel reports
-               the head box and the body landmarks; this is the scale-free estimate that works from
-               any phone photo. */
-            val headFraction = a.headBox[3].takeIf { it > 0.02f }
-            if (headFraction != null) {
-                val estHeight = (7.4f * (0.235f / headFraction.coerceIn(0.05f, 0.40f))).coerceIn(1.40f, 2.10f)
-                if (spec.heightM == 0f) spec = spec.copy(heightM = estHeight)
+            /* A portrait has no absolute scale and must never turn stature into zero. A genuine
+               full-body frame can refine only the canonical default: body extent / head extent is
+               scale-free, then the 0.235 m adult-head prior converts that ratio to metres. A custom
+               caller override is preserved. */
+            val mayRefineDefault = kotlin.math.abs(spec.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f
+            val headHeight = a.headBox[3]
+            val statureInFrame = a.ankleY - a.headBox[1]
+            if (mayRefineDefault && a.isFullBody && headHeight > 0.02f && statureInFrame > 0.05f) {
+                val measured = (0.235f * (statureInFrame / headHeight))
+                    .coerceIn(AvatarSpec.MIN_HEIGHT_M, AvatarSpec.MAX_HEIGHT_M)
+                val confidence = ((a.poseConfidence - 0.45f) / 0.5f).coerceIn(0f, 1f)
+                val resolved = confidence * measured +
+                    (1f - confidence) * AvatarSpec.DEFAULT_HEIGHT_M
+                spec = spec.copy(heightM = resolved)
             }
             spec = spec.copy(skinMelanin = melaninFromLab(a.skinLab))
         }
@@ -499,15 +555,23 @@ class AvatarEngine private constructor(private val appContext: Context) {
     /** Runs the prompt parser only, and returns the resolved spec plus the match count. */
     fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec {
         val h = openHandle()
-        val ints = base.packInts()
-        val floats = base.packFloats()
+        val resolvedBase = if (base.heightM.isFinite() && base.heightM > 0f) base
+                           else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
+        /* Prompt analysis mutates the native handle. Reset first so a previous generation cannot
+           leak its stature or measurements into this parse. */
+        val resetRc = NativeBridge.engineReset(
+            h, resolvedBase.packInts(), resolvedBase.packFloats(), resolvedBase.prompt,
+        )
+        check(resetRc == 0) { "prompt setup failed: ${NativeBridge.engineLastError(h)}" }
+        val ints = resolvedBase.packInts()
+        val floats = resolvedBase.packFloats()
         val outPrompt = arrayOfNulls<String>(1)
         val matched = NativeBridge.engineAnalyzePrompt(h, prompt, ints, floats, outPrompt)
         check(matched >= 0) { "prompt analysis failed: ${NativeBridge.engineLastError(h)}" }
         val spec = AvatarSpec.unpack(ints, floats, outPrompt[0] ?: prompt)
         /* Analysis is observational: keep the caller's explicit choices unless the prompt named a
            value the caller left at its default. */
-        return mergePrompted(base, spec)
+        return mergePrompted(resolvedBase, spec)
     }
 
     /* ------------------------------------------------------------------ export ---------------- */
@@ -540,7 +604,10 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
     /* ------------------------------------------------------------------ internals ------------- */
 
-    private fun start(request: GenerationRequest): JobHandle {
+    private fun start(unresolvedRequest: GenerationRequest): JobHandle {
+        val request = if (unresolvedRequest.spec.heightM.isFinite() && unresolvedRequest.spec.heightM > 0f)
+            unresolvedRequest
+        else unresolvedRequest.copy(spec = unresolvedRequest.spec.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M))
         val parent = Job()
         val handleObj = JobHandle(this, request, parent)
         synchronized(jobs) { jobs += handleObj }
@@ -554,12 +621,16 @@ class AvatarEngine private constructor(private val appContext: Context) {
             logLines.clear()
             val timings = LinkedHashMap<Stage, Float>()
             try {
+                request.spec.requireGeneratable(request.prompt)
                 check(NativeBridge.available) {
                     "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
                 }
                 val h = openHandle()
                 NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
-                NativeBridge.engineReset(h, request.spec.packInts(), request.spec.packFloats(), request.prompt)
+                val resetRc = NativeBridge.engineReset(
+                    h, request.spec.packInts(), request.spec.packFloats(), request.prompt,
+                )
+                check(resetRc == 0) { "generation setup failed: ${NativeBridge.engineLastError(h)}" }
 
                 /* Images go in before the prompt so the prompt can override what the photo implied:
                    the user typed the prompt last, so it wins. */
@@ -703,7 +774,9 @@ class AvatarEngine private constructor(private val appContext: Context) {
     private fun requery(h: Long, spec: AvatarSpec) {
         /* Exporting a result other than the one currently in the engine means rebuilding it: the
            engine is a single-slot pipeline, and pretending otherwise would export the wrong avatar. */
-        NativeBridge.engineReset(h, spec.packInts(), spec.packFloats(), spec.prompt)
+        spec.requireGeneratable()
+        val resetRc = NativeBridge.engineReset(h, spec.packInts(), spec.packFloats(), spec.prompt)
+        check(resetRc == 0) { "rebuild setup failed: ${NativeBridge.engineLastError(h)}" }
         val rc = NativeBridge.engineRunAll(h)
         check(rc == 0) { "rebuild for export failed: ${NativeBridge.engineLastError(h)}" }
     }
@@ -712,7 +785,6 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
     companion object {
         const val ABI_VERSION = 1
-        private const val ANALYSIS_FLOATS = 22
         private const val REGION_COUNT = 13
         private const val CANCELLED = -6
 
@@ -738,17 +810,25 @@ class AvatarEngine private constructor(private val appContext: Context) {
                 instance ?: AvatarEngine(context.applicationContext).also { instance = it }
             }
 
-        fun health(): EngineHealth = EngineHealth(
-            nativeLibraryLoaded = NativeBridge.available,
-            abiVersion = if (NativeBridge.available) NativeBridge.abiVersion() else 0,
-            engineVersion = if (NativeBridge.available) NativeBridge.engineVersion() else "not loaded",
-            problem = when {
-                !NativeBridge.available -> "libavatarforge.so did not load: ${NativeBridge.loadError ?: "unknown reason"}"
-                NativeBridge.abiVersion() != ABI_VERSION ->
-                    "native ABI ${NativeBridge.abiVersion()} does not match the SDK's $ABI_VERSION"
-                else -> null
-            },
-        )
+        fun health(): EngineHealth {
+            val loaded = NativeBridge.available
+            val abi = if (loaded) runCatching { NativeBridge.abiVersion() }.getOrDefault(0) else 0
+            val version = if (loaded) runCatching { NativeBridge.engineVersion() }.getOrDefault("unavailable") else "not loaded"
+            val nativeAnalysisStride = if (loaded) runCatching { NativeBridge.imageAnalysisFloatCount() }.getOrNull() else null
+            return EngineHealth(
+                nativeLibraryLoaded = loaded,
+                abiVersion = abi,
+                engineVersion = version,
+                problem = when {
+                    !loaded -> "libavatarforge.so did not load: ${NativeBridge.loadError ?: "unknown reason"}"
+                    abi != ABI_VERSION -> "native ABI $abi does not match the SDK's $ABI_VERSION"
+                    nativeAnalysisStride == null -> "native library does not expose the image-analysis schema"
+                    nativeAnalysisStride != ImageAnalysisPacking.FLOAT_COUNT ->
+                        "native image-analysis stride $nativeAnalysisStride does not match the SDK's ${ImageAnalysisPacking.FLOAT_COUNT}"
+                    else -> null
+                },
+            )
+        }
 
         fun capabilities(context: Context): EngineCapabilities {
             val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
@@ -776,28 +856,6 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
         /* ------------------------------------------------------------------ helpers ----------- */
 
-        private fun unpackAnalysis(packed: FloatArray, index: Int): ImageReference.Analysis {
-            var i = index * ANALYSIS_FLOATS
-            fun f() = packed[i++]
-            return ImageReference.Analysis(
-                subjectCoverage = f(),
-                headBox = floatArrayOf(f(), f(), f(), f()),
-                shoulderY = f(),
-                hipY = f(),
-                ankleY = f(),
-                kneeY = f(),
-                isFullBody = f() > 0.5f,
-                poseConfidence = f(),
-                skinLab = floatArrayOf(f(), f(), f()),
-                hairLab = floatArrayOf(f(), f(), f()),
-                garmentLab = floatArrayOf(f(), f(), f()),
-                metalConfidence = f(),
-                keyLight = floatArrayOf(f(), f(), f()),
-                keyLightIntensity = f(),
-                backgroundLab = floatArrayOf(f()),
-            )
-        }
-
         /**
          * Inverts CIE L* to melanin content.
          *
@@ -817,7 +875,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
             hairStyle = if (base.hairStyle == HairStyle.MEDIUM) prompted.hairStyle else base.hairStyle,
             outfit = if (base.outfit == Outfit.NONE) prompted.outfit else base.outfit,
             footwear = if (base.footwear == Footwear.NONE) prompted.footwear else base.footwear,
-            heightM = if (base.heightM == 0f) prompted.heightM else base.heightM,
+            heightM = if (kotlin.math.abs(base.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f)
+                prompted.heightM else base.heightM,
             ageYears = if (base.ageYears == 30f) prompted.ageYears else base.ageYears,
             muscle = if (base.muscle == 0.45f) prompted.muscle else base.muscle,
             bodyFat = if (base.bodyFat == 0.22f) prompted.bodyFat else base.bodyFat,

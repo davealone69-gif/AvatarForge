@@ -29,8 +29,11 @@ extern "C" {
 #endif
 
 #define AF_ABI_VERSION 1
+/* Canonical stature used whenever the caller does not supply a valid override. All public height
+ * fields are metres; centimetres are converted at their input boundary before reaching af_spec. */
+#define AF_DEFAULT_HEIGHT_M 1.75f
 /* Human-readable kernel version, reported by the SDK health check and written into every export. */
-#define AF_ENGINE_VERSION "0.10.0"
+#define AF_ENGINE_VERSION "0.10.1"
 
 /* ------------------------------------------------------------------ opaque handles ------ */
 typedef struct af_engine af_engine;
@@ -92,7 +95,7 @@ typedef enum af_hair_style {
 } af_hair_style;
 
 typedef enum af_outfit {
-    AF_OUTFIT_NONE = 0,        /* bare anatomical form (torso + limbs)                       */
+    AF_OUTFIT_NONE = 0,        /* real unclothed base surface; adult-only (age >= 18)          */
     AF_OUTFIT_TSHIRT = 1,
     AF_OUTFIT_DRESS = 2,
     AF_OUTFIT_SUIT = 3,        /* jacket + trousers                                          */
@@ -116,7 +119,7 @@ typedef struct af_spec {
     int32_t   footwear;         /* af_footwear                                             */
     int32_t   seed;             /* RNG seed: identical seed => identical avatar            */
 
-    float     height_m;         /* 1.40 .. 2.20,  0 => 1.75 default                        */
+    float     height_m;         /* metres, 1.40 .. 2.20; af_spec_init => 1.75              */
     float     age_years;        /* 16 .. 70 (drives skin micro-detail & facial volume)     */
     float     muscle;           /* 0..1 lean mass index                                    */
     float     body_fat;         /* 0..1 (0.10 = shredded, 0.45 = heavy)                    */
@@ -143,10 +146,13 @@ typedef struct af_spec {
 void af_spec_init(af_spec* spec);
 
 typedef enum af_image_role {
-    AF_IMAGE_IDENTITY = 0,   /* Image A: portrait / half body -> identity + upper body      */
-    AF_IMAGE_CLOTHING = 1,   /* Image B: garment / armour reference                         */
-    AF_IMAGE_FULL_BODY = 2,  /* already a full-body shot                                    */
-    AF_IMAGE_EXTRA_VIEW = 3  /* additional view of the same subject (multi-view fusion)      */
+    /* Names are ABI-stable. They describe caller intent, not capabilities the current classical
+       analyser does not have: it samples coarse framing/proportions/colours and does not reconstruct
+       a face, copy a garment, or fuse calibrated views. */
+    AF_IMAGE_IDENTITY = 0,   /* Image A: primary appearance/proportion reference             */
+    AF_IMAGE_CLOTHING = 1,   /* Image B: garment colour/material/outfit-class hint           */
+    AF_IMAGE_FULL_BODY = 2,  /* full-body framing hint for stature/proportion analysis        */
+    AF_IMAGE_EXTRA_VIEW = 3  /* additional independently analysed view; no geometric fusion   */
 } af_image_role;
 
 /* A decoded, upright, sRGB-8 image. The engine never retains the pointer. */
@@ -157,6 +163,11 @@ typedef struct af_image {
     int32_t role;          /* af_image_role                                            */
     const uint8_t* pixels; /* tightly packed, top-left origin, row stride = w*channels */
 } af_image;
+
+/* Number of floats in the JNI/Kotlin wire representation of af_image_analysis. The wire order is
+   the struct's semantic field order below, with is_full_body converted to float. Keep this one
+   native constant as the packer's source of truth; Kotlin verifies it at runtime before allocating. */
+#define AF_IMAGE_ANALYSIS_FLOAT_COUNT 28
 
 /* Analysis report produced by af_engine_analyze_images(). Purely observational. */
 typedef struct af_image_analysis {

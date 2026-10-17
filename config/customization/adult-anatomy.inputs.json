@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "id": "adult_anatomy",
+  "title": "Adult anatomical customization",
+  "adult_only": true,
+  "minimum_age_years": 18,
+  "offline_only": true,
+  "ui_policy": {
+    "hide_unimplemented": true,
+    "require_explicit_nude_mode": true,
+    "reject_minor_or_teen_prompts": true
+  },
+  "notes": [
+    "This file is a normalized implementation contract, not proof that geometry exists.",
+    "Controls with implementation_status BLOCKED_ENGINE_GEOMETRY must not be rendered in the production UI.",
+    "The import alias 'futa' is normalized internally to MIXED; the stored engine enum uses neutral names."
+  ],
+  "inputs": [
+    {
+      "key": "genital_size",
+      "group": "Explicit",
+      "label": "Genital Size",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.4,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["female", "male", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "genital_type",
+      "group": "Explicit",
+      "label": "Genital Type",
+      "type": "enum",
+      "options": ["none", "female", "male", "mixed"],
+      "import_aliases": {"futa": "mixed"},
+      "default": "none",
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "labia_prominence",
+      "group": "Explicit",
+      "label": "Labia",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.3,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["female", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "clit_size",
+      "group": "Explicit",
+      "label": "Clitoral Size",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.25,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["female", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "penis_length_cm",
+      "group": "Explicit",
+      "label": "Penis Length",
+      "type": "float",
+      "unit": "cm",
+      "minimum": 0.0,
+      "maximum": 30.0,
+      "step": 0.1,
+      "default": 0.0,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["male", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "penis_girth_cm",
+      "group": "Explicit",
+      "label": "Penis Girth",
+      "type": "float",
+      "unit": "cm",
+      "minimum": 0.0,
+      "maximum": 20.0,
+      "step": 0.1,
+      "default": 0.0,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["male", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "testicle_size",
+      "group": "Explicit",
+      "label": "Testicle Size",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.4,
+      "requires_rebuild": true,
+      "visible_when": {"genital_type": ["male", "mixed"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "pubic_hair",
+      "group": "Explicit",
+      "label": "Pubic Hair",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.3,
+      "requires_rebuild": true,
+      "visible_when": {"outfit": ["none"]},
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "nipple_size",
+      "group": "Explicit",
+      "label": "Nipple Size",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.35,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    },
+    {
+      "key": "areola_size",
+      "group": "Explicit",
+      "label": "Areola Size",
+      "type": "float",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.4,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY"
+    }
+  ]
+}

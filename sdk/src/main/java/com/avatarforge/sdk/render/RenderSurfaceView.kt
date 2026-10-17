@@ -117,19 +117,28 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun setFrameLoopEnabled(enabled: Boolean) {
         visible = enabled
         handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
         if (enabled) handler.post(frameLoop)
     }
 
     /* ------------------------------------------------------------------ render thread --------- */
 
     private val frameLoop = object : Runnable {
-        private var lastNs = 0L
+        @Volatile private var lastNs = 0L
+
+        fun resetClock() { lastNs = 0L }
 
         override fun run() {
-            val r = renderer ?: return
-            val now = System.nanoTime()
-            val delta = if (lastNs == 0L) 1f / 60f else ((now - lastNs) / 1_000_000_000.0).toFloat()
-            lastNs = now
+            val r = renderer
+            if (r == null) {
+                resetClock()
+                if (visible) handler.postDelayed(this, FRAME_RETRY_MS)
+                return
+            }
+            val frameStartNs = System.nanoTime()
+            val delta = if (lastNs == 0L) 1f / 60f
+                        else ((frameStartNs - lastNs) / 1_000_000_000.0).toFloat()
+            lastNs = frameStartNs
             try {
                 r.setCamera(camera)
                 r.frame(delta.coerceIn(0f, 0.1f))
@@ -138,7 +147,15 @@ class RenderSurfaceView @JvmOverloads constructor(
                 _error.value = t.message ?: t.javaClass.simpleName
                 return
             }
-            if (visible) handler.postDelayed(this, FRAME_INTERVAL_MS)
+            if (visible) {
+                /* The previous loop always slept 16 ms *after* doing the render work. A 22 ms
+                   frame therefore became 38 ms (~26 FPS), which falsely triggered the quality
+                   downgrade. Sleep only for the unused part of the 60 Hz budget. */
+                val elapsedNs = System.nanoTime() - frameStartNs
+                val remainingNs = (FRAME_INTERVAL_NS - elapsedNs).coerceAtLeast(0L)
+                val delayMs = (remainingNs + 999_999L) / 1_000_000L
+                handler.postDelayed(this, delayMs)
+            }
         }
     }
 
@@ -234,6 +251,7 @@ class RenderSurfaceView @JvmOverloads constructor(
         /* 60 Hz target. The kernel's own budget controller steps quality down if frames take too
            long, so this interval is a ceiling on CPU submissions, not a promise the GPU will
            keep - the honest number is in RendererStats.fps. */
-        const val FRAME_INTERVAL_MS = 16L
+        const val FRAME_INTERVAL_NS = 16_666_667L
+        const val FRAME_RETRY_MS = 16L
     }
 }

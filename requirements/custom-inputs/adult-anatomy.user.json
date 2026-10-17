@@ -1,0 +1,12 @@
+[
+  {"key":"genital_size","group":"Explicit","label":"Genital Size","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.4,"requires_rebuild":true},
+  {"key":"genital_type","group":"Explicit","label":"Genital Type","type":"enum","options":["none","female","male","futa"],"default":0,"requires_rebuild":true},
+  {"key":"labia_prominence","group":"Explicit","label":"Labia","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.3,"requires_rebuild":true},
+  {"key":"clit_size","group":"Explicit","label":"Clit Size","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.25,"requires_rebuild":true},
+  {"key":"penis_length_cm","group":"Explicit","label":"Penis Length","type":"float","unit":"cm","minimum":0,"maximum":30,"step":0.1,"default":0,"requires_rebuild":true},
+  {"key":"penis_girth_cm","group":"Explicit","label":"Penis Girth","type":"float","unit":"cm","minimum":0,"maximum":20,"step":0.1,"default":0,"requires_rebuild":true},
+  {"key":"testicle_size","group":"Explicit","label":"Testicle Size","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.4,"requires_rebuild":true},
+  {"key":"pubic_hair","group":"Explicit","label":"Pubic Hair","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.3,"requires_rebuild":true},
+  {"key":"nipple_size","group":"Explicit","label":"Nipple Size","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.35,"requires_rebuild":true},
+  {"key":"areola_size","group":"Explicit","label":"Areola Size","type":"float","minimum":0,"maximum":1,"step":0.01,"default":0.4,"requires_rebuild":true}
+]

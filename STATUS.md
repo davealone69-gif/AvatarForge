@@ -4,22 +4,39 @@
 photorealistic full-body 3D avatar entirely on the device, from a text prompt, a photo, or a
 two-image reference flow (identity + equipment). No server, no network, no game engine.
 
-**Where it stands.** The kernel, the renderer, the SDK and the app are complete and build. The debug
-APK, the release APK and the SDK AAR in `artifacts/` are real outputs of this source tree, verified
-statically (manifest, permissions, native libraries, dex contents). **Nothing has been run on a
-device yet** — see *Device verification* below for what that means and what is outstanding.
+**Where it stands.** The kernel, the renderer, the SDK and the app are complete and build. The 0.10.1
+arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the current source and
+statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
+what that means and what is outstanding.
+
+### 2026-10-18 continuation status
+
+- The complete 28-float image-analysis wire format and 1–4 record regressions pass. The full native
+  host harness passes **405/405** checks, including exact packing and adult-only nude validation.
+  Kotlin/JVM SDK tests pass **7/7**, and the standalone Rust core passes **31/31**.
+- `AF_OUTFIT_NONE` is now labelled as the real **adult-only nude anatomical base** in the Android UI.
+  Age/prompt safety is enforced independently in Kotlin, the C ABI, and Rust. Detailed genital,
+  nipple, areola, and pubic-hair controls remain hidden because their geometry/material path is not
+  implemented.
+- Two supplied lists are preserved under `requirements/custom-inputs/`: 58 general customization
+  inputs and 10 adult-anatomy inputs. Deterministic normalized contracts live in
+  `config/customization/` and ship as offline SDK assets. The production schema gate exposes only
+  `VERIFIED` inputs; `PARTIAL` and `BLOCKED_*` entries cannot become placeholder controls.
+- A temporary pinned JDK 17/Android SDK/NDK r26b toolchain rebuilt the 0.10.1 arm64 native libraries,
+  debug/release APKs, and SDK AAR. Both APKs are aligned, v2-signed, contain the normalized offline
+  schema assets, report engine 0.10.1, and request no `INTERNET` permission. Airplane-mode,
+  lifecycle, GPU, performance, and visual validation still require a physical Android device.
 
 ---
 
 ## What the artifacts in `artifacts/` actually contain
 
-The APK, release APK and AAR were built at 03:41 from this tree. They contain the kernel **as of
-that build**: the `updateStats` fix and everything before it. They do **not** contain today's new
-modules (`af_glb_read`, `af_json`, `af_png_decode`, `af_scene`, `af_profiler`) — none of which is
-reachable from the JNI surface yet, so the app's behaviour is unchanged by their absence, but the
-`.so` inside the APKs is not bit-identical to the current sources. A rebuild needs an Android SDK,
-which this container lost mid-session (see BUILD.md → Troubleshooting); `tools/build_android.sh`
-prints exactly that when it is missing rather than producing a stale artifact quietly.
+The debug APK, release APK, and AAR were rebuilt on 2026-10-18 from the current 0.10.1 source with
+NDK r26b for arm64-v8a. Static inspection verifies all three native libraries, both normalized
+customization assets, engine version 0.10.1, APK alignment/signature, and no `INTERNET` permission.
+The release APK uses the fallback debug certificate because no release keystore was supplied. The
+sample GLB was not regenerated in this pass and remains a prior valid export; it must not be used as
+proof of the latest source version.
 
 Known compiler warnings still present (all unused-variable/parameter class, none behavioural):
 `af_field.cpp:274 backZ`, `af_image.cpp:321 fracToY`, `af_isosurface.cpp:167 field`,
@@ -89,7 +106,7 @@ Phase 1 is *reliable rendering, GLB loading, crash-free lifecycle and profiling*
    assembled beside the live state and swapped at the end, so a rejected file leaves the engine
    byte-for-byte as it was (asserted).
 2. **The engine can adopt a GLB.** `af_engine_import_glb` / `af_engine_import_glb_from_memory` add
-   two entry points to the C ABI (45 → **47 symbols**, engine version **0.10.0**). Harness `[16]`
+   two entry points to the C ABI (45 → **47 symbols**, engine version **0.10.1**). Harness `[16]`
    drives the round trip through the ABI: 285 657 vertices / 382 388 triangles come back exactly,
    regions survive because the exporter names materials after them, the file's skeleton is refused
    (joint count 0, clip playback rejected with an error), a second import is idempotent, and a

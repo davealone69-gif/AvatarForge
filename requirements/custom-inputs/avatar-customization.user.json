@@ -1,0 +1,598 @@
+[
+  {
+    "key": "body_height_cm",
+    "group": "Body Measurements",
+    "label": "Height",
+    "type": "float",
+    "unit": "cm",
+    "minimum": 120.0,
+    "maximum": 250.0,
+    "step": 0.1,
+    "default": 170.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_weight_kg",
+    "group": "Body Measurements",
+    "label": "Weight",
+    "type": "float",
+    "unit": "kg",
+    "minimum": 30.0,
+    "maximum": 200.0,
+    "step": 0.5,
+    "default": 65.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_shoulder_width",
+    "group": "Body Measurements",
+    "label": "Shoulder Width",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_waist_cm",
+    "group": "Body Measurements",
+    "label": "Waist",
+    "type": "float",
+    "unit": "cm",
+    "minimum": 40.0,
+    "maximum": 180.0,
+    "step": 0.1,
+    "default": 70.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_hip_width",
+    "group": "Body Measurements",
+    "label": "Hip Width",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_arm_length",
+    "group": "Body Measurements",
+    "label": "Arm Length",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.8,
+    "maximum": 1.2,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_leg_length",
+    "group": "Body Measurements",
+    "label": "Leg Length",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.8,
+    "maximum": 1.2,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_type_preset",
+    "group": "Body Type",
+    "label": "Body Shape Preset",
+    "type": "enum",
+    "options": ["Slim", "Athletic", "Average", "Curvy", "BBW", "Muscular", "Robotic"],
+    "default": "Average",
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_muscle_definition",
+    "group": "Body Type",
+    "label": "Muscle Definition",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 20.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "body_fat_percentage",
+    "group": "Body Type",
+    "label": "Body Fat",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 3.0,
+    "maximum": 60.0,
+    "step": 0.5,
+    "default": 20.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "chest_bust_size",
+    "group": "Chest",
+    "label": "Bust Size",
+    "type": "enum",
+    "options": ["Flat", "Small", "Average", "Big", "Huge", "Custom"],
+    "default": "Average",
+    "requires_rebuild": true
+  },
+  {
+    "key": "chest_bust_volume",
+    "group": "Chest",
+    "label": "Bust Volume Fine-Tune",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.0,
+    "maximum": 2.0,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "chest_separation",
+    "group": "Chest",
+    "label": "Bust Separation",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.0,
+    "maximum": 1.0,
+    "step": 0.01,
+    "default": 0.5,
+    "requires_rebuild": true
+  },
+  {
+    "key": "butt_size",
+    "group": "Lower Body",
+    "label": "Glute Size",
+    "type": "enum",
+    "options": ["Small", "Slim", "Athletic", "Big", "Huge", "Custom"],
+    "default": "Athletic",
+    "requires_rebuild": true
+  },
+  {
+    "key": "butt_volume",
+    "group": "Lower Body",
+    "label": "Glute Volume Fine-Tune",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.0,
+    "maximum": 2.0,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "leg_thickness",
+    "group": "Lower Body",
+    "label": "Thigh Thickness",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "ethnicity_primary",
+    "group": "Heritage",
+    "label": "Primary Ethnicity",
+    "type": "enum",
+    "options": ["White", "Asian", "Black", "Latina", "South Asian", "Middle Eastern", "Synthetic"],
+    "default": "White",
+    "requires_rebuild": true
+  },
+  {
+    "key": "ethnicity_blend",
+    "group": "Heritage",
+    "label": "Secondary Ethnicity Blend",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 0.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_shape",
+    "group": "Face",
+    "label": "Face Shape",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": -1.0,
+    "maximum": 1.0,
+    "step": 0.01,
+    "default": 0.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_jaw_width",
+    "group": "Face",
+    "label": "Jawline Width",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_cheekbone_height",
+    "group": "Face",
+    "label": "Cheekbone Height",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.0,
+    "maximum": 1.0,
+    "step": 0.01,
+    "default": 0.5,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_eye_size",
+    "group": "Face",
+    "label": "Eye Size",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_nose_width",
+    "group": "Face",
+    "label": "Nose Width",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_lip_fullness",
+    "group": "Face",
+    "label": "Lip Fullness",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.0,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 0.5,
+    "requires_rebuild": true
+  },
+  {
+    "key": "hair_style",
+    "group": "Hair",
+    "label": "Hair Style",
+    "type": "enum",
+    "options": ["Straight", "Bangs", "Braids", "Curly", "Bun", "Ponytail", "Bob", "Bald", "Pigtails", "Mohawk", "Long Wavy"],
+    "default": "Straight",
+    "requires_rebuild": true
+  },
+  {
+    "key": "hair_color",
+    "group": "Hair",
+    "label": "Hair Color",
+    "type": "color",
+    "default": "#4A3728",
+    "requires_rebuild": false
+  },
+  {
+    "key": "hair_length",
+    "group": "Hair",
+    "label": "Hair Length",
+    "type": "float",
+    "unit": "cm",
+    "minimum": 0.0,
+    "maximum": 150.0,
+    "step": 1.0,
+    "default": 40.0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "hair_physics_stiffness",
+    "group": "Hair",
+    "label": "Hair Physics Stiffness",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 30.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "eye_iris_color",
+    "group": "Eyes",
+    "label": "Iris Color",
+    "type": "color",
+    "default": "#3B7A57",
+    "requires_rebuild": false
+  },
+  {
+    "key": "eye_glow_intensity",
+    "group": "Eyes",
+    "label": "Eye Glow Intensity",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 0.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "eye_glow_color",
+    "group": "Eyes",
+    "label": "Eye Glow Color",
+    "type": "color",
+    "default": "#00FFFF",
+    "requires_rebuild": false
+  },
+  {
+    "key": "eye_pupil_shape",
+    "group": "Eyes",
+    "label": "Pupil Shape",
+    "type": "enum",
+    "options": ["Round", "Slit", "Square", "Crosshair", "Mechanical Aperture"],
+    "default": "Round",
+    "requires_rebuild": true
+  },
+  {
+    "key": "skin_material_type",
+    "group": "Skin",
+    "label": "Skin Material",
+    "type": "enum",
+    "options": ["Organic", "Synthetic Silicone", "Brushed Metal", "Carbon Fiber", "Chrome", "Matte Black"],
+    "default": "Organic",
+    "requires_rebuild": true
+  },
+  {
+    "key": "skin_base_color",
+    "group": "Skin",
+    "label": "Skin Tone / Base Color",
+    "type": "color",
+    "default": "#E0AC69",
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_roughness",
+    "group": "Skin",
+    "label": "Skin Roughness / Gloss",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 50.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_metallic_value",
+    "group": "Skin",
+    "label": "Metallic Reflection",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 0.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_exposed_joints",
+    "group": "Cybernetics",
+    "label": "Exposed Mechanical Joints",
+    "type": "bool",
+    "default": false,
+    "requires_rebuild": true
+  },
+  {
+    "key": "cyber_panel_lines",
+    "group": "Cybernetics",
+    "label": "Panel Line Visibility",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 0.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_accent_glow",
+    "group": "Cybernetics",
+    "label": "Chassis Accent Glow",
+    "type": "color",
+    "default": "#00FFFF",
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_cranial_plating",
+    "group": "Cybernetics",
+    "label": "Cranial Plating (Helmet)",
+    "type": "bool",
+    "default": false,
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_torso_type",
+    "group": "Armor - Torso",
+    "label": "Torso Armor",
+    "type": "enum",
+    "options": ["None", "Roman Lorica Segmentata", "Tactical Ballistic Vest", "Futuristic Chest Plate", "Demon Corset"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_helmet_type",
+    "group": "Armor - Head",
+    "label": "Helmet Type",
+    "type": "enum",
+    "options": ["None", "Roman Galea", "Tactical Ballistic Helmet", "Cyber Visor", "Horns"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_shoulder_pads",
+    "group": "Armor - Limbs",
+    "label": "Shoulder Pads",
+    "type": "enum",
+    "options": ["None", "Roman Pauldrons", "Tactical Kevlar Pads", "Spiked"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_knee_pads",
+    "group": "Armor - Limbs",
+    "label": "Knee Guards",
+    "type": "bool",
+    "default": false,
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_webbing_straps",
+    "group": "Armor - Details",
+    "label": "Strapping &amp; Webbing",
+    "type": "bool",
+    "default": false,
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_pouches",
+    "group": "Armor - Details",
+    "label": "Utility Pouches",
+    "type": "int",
+    "unit": "count",
+    "minimum": 0,
+    "maximum": 10,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_wear_tear",
+    "group": "Armor - Details",
+    "label": "Battle Damage / Wear",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0.0,
+    "maximum": 100.0,
+    "step": 1.0,
+    "default": 0.0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "outfit_top_style",
+    "group": "Clothing",
+    "label": "Top Style",
+    "type": "enum",
+    "options": ["None", "Bralette", "Corset", "Crop Top", "Leather Bustier", "Armored Tunic"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "outfit_bottom_style",
+    "group": "Clothing",
+    "label": "Bottom Style",
+    "type": "enum",
+    "options": ["None", "Ruffled Skirt", "Leather Pants", "Leggings", "Roman Pteruges", "Combat Trousers"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "clothing_fabric",
+    "group": "Clothing",
+    "label": "Fabric Material",
+    "type": "enum",
+    "options": ["Cotton", "Leather", "Latex", "Silk", "Kevlar", "Metal Mesh"],
+    "default": "Cotton",
+    "requires_rebuild": false
+  },
+  {
+    "key": "accessory_horns",
+    "group": "Accessories",
+    "label": "Demon Horns",
+    "type": "enum",
+    "options": ["None", "Small Curved", "Large Ram", "Crown"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "accessory_tail",
+    "group": "Accessories",
+    "label": "Tail",
+    "type": "enum",
+    "options": ["None", "Demon Spade", "Cybernetic Cable"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "accessory_gloves",
+    "group": "Accessories",
+    "label": "Gloves",
+    "type": "enum",
+    "options": ["None", "Long Leather", "Fingerless", "Tactical Combat", "Gauntlets"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "accessory_footwear",
+    "group": "Accessories",
+    "label": "Footwear",
+    "type": "enum",
+    "options": ["None", "Roman Sandals", "Combat Boots", "Platform Heels", "Sneakers", "Cyber Legs"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "weapon_primary",
+    "group": "Weapons",
+    "label": "Primary Weapon / Item",
+    "type": "enum",
+    "options": ["None", "Roman Pilum (Spear)", "Gladius (Sword)", "Tactical Rifle", "Whip", "Mallet"],
+    "default": "None",
+    "requires_rebuild": true
+  },
+  {
+    "key": "makeup_style",
+    "group": "Makeup &amp; Markings",
+    "label": "Makeup Preset",
+    "type": "enum",
+    "options": ["None", "Natural", "Smokey Eye", "Clown (Harley Style)", "Gothic/Demon", "Cyberpunk Neon"],
+    "default": "None",
+    "requires_rebuild": false
+  },
+  {
+    "key": "makeup_lip_color",
+    "group": "Makeup &amp; Markings",
+    "label": "Lipstick Color",
+    "type": "color",
+    "default": "#CC0000",
+    "requires_rebuild": false
+  },
+  {
+    "key": "tattoo_style",
+    "group": "Makeup &amp; Markings",
+    "label": "Tattoo / Body Markings",
+    "type": "enum",
+    "options": ["None", "Harlequin Diamonds", "Cybernetic Circuitry", "Tribal", "Glowing Runes"],
+    "default": "None",
+    "requires_rebuild": false
+  }
+]

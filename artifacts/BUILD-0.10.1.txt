@@ -1,0 +1,36 @@
+AvatarForge 0.10.1 arm64-v8a build record
+Date: 2026-10-18 (Australia/Perth)
+
+Toolchain
+- JDK: Eclipse Temurin 17.0.20.1
+- Gradle: 8.9
+- Android platform/build-tools: 34 / 34.0.0
+- Android NDK: 26.1.10909125 (r26b)
+- CMake: 3.22.1
+- Android minimum API: 26
+
+Validation completed
+- Native full host harness: 405/405 passed
+- Native focused ABI harness: 116/116 passed
+- Kotlin/JVM SDK tests: 7/7 passed
+- Standalone Rust af-core tests: 31/31 passed
+- Normalized customization contracts: 2/2 passed
+- Debug and release APK: zipalign check passed
+- Debug and release APK: APK Signature Scheme v2 verification passed (debug certificate fallback)
+- APK permissions: no android.permission.INTERNET; only the generated dynamic-receiver permission
+- APK/AAR assets: both normalized customization input contracts present
+- Packaged native kernel reports engine version 0.10.1
+
+Not completed
+- No physical Android device was available. Airplane-mode generation, renderer lifecycle, GLB reload,
+  Vulkan/GLES visual inspection, memory, frame rate, thermals, and battery measurements are UNVERIFIED.
+- avatarforge-sample.glb was not regenerated in this pass and remains a prior valid export.
+
+SHA-256
+3669b634f71e833addfbc40f43402b069a75f30aa599a22f386384b503665290  avatarforge-debug-arm64.apk
+a932d9bd58e42b650200123a95e913891e09f4facdc0367757027df710d60543  avatarforge-release-arm64.apk
+36a65e00ca25a58525b22e6410f62ff1c2edcd01246ceecec442ae6bf0f01ae9  avatarforge-sdk-arm64.aar
+7cbc16d0749992e9d37b16981f9a950670dcf78dee3e9dbb00f352726a355cda  avatarforge-sample.glb
+747bd5d9f3563ae9e725ae4c4129f19f9a5bb28b2ba88ff0517599e10f67b2c6  ../prebuilt/arm64-v8a/libafcore.so
+d5340b366d219d159b585780f2b75a30a2a9dd7a847610877050e3678e63f3be  ../prebuilt/arm64-v8a/libafrender.so
+3625ea88a95b5295cf01d01b678bab7846a95ff6efc99179eb2233c0d313cad2  ../prebuilt/arm64-v8a/libavatarforge.so

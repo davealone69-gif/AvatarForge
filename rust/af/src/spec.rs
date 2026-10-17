@@ -384,6 +384,27 @@ impl Spec {
                 core::mem::size_of::<sys::af_spec>()
             )));
         }
+        if self.raw.outfit == sys::AF_OUTFIT_NONE {
+            const MARKERS: &[&str] = &[
+                "boy", "child", "girl", "kid", "minor", "schoolboy", "schoolgirl", "teen",
+                "teenage", "underage",
+            ];
+            let contains_minor_marker = self
+                .prompt
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|token| !token.is_empty())
+                .any(|token| MARKERS.iter().any(|marker| token.eq_ignore_ascii_case(marker)));
+            if contains_minor_marker {
+                return Err(Error::InvalidArgument(
+                    "nude/anatomical generation rejects minor or teen prompt terms".into(),
+                ));
+            }
+            if !self.raw.age_years.is_finite() || self.raw.age_years < 18.0 {
+                return Err(Error::InvalidArgument(
+                    "nude/anatomical generation requires age_years >= 18".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }

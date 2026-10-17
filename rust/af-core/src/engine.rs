@@ -256,7 +256,10 @@ pub extern "C" fn af_engine_create(spec: *const AfSpec, callbacks: *const AfCall
         return AF_ERR_INVALID_ARG;
     }
     unsafe { *out = core::ptr::null_mut() };
-    let spec = if spec.is_null() { AfSpec::defaulted() } else { unsafe { *spec } };
+    let mut spec = if spec.is_null() { AfSpec::defaulted() } else { unsafe { *spec } };
+    if !spec.height_m.is_finite() || spec.height_m <= 0.0 {
+        spec.height_m = AF_DEFAULT_HEIGHT_M;
+    }
     if let Err(field) = spec.validate() {
         return match field {
             "struct_size" => AF_ERR_ABI_MISMATCH,
@@ -288,7 +291,10 @@ pub extern "C" fn af_engine_reset(engine: *mut c_void, spec: *const AfSpec) -> i
         Some(e) => e,
         None => return AF_ERR_INVALID_ARG,
     };
-    let spec = if spec.is_null() { AfSpec::defaulted() } else { unsafe { *spec } };
+    let mut spec = if spec.is_null() { AfSpec::defaulted() } else { unsafe { *spec } };
+    if !spec.height_m.is_finite() || spec.height_m <= 0.0 {
+        spec.height_m = AF_DEFAULT_HEIGHT_M;
+    }
     if let Err(field) = spec.validate() {
         e.set_error(&format!("invalid spec field: {}", field));
         return if field == "struct_size" { AF_ERR_ABI_MISMATCH } else { AF_ERR_INVALID_ARG };
@@ -333,6 +339,7 @@ pub extern "C" fn af_engine_fit_anatomy(engine: *mut c_void) -> i32 {
     e.progress(Stage::FitAnatomy.num(), 0.1, "solving anthropometric proportions");
     let t0 = Instant::now();
     let metrics = anatomy::solve(&e.spec);
+    e.spec.height_m = metrics.height;
     let ms = t0.elapsed().as_secs_f32() * 1000.0;
 
     /* The metrics are only useful if they describe a body: this is the same plausibility gate the
@@ -377,8 +384,22 @@ pub extern "C" fn af_engine_analyze_prompt(
     let text = unsafe { std::ffi::CStr::from_ptr(prompt) }.to_string_lossy().into_owned();
     e.stage = Stage::AnalyzeInputs;
     e.progress(Stage::AnalyzeInputs.num(), 0.0, "reading prompt");
+    let previous = e.spec;
     let mut parse = crate::prompt::PromptParse::default();
     let matched = crate::prompt::parse_prompt(&text, &mut e.spec, Some(&mut parse));
+    if let Err(field) = e.spec.validate() {
+        e.spec = previous;
+        let reason = match field {
+            "adult_nude_prompt" => "nude/anatomical generation rejects minor or teen prompt terms",
+            "adult_nude_age" => "nude/anatomical generation requires age_years >= 18",
+            _ => "prompt produced an invalid specification",
+        };
+        e.set_error(&format!("analyze_prompt: {}", reason));
+        if !out_spec.is_null() {
+            unsafe { *out_spec = previous };
+        }
+        return AF_ERR_INVALID_ARG;
+    }
     for i in 0..parse.token_count as usize {
         let msg = format!(
             "understood \"{}\" -> {}",
@@ -510,7 +531,8 @@ mod tests {
         assert_eq!(af_engine_fit_anatomy(h), AF_OK);
         assert_eq!(e.stage, Stage::FitAnatomy);
         let m = e.metrics.expect("metrics stored");
-        assert!((m.height - 1.756).abs() < 1e-6, "default male stature {}", m.height);
+        assert!((m.height - AF_DEFAULT_HEIGHT_M).abs() < 1e-6,
+                "canonical default stature {}", m.height);
         assert!(e.stats.fit_anatomy_ms >= 0.0);
         af_engine_destroy(h);
     }

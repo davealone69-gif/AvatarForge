@@ -482,26 +482,28 @@ void specFromAnalysis(const af_image_analysis& identity, const af_image_analysis
     if (!spec) return;
     float confidence = identity.pose_confidence;
 
-    /* Stature: a human is 7.4 heads tall (the same ratio the anthropometry kernel uses). The
-       image gives no absolute scale, so height comes from the subject's head-count. */
+    /* Stature has strict precedence: explicit metres in af_spec win; only the canonical default
+       (or a legacy zero/non-finite value) may be refined from a genuine full-body image. A portrait
+       has no absolute scale, so it keeps 1.75 m instead of writing the old 0 sentinel. */
     {
+        const bool unresolved = !std::isfinite(spec->height_m) || spec->height_m <= 0.0f ||
+                                std::fabs(spec->height_m - AF_DEFAULT_HEIGHT_M) < 1e-5f;
         const float headHeight = std::fmax(0.01f, identity.head_box[3]);
         const float statureNorm = identity.ankle_y - identity.head_box[1];
         const int fullBody = identity.is_full_body;
-        if (fullBody && statureNorm > 0.05f) {
+        if (unresolved && fullBody && statureNorm > 0.05f) {
             const float heads = statureNorm / headHeight;
-            /* 7.4 heads, head height 0.235 m: height = 0.235 * heads, clamped and pulled towards
-               the population mean in proportion to how unsure the segmentation is. */
+            /* The ratio is scale-free; 0.235 m is the adult head-height prior. Confidence pulls a
+               noisy segmentation towards the canonical default, never towards zero. */
             float h = 0.235f * heads;
             if (h < 1.40f) h = 1.40f;
             if (h > 2.20f) h = 2.20f;
             const float w = std::fmax(0.0f, std::fmin(1.0f, (confidence - 0.45f) / 0.5f));
-            spec->height_m = w * h + (1.0f - w) * 1.72f;
-        } else {
-            /* Portrait: keep the default stature for the sex and say the estimate is weak. */
-            spec->height_m = 0.0f;
-            confidence *= 0.6f;
+            spec->height_m = w * h + (1.0f - w) * AF_DEFAULT_HEIGHT_M;
+        } else if (!std::isfinite(spec->height_m) || spec->height_m <= 0.0f) {
+            spec->height_m = AF_DEFAULT_HEIGHT_M;
         }
+        if (!fullBody) confidence *= 0.6f;
     }
 
     /* Sex: shoulder-to-hip ratio. Above 1.45 is male-typical, below 1.30 female-typical, and in

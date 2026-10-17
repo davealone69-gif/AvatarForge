@@ -88,9 +88,16 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     m.age = clampf(spec.age_years > 0.0f ? spec.age_years : 30.0f, 16.0f, 70.0f);
     m.seed = static_cast<uint32_t>(spec.seed > 0 ? spec.seed : 1337);
 
-    /* ---------- stature ---------------------------------------------------------------- */
-    const float defaultHeight = (m.sex == AF_SEX_FEMALE) ? 1.63f : 1.756f;
-    m.height = clampf(spec.height_m > 0.0f ? spec.height_m : defaultHeight, 1.30f, 2.25f);
+    /* ---------- stature ----------------------------------------------------------------
+       af_spec is an SI contract: height_m is already metres. A zero/non-finite value can still
+       arrive from an ABI-1 caller built before the non-zero default was introduced, so resolve it
+       here as a final safety net. Do not let NaN pass through clampf: all comparisons with NaN are
+       false and it would poison every landmark and collapse the sampled field. */
+    const float populationHeight = (m.sex == AF_SEX_FEMALE) ? 1.63f : 1.756f;
+    const float requestedHeight = (std::isfinite(spec.height_m) && spec.height_m > 0.0f)
+                                      ? spec.height_m
+                                      : AF_DEFAULT_HEIGHT_M;
+    m.height = clampf(requestedHeight, 1.30f, 2.25f);
     const float H = m.height;
 
     /* Sex-differentiated proportion offsets (female: longer torso, shorter legs, narrower
@@ -112,40 +119,59 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     m.y.armpitY    = (0.752f - torsoBias) * H;
     m.y.shoulderY  = (0.818f - torsoBias + shoulderBias) * H;
     m.y.neckBaseY  = (0.855f - torsoBias + shoulderBias * 0.5f) * H;
-    m.y.jawY       = (0.893f - torsoBias * 0.5f) * H;
+    /* +Y is up. The chin is therefore the smaller ordinate, below the jaw corner; spelling this
+       out here prevents a visually catastrophic but numerically plausible swap. */
     m.y.chinY      = (0.870f - torsoBias * 0.5f) * H;
+    m.y.jawY       = (0.893f - torsoBias * 0.5f) * H;
     m.y.eyeY       = (0.936f - torsoBias * 0.25f) * H;
     m.y.crownY     = H;
     m.y.calfMaxY   = lerpf(m.y.ankleY, m.y.kneeY, 0.34f);
     m.y.midThighY  = lerpf(m.y.crotchY, m.y.kneeY, 0.55f);
 
-    /* ---------- segment lengths ------------------------------------------------------- */
-    m.thighLen = m.y.hipY - m.y.kneeY;
-    m.shankLen = m.y.kneeY - m.y.ankleY;
     m.upperArmLen = 0.186f * H;
     m.forearmLen = 0.146f * H;
     m.handLength = 0.108f * H;
     m.footLength = 0.152f * H;
     m.footWidth  = 0.055f * H;
 
-    /* Inseam, when given, pins the crotch height and re-partitions the leg. */
-    if (spec.inseam_cm > 1.0f) {
-        const float inseam = spec.inseam_cm / 100.0f;
-        const float ratio = clampf(inseam / maxf(m.y.crotchY, 1e-3f), 0.80f, 1.20f);
+    /* Inseam is supplied in centimetres and converted exactly once at this boundary. It changes
+       the leg-to-torso proportion without changing total stature. The old path moved crotch and
+       every upper landmark but left ankle and knee on the original fractions, producing two
+       incompatible leg chains. A piecewise affine remap keeps every below-crotch landmark on one
+       scale and every above-crotch landmark on another, with sole=0 and crown=H fixed. */
+    if (std::isfinite(spec.inseam_cm) && spec.inseam_cm > 1.0f) {
+        const Landmarks base = m.y;
+        const float requestedInseamM = spec.inseam_cm * 0.01f;
+        const float inseam = clampf(requestedInseamM, 0.36f * H, 0.58f * H);
+        const float legScale = inseam / maxf(base.crotchY, 1e-3f);
+        const float torsoScale = (H - inseam) / maxf(H - base.crotchY, 1e-3f);
+        const auto aboveCrotch = [&](float y) {
+            return inseam + (y - base.crotchY) * torsoScale;
+        };
+
+        m.y.soleY = 0.0f;
+        m.y.ankleY = base.ankleY * legScale;
+        m.y.kneeY = base.kneeY * legScale;
         m.y.crotchY = inseam;
-        m.y.hipY = inseam + 0.050f * H * ratio;
-        m.y.waistY = inseam + 0.135f * H * ratio;
-        m.y.underbustY = inseam + 0.180f * H * ratio;
-        m.y.bustY = inseam + 0.240f * H * ratio;
-        m.y.armpitY = inseam + 0.272f * H * ratio;
-        m.y.shoulderY = inseam + 0.338f * H * ratio;
-        m.y.neckBaseY = inseam + 0.375f * H * ratio;
-        m.y.jawY = inseam + 0.413f * H * ratio;
-        m.y.chinY = inseam + 0.390f * H * ratio;
-        m.y.eyeY = inseam + 0.456f * H * ratio;
-        m.thighLen = m.y.hipY - m.y.kneeY;
-        m.shankLen = m.y.kneeY - m.y.ankleY;
+        m.y.hipY = aboveCrotch(base.hipY);
+        m.y.waistY = aboveCrotch(base.waistY);
+        m.y.underbustY = aboveCrotch(base.underbustY);
+        m.y.bustY = aboveCrotch(base.bustY);
+        m.y.armpitY = aboveCrotch(base.armpitY);
+        m.y.shoulderY = aboveCrotch(base.shoulderY);
+        m.y.neckBaseY = aboveCrotch(base.neckBaseY);
+        m.y.chinY = aboveCrotch(base.chinY);
+        m.y.jawY = aboveCrotch(base.jawY);
+        m.y.eyeY = aboveCrotch(base.eyeY);
+        m.y.crownY = H;
+        m.y.calfMaxY = lerpf(m.y.ankleY, m.y.kneeY, 0.34f);
+        m.y.midThighY = lerpf(m.y.crotchY, m.y.kneeY, 0.55f);
     }
+
+    /* Segment lengths are derived only after every override has moved the complete chain. */
+    m.thighLen = m.y.hipY - m.y.kneeY;
+    m.shankLen = m.y.kneeY - m.y.ankleY;
+
     /* Arm fold: the elbow sits just below the waist when arms hang naturally. */
     m.y.armFoldY = m.y.waistY - 0.02f * H;
     m.y.wristRestY = m.y.hipY - 0.19f * H;
@@ -167,7 +193,7 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     circ.neck   += musDelta *  5.0f + fatDelta * 7.0f;
 
     /* Stature scaling of girths (very short/tall subjects are not simply scaled copies). */
-    const float statureScale = std::pow(H / defaultHeight, 0.72f);
+    const float statureScale = std::pow(H / populationHeight, 0.72f);
     circ.neck *= statureScale; circ.chest *= statureScale; circ.underbust *= statureScale;
     circ.waist *= statureScale; circ.hip *= statureScale; circ.thigh *= statureScale;
     circ.calf *= statureScale; circ.bicep *= statureScale; circ.forearm *= statureScale;
@@ -214,7 +240,7 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     /* Biacromial breadth is correlated with chest girth; the regression keeps a tall slim
        person from acquiring a heavy person's shoulders. */
     const float biacromialCm = (female ? 36.6f : 41.5f) + (circ.chest - (female ? 93.5f : 102.3f)) * 0.16f
-                             + (H - defaultHeight) * 100.0f * 0.10f;
+                             + (H - populationHeight) * 100.0f * 0.10f;
     m.biacromialHalf = clampf(biacromialCm / 100.0f, 0.28f, 0.60f) * 0.5f;
     m.armPitHalf = m.chest.rx * 0.86f;
     /* Shoulder measurements are usually given as the full biacromial breadth. */
@@ -225,7 +251,7 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     /* ---------- head ---------------------------------------------------------------- */
     const float headCircumferenceM = ((spec.head_circumference_cm > 1.0f)
                                           ? spec.head_circumference_cm
-                                          : ((female ? 55.0f : 57.0f) * std::pow(H / defaultHeight, 0.5f))) * 0.01f;
+                                          : ((female ? 55.0f : 57.0f) * std::pow(H / populationHeight, 0.5f))) * 0.01f;
     /* Head: ellipsoid with the classic 3:4:4 skull ratio (depth : width : height). */
     const float headRadiusEq = headCircumferenceM / (2.0f * kPi);     /* from the circle approx */
     m.head.rx = headRadiusEq * 0.78f;
@@ -236,7 +262,7 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     m.jaw.rz = m.head.rz * 0.90f;
 
     m.faceWidth   = m.head.rx * 1.42f;
-    m.noseLength  = (m.y.chinY - m.y.eyeY) * 0.42f;
+    m.noseLength  = (m.y.eyeY - m.y.chinY) * 0.42f;
     m.lipWidth    = m.faceWidth * 0.42f;
     m.earLength   = (m.y.crownY - m.y.chinY) * 0.24f;
     m.eyeSeparation = m.head.rx * 0.72f;

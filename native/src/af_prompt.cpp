@@ -285,7 +285,8 @@ int parsePrompt(const char* prompt, af_spec* spec, PromptParse* out) {
         if (w == "short") { spec->height_m = (spec->sex == AF_SEX_FEMALE) ? 1.56f : 1.68f; record(out, w, "height_m", &matched); continue; }
 
         /* ---- age adjectives ---- */
-        if (w == "young" || w == "teen" || w == "teenage") { spec->age_years = 19.0f; record(out, w, "age_years", &matched); continue; }
+        if (w == "young") { spec->age_years = 22.0f; record(out, w, "age_years", &matched); continue; }
+        if (w == "teen" || w == "teenage") { spec->age_years = 17.0f; record(out, w, "age_years", &matched); continue; }
         if (w == "middle" && i + 1 < words.size() && words[i + 1].text.rfind("aged", 0) == 0) { spec->age_years = 45.0f; record(out, "middle-aged", "age_years", &matched); i += 1; continue; }
         if (w == "old" || w == "elderly" || w == "senior") { spec->age_years = 66.0f; record(out, w, "age_years", &matched); continue; }
 

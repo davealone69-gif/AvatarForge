@@ -61,16 +61,19 @@ enum class Footwear(val value: Int) {
 
 /** Which reference image is which, matching `af_image_role`. */
 enum class ImageRole(val value: Int) {
-    /** Image A: portrait or half-body shot - identity, skin tone, face, upper body proportions. */
+    /**
+     * ABI-stable name for Image A. The current analyser samples coarse framing, proportions and
+     * colours only; it does not reconstruct or preserve facial identity.
+     */
     IDENTITY(0),
 
-    /** Image B: garment / armour reference - segmented and transferred onto the body. */
+    /** Image B: garment colour/material and generic outfit-class hint; no garment transfer. */
     CLOTHING(1),
 
-    /** A reference that already shows the whole body, so no lower body has to be inferred. */
+    /** A reference known to show the whole body, enabling a coarse head-count stature estimate. */
     FULL_BODY(2),
 
-    /** An extra view of the same subject (multi-view fusion of measurements). */
+    /** An additional independently analysed view. The current engine does not perform view fusion. */
     EXTRA_VIEW(3),
 }
 
@@ -90,8 +93,8 @@ data class AvatarSpec(
     /** RNG seed. Identical seed => identical avatar, bit for bit. */
     val seed: Int = 1337,
 
-    /** 1.40 .. 2.20 m. 0 = sex-specific default stature (1.64 m female / 1.78 m male). */
-    val heightM: Float = 0f,
+    /** Stature in metres. Always resolved; defaults to [DEFAULT_HEIGHT_M]. */
+    val heightM: Float = DEFAULT_HEIGHT_M,
     /** 16 .. 70: drives skin micro-detail, facial volume and hair colour desaturation. */
     val ageYears: Float = 30f,
     /** 0..1 lean mass. */
@@ -138,6 +141,42 @@ data class AvatarSpec(
         require(skinTone.size == 3 && hairTone.size == 3 && clothTone.size == 3 && gearTone.size == 3) {
             "colour triplets must be 3 floats each (linear sRGB)"
         }
+    }
+
+    /** Human-facing centimetres, derived from the canonical metre value. */
+    val heightCm: Float get() = heightM * 100f
+
+    /**
+     * Enforces the safety invariant shared with the native ABI. [Outfit.NONE] is the engine's real
+     * unclothed body surface, so it is adult-only even while detailed sexual-anatomy controls remain
+     * hidden. This is called again below the UI before every build/export.
+     */
+    fun requireGeneratable(effectivePrompt: String = prompt): AvatarSpec {
+        if (outfit == Outfit.NONE) {
+            val minorMarkers = setOf(
+                "boy", "child", "girl", "kid", "minor", "schoolboy", "schoolgirl", "teen",
+                "teenage", "underage",
+            )
+            val hasMinorMarker = Regex("[A-Za-z]+").findAll(effectivePrompt)
+                .map { it.value.lowercase() }
+                .any { it in minorMarkers }
+            require(!hasMinorMarker) {
+                "Nude/anatomical generation rejects minor or teen prompt terms"
+            }
+            require(ageYears.isFinite() && ageYears >= 18f) {
+                "Nude/anatomical generation requires an adult age of 18 or older"
+            }
+        }
+        return this
+    }
+
+    /**
+     * Applies a centimetre override. Conversion happens here exactly once; JNI and the native
+     * anatomy solver continue to receive SI metres through [heightM].
+     */
+    fun withHeightCm(value: Float): AvatarSpec {
+        require(value.isFinite() && value > 0f) { "height centimetres must be finite and positive" }
+        return copy(heightM = (value * 0.01f).coerceIn(MIN_HEIGHT_M, MAX_HEIGHT_M))
     }
 
     /* ------------------------------------------------------------------ packing -------------- */
@@ -193,6 +232,11 @@ data class AvatarSpec(
     }
 
     companion object {
+        /** Canonical non-zero stature; must match `AF_DEFAULT_HEIGHT_M` in afcore.h. */
+        const val DEFAULT_HEIGHT_M = 1.75f
+        const val MIN_HEIGHT_M = 1.40f
+        const val MAX_HEIGHT_M = 2.20f
+
         /** Must match `kSpecIntCount` in native/src/android/af_jni.cpp. */
         internal const val INT_FIELDS = 7
 
@@ -217,7 +261,7 @@ data class AvatarSpec(
                 outfit = Outfit.of(ints[4]),
                 footwear = Footwear.of(ints[5]),
                 seed = ints[6],
-                heightM = f(),
+                heightM = f().let { if (it.isFinite() && it > 0f) it else DEFAULT_HEIGHT_M },
                 ageYears = f(),
                 muscle = f(),
                 bodyFat = f(),

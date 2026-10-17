@@ -1,0 +1,889 @@
+### app/src/main/java/com/avatarforge/app/ui/AppBitmaps.kt:25-105
+    25	import java.io.IOException
+    26	
+    27	object AppBitmaps {
+    28	
+    29	    /** Long-edge cap for anything handed to the engine. */
+    30	    private const val MAX_EDGE = 1600
+    31	
+    32	    private var appContext: Context? = null
+    33	
+    34	    /** Called once from the Activity so the pickers can open content:// URIs. */
+    35	    fun install(context: Context) {
+    36	        appContext = context.applicationContext
+    37	    }
+    38	
+    39	    fun decode(uri: Uri): Bitmap? {
+    40	        val context = appContext ?: return null
+    41	        return try {
+    42	            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    43	            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    44	            val sample = sampleSize(bounds.outWidth, bounds.outHeight)
+    45	            val options = BitmapFactory.Options().apply {
+    46	                inSampleSize = sample
+    47	                inPreferredConfig = Bitmap.Config.ARGB_8888
+    48	            }
+    49	            val decoded = context.contentResolver.openInputStream(uri)?.use {
+    50	                BitmapFactory.decodeStream(it, null, options)
+    51	            } ?: return null
+    52	            val rotated = applyExif(context, uri, decoded)
+    53	            /* Final scale: inSampleSize only steps in powers of two, so a 12 MP photo at
+    54	               inSampleSize=8 still lands at 4000 px. */
+    55	            val scaled = scaleToMaxEdge(rotated, MAX_EDGE)
+    56	            if (scaled !== decoded) decoded.recycle()
+    57	            scaled
+    58	        } catch (t: IOException) {
+    59	            null
+    60	        } catch (t: OutOfMemoryError) {
+    61	            null
+    62	        }
+    63	    }
+    64	
+    65	    private fun sampleSize(width: Int, height: Int): Int {
+    66	        var sample = 1
+    67	        var longest = maxOf(width, height)
+    68	        while (longest / 2 >= MAX_EDGE) {
+    69	            longest /= 2
+    70	            sample *= 2
+    71	        }
+    72	        return sample
+    73	    }
+    74	
+    75	    private fun scaleToMaxEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {
+    76	        val longest = maxOf(bitmap.width, bitmap.height)
+    77	        if (longest <= maxEdge) return bitmap
+    78	        val scale = maxEdge.toFloat() / longest.toFloat()
+    79	        return Bitmap.createScaledBitmap(
+    80	            bitmap,
+    81	            (bitmap.width * scale).toInt().coerceAtLeast(1),
+    82	            (bitmap.height * scale).toInt().coerceAtLeast(1),
+    83	            true,
+    84	        )
+    85	    }
+    86	
+    87	    private fun applyExif(context: Context, uri: Uri, bitmap: Bitmap): Bitmap {
+    88	        val orientation = try {
+    89	            context.contentResolver.openInputStream(uri)?.use { ExifInterface(it).getAttributeInt(
+    90	                ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+    91	        } catch (t: IOException) {
+    92	            null
+    93	        } ?: return bitmap
+    94	        val matrix = Matrix()
+    95	        when (orientation) {
+    96	            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+    97	            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+    98	            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+    99	            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+   100	            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+   101	            else -> return bitmap
+   102	        }
+   103	        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+   104	        if (rotated !== bitmap) bitmap.recycle()
+   105	        return rotated
+### app/src/main/java/com/avatarforge/app/MainActivity.kt:160-205
+   160	                onImageB = { imageB = it },
+   161	                analysisNote = analysisNote,
+   162	                enabled = health.usable,
+   163	                onGeneratePrompt = {
+   164	                    /* The prompt parser is run first so the spec the user sees is the spec that gets
+   165	                       built - including the measurements the prompt implied. */
+   166	                    val parsed = runCatching { engine.parsePrompt(prompt, spec) }.getOrDefault(spec)
+   167	                    spec = parsed
+   168	                    begin(engine.generate(GenerationRequest(parsed, prompt)))
+   169	                },
+   170	                onGenerateImages = {
+   171	                    val a = imageA ?: return@InputScreen
+   172	                    val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
+   173	                    val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
+   174	                    val analysed = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
+   175	                    analysisNote = analysed?.joinToString("\n") { ref ->
+   176	                        val an = ref.analysis
+   177	                        if (an == null) "no analysis available" else buildString {
+   178	                            append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
+   179	                            append(" · ")
+   180	                            append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
+   181	                            append(" · skin L* %.0f".format(an.skinLab[0]))
+   182	                            append(" · hair L* %.0f".format(an.hairLab[0]))
+   183	                            append(" · garment metalness %.2f".format(an.metalConfidence))
+   184	                            append(" · key light %.2f".format(an.keyLightIntensity))
+   185	                        }
+   186	                    }
+   187	                    val resolved = analysed?.let { engine.specFromImages(it, spec) } ?: spec
+   188	                    spec = resolved
+   189	                    begin(
+   190	                        engine.generate(
+   191	                            GenerationRequest(
+   192	                                spec = resolved,
+   193	                                prompt = prompt,
+   194	                                imageA = analysed?.firstOrNull() ?: refA,
+   195	                                imageB = analysed?.getOrNull(1) ?: refB,
+   196	                            ),
+   197	                        ),
+   198	                    )
+   199	                },
+   200	            )
+   201	
+   202	            Screen.PROGRESS -> ProgressScreen(
+   203	                status = status,
+   204	                onCancel = {
+   205	                    job?.cancel()
+### sdk/src/main/java/com/avatarforge/sdk/AvatarEngine.kt:220-330
+   220	
+   221	/* ============================================================================================ */
+   222	/*  Generation request                                                                           */
+   223	/* ============================================================================================ */
+   224	
+   225	/**
+   226	 * One generation request: a spec plus the optional reference images.
+   227	 *
+   228	 * The two-image flow the generator implements is exactly this: an identity image (imageA) and an
+   229	 * optional detail/equipment image (imageB). Image A gives the face, skin tone, hair and upper-body
+   230	 * proportions; when it is a portrait or half-body shot the kernel infers the missing lower body
+   231	 * from the anthropometry it measured (head-to-body ratio, shoulder width, inseam estimate). Image B
+   232	 * is segmented from its background, classified as cloth or hard surface, and transferred onto the
+   233	 * body - geometrically (the garment volume is unioned into the body field) and texturally (its
+   234	 * dominant colour and metalness drive the material bake).
+   235	 */
+   236	data class GenerationRequest(
+   237	    val spec: AvatarSpec,
+   238	    val prompt: String = "",
+   239	    val imageA: ImageReference? = null,
+   240	    val imageB: ImageReference? = null,
+   241	    /** Total kernel memory ceiling. Default 1.5 GB, comfortably inside the app's 2 GB budget. */
+   242	    val memoryBudgetBytes: Long = 1536L * 1024 * 1024,
+   243	)
+   244	
+   245	/**
+   246	 * A decoded reference image.
+   247	 *
+   248	 * [pixels] is a direct ByteBuffer in RGBA order - the kernel never copies it, and reads R, G, B.
+   249	 * [Analysis] is what the kernel reported back, so the UI can show the user the measurements it
+   250	 * extracted (and let them correct a bad estimate) instead of silently building the wrong person.
+   251	 */
+   252	class ImageReference private constructor(
+   253	    val role: ImageRole,
+   254	    val width: Int,
+   255	    val height: Int,
+   256	    val pixels: ByteBuffer,
+   257	    val analysis: Analysis?,
+   258	) {
+   259	    data class Analysis(
+   260	        val subjectCoverage: Float,
+   261	        val headBox: FloatArray,
+   262	        val shoulderY: Float,
+   263	        val hipY: Float,
+   264	        val kneeY: Float,
+   265	        val ankleY: Float,
+   266	        val isFullBody: Boolean,
+   267	        val poseConfidence: Float,
+   268	        val skinLab: FloatArray,
+   269	        val hairLab: FloatArray,
+   270	        val garmentLab: FloatArray,
+   271	        val metalConfidence: Float,
+   272	        val keyLight: FloatArray,
+   273	        val keyLightIntensity: Float,
+   274	        val backgroundLab: FloatArray,
+   275	    )
+   276	
+   277	    companion object {
+   278	        /** Bytes needed for a direct buffer holding this bitmap. */
+   279	        fun byteSize(width: Int, height: Int): Int = width * height * 4
+   280	
+   281	        /**
+   282	         * Copies a Bitmap into a direct RGBA buffer.
+   283	         *
+   284	         * Direct, not heap: a 12 MP photo is 48 MB and the JNI layer passes the address straight to
+   285	         * the kernel. Anything else would double the peak memory for no benefit, and the 2 GB
+   286	         * budget is there to be respected, not approached.
+   287	         */
+   288	        fun fromBitmap(bitmap: Bitmap, role: ImageRole): ImageReference {
+   289	            val w = bitmap.width
+   290	            val h = bitmap.height
+   291	            val buffer = ByteBuffer.allocateDirect(byteSize(w, h)).order(ByteOrder.nativeOrder())
+   292	            bitmap.copyPixelsToBuffer(buffer)
+   293	            buffer.rewind()
+   294	            return ImageReference(role, w, h, buffer, null)
+   295	        }
+   296	
+   297	        internal fun withAnalysis(base: ImageReference, analysis: Analysis) =
+   298	            ImageReference(base.role, base.width, base.height, base.pixels, analysis)
+   299	    }
+   300	}
+   301	
+   302	/* ============================================================================================ */
+   303	/*  The engine                                                                                   */
+   304	/* ============================================================================================ */
+   305	
+   306	class AvatarEngine private constructor(private val appContext: Context) {
+   307	
+   308	    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+   309	
+   310	    /** Every job ever started, so the UI can show history and the engine can cancel everything
+   311	     *  when the process is going away. */
+   312	    private val jobs = mutableListOf<JobHandle>()
+   313	
+   314	    private var handle: Long = 0L
+   315	
+   316	    /**
+   317	     * The kernel handle, for the renderer.
+   318	     *
+   319	     * The renderer reads the engine's vertex/index/texture buffers directly (zero-copy) through the
+   320	     * C ABI, so it needs the handle rather than the Kotlin wrapper. It is deliberately not a `Long`
+   321	     * the UI can invent: the getter opens the engine on first use, and the handle stays valid until
+   322	     * [release].
+   323	     */
+   324	    val nativeHandle: Long get() = openHandle()
+   325	
+   326	    /* ------------------------------------------------------------------ posing ---------------- */
+   327	
+   328	    /** Applies local joint rotations (quaternions XYZW, jointCount * 4). */
+   329	    fun applyPose(quats: FloatArray): Boolean {
+   330	        val h = openHandle()
+### sdk/src/main/java/com/avatarforge/sdk/AvatarEngine.kt:400-535
+   400	            handle = 0L
+   401	        }
+   402	    }
+   403	
+   404	    /* ------------------------------------------------------------------ generation ----------- */
+   405	
+   406	    fun generateFromText(prompt: String, spec: AvatarSpec = AvatarSpec(), memoryBudgetBytes: Long = 1536L * 1024 * 1024): JobHandle {
+   407	        val resolved = parsePrompt(prompt, spec)
+   408	        return start(GenerationRequest(resolved, prompt, null, null, memoryBudgetBytes))
+   409	    }
+   410	
+   411	    /**
+   412	     * The two-image flow.
+   413	     *
+   414	     * [identity] is Image A - a portrait or half-body shot is expected and the missing lower body is
+   415	     * inferred from the subject's proportions. [detail] is Image B - armour, clothing or equipment,
+   416	     * segmented from its background and transferred onto the body. Both are analysed before the
+   417	     * build starts, and the measurements the kernel derived are handed to [specFromImages] so the
+   418	     * caller can show or override them.
+   419	     */
+   420	    fun generateFromImage(
+   421	        identity: ImageReference,
+   422	        detail: ImageReference? = null,
+   423	        spec: AvatarSpec = AvatarSpec(),
+   424	        prompt: String = "",
+   425	        memoryBudgetBytes: Long = 1536L * 1024 * 1024,
+   426	    ): JobHandle {
+   427	        val analysed = analyseImages(listOfNotNull(identity, detail))
+   428	        val withSpec = specFromImages(analysed, spec)
+   429	        val request = GenerationRequest(
+   430	            withSpec,
+   431	            prompt,
+   432	            analysed.firstOrNull(),
+   433	            analysed.getOrNull(1),
+   434	            memoryBudgetBytes,
+   435	        )
+   436	        return start(request)
+   437	    }
+   438	
+   439	    /**
+   440	     * Starts a generation from an explicit request. The two convenience entry points above build
+   441	     * one of these; the UI uses this directly when it has already shown the user the measurements it
+   442	     * extracted and wants to build exactly the spec that was confirmed.
+   443	     */
+   444	    fun generate(request: GenerationRequest): JobHandle = start(request)
+   445	
+   446	    /** Analyses reference images without starting a build - used by the UI's "what did you see?" step. */
+   447	    fun analyseImages(images: List<ImageReference>): List<ImageReference> {
+   448	        require(images.isNotEmpty() && images.size <= 4) { "1 to 4 reference images are supported" }
+   449	        val h = openHandle()
+   450	        val n = images.size
+   451	        val widths = IntArray(n) { images[it].width }
+   452	        val heights = IntArray(n) { images[it].height }
+   453	        val channels = IntArray(n) { 4 }
+   454	        val roles = IntArray(n) { images[it].role.value }
+   455	        @Suppress("UNCHECKED_CAST")
+   456	        val pixels = Array<ByteBuffer?>(n) { images[it].pixels }
+   457	        val packed = FloatArray(n * ANALYSIS_FLOATS)
+   458	        val rc = NativeBridge.engineAnalyzeImages(h, widths, heights, channels, roles, pixels, packed)
+   459	        check(rc >= 0) { "image analysis failed: ${NativeBridge.engineLastError(h)}" }
+   460	        return images.mapIndexed { index, image ->
+   461	            ImageReference.withAnalysis(image, unpackAnalysis(packed, index))
+   462	        }
+   463	    }
+   464	
+   465	    /**
+   466	     * Turns the analyses into a spec: stature from the head-count ratio, skin and hair tone from the
+   467	     * median Lab, garment colour and metalness from image B. Anything the caller already set
+   468	     * explicitly is kept - the images fill in, they do not overwrite.
+   469	     */
+   470	    fun specFromImages(images: List<ImageReference>, base: AvatarSpec): AvatarSpec {
+   471	        var spec = if (base.heightM.isFinite() && base.heightM > 0f) base
+   472	                   else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
+   473	        val identity = images.firstOrNull()
+   474	        val detail = images.getOrNull(1)
+   475	        if (identity?.analysis != null) {
+   476	            val a = identity.analysis
+   477	            /* A portrait has no absolute scale and must never turn stature into zero. A genuine
+   478	               full-body frame can refine only the canonical default: body extent / head extent is
+   479	               scale-free, then the 0.235 m adult-head prior converts that ratio to metres. A custom
+   480	               caller override is preserved. */
+   481	            val mayRefineDefault = kotlin.math.abs(spec.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f
+   482	            val headHeight = a.headBox[3]
+   483	            val statureInFrame = a.ankleY - a.headBox[1]
+   484	            if (mayRefineDefault && a.isFullBody && headHeight > 0.02f && statureInFrame > 0.05f) {
+   485	                val measured = (0.235f * (statureInFrame / headHeight))
+   486	                    .coerceIn(AvatarSpec.MIN_HEIGHT_M, AvatarSpec.MAX_HEIGHT_M)
+   487	                val confidence = ((a.poseConfidence - 0.45f) / 0.5f).coerceIn(0f, 1f)
+   488	                val resolved = confidence * measured +
+   489	                    (1f - confidence) * AvatarSpec.DEFAULT_HEIGHT_M
+   490	                spec = spec.copy(heightM = resolved)
+   491	            }
+   492	            spec = spec.copy(skinMelanin = melaninFromLab(a.skinLab))
+   493	        }
+   494	        if (detail?.analysis != null) {
+   495	            val b = detail.analysis
+   496	            spec = spec.copy(
+   497	                /* A garment reference that reads as hard surface selects the armour outfit unless
+   498	                   the caller already asked for something specific. */
+   499	                outfit = if (spec.outfit == Outfit.NONE && b.metalConfidence > 0.45f) Outfit.ARMOR_PLATE else spec.outfit,
+   500	                gearMetalness = if (spec.gearMetalness < 0f) b.metalConfidence else spec.gearMetalness,
+   501	                clothTone = if (spec.clothTone.any { it != 0f }) spec.clothTone else labToLinear(b.garmentLab),
+   502	            )
+   503	        }
+   504	        return spec
+   505	    }
+   506	
+   507	    /** Runs the prompt parser only, and returns the resolved spec plus the match count. */
+   508	    fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec {
+   509	        val h = openHandle()
+   510	        val resolvedBase = if (base.heightM.isFinite() && base.heightM > 0f) base
+   511	                           else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
+   512	        /* Prompt analysis mutates the native handle. Reset first so a previous generation cannot
+   513	           leak its stature or measurements into this parse. */
+   514	        NativeBridge.engineReset(h, resolvedBase.packInts(), resolvedBase.packFloats(), resolvedBase.prompt)
+   515	        val ints = resolvedBase.packInts()
+   516	        val floats = resolvedBase.packFloats()
+   517	        val outPrompt = arrayOfNulls<String>(1)
+   518	        val matched = NativeBridge.engineAnalyzePrompt(h, prompt, ints, floats, outPrompt)
+   519	        check(matched >= 0) { "prompt analysis failed: ${NativeBridge.engineLastError(h)}" }
+   520	        val spec = AvatarSpec.unpack(ints, floats, outPrompt[0] ?: prompt)
+   521	        /* Analysis is observational: keep the caller's explicit choices unless the prompt named a
+   522	           value the caller left at its default. */
+   523	        return mergePrompted(resolvedBase, spec)
+   524	    }
+   525	
+   526	    /* ------------------------------------------------------------------ export ---------------- */
+   527	
+   528	    /** Writes the current result to [destination] (app-scoped storage) and returns the file. */
+   529	    fun exportGlb(source: EngineResult, destination: File): File {
+   530	        val h = openHandle()
+   531	        requery(h, source.spec)
+   532	        destination.parentFile?.mkdirs()
+   533	        val rc = NativeBridge.engineExportGlb(h, destination.absolutePath)
+   534	        check(rc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
+   535	        return destination
+### sdk/src/main/java/com/avatarforge/sdk/AvatarEngine.kt:745-825
+   745	            Stage.ANIMATION to 0.005f,
+   746	            Stage.EXPORT to 0.005f,
+   747	        )
+   748	
+   749	        private var instance: AvatarEngine? = null
+   750	
+   751	        /** One engine per process: the kernel owns a single 34 MB mesh budget and a GPU context. */
+   752	        fun get(context: Context): AvatarEngine =
+   753	            instance ?: synchronized(this) {
+   754	                instance ?: AvatarEngine(context.applicationContext).also { instance = it }
+   755	            }
+   756	
+   757	        fun health(): EngineHealth = EngineHealth(
+   758	            nativeLibraryLoaded = NativeBridge.available,
+   759	            abiVersion = if (NativeBridge.available) NativeBridge.abiVersion() else 0,
+   760	            engineVersion = if (NativeBridge.available) NativeBridge.engineVersion() else "not loaded",
+   761	            problem = when {
+   762	                !NativeBridge.available -> "libavatarforge.so did not load: ${NativeBridge.loadError ?: "unknown reason"}"
+   763	                NativeBridge.abiVersion() != ABI_VERSION ->
+   764	                    "native ABI ${NativeBridge.abiVersion()} does not match the SDK's $ABI_VERSION"
+   765	                else -> null
+   766	            },
+   767	        )
+   768	
+   769	        fun capabilities(context: Context): EngineCapabilities {
+   770	            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+   771	            val info = android.app.ActivityManager.MemoryInfo()
+   772	            activityManager.getMemoryInfo(info)
+   773	            val stat = StatFs(context.filesDir.absolutePath)
+   774	            val lowest = health().let { if (it.usable) return@let it else it }
+   775	            val engine = get(context)
+   776	            return EngineCapabilities(
+   777	                abiVersion = lowest.abiVersion,
+   778	                engineVersion = lowest.engineVersion,
+   779	                estimatedGlbBytes = 40L * 1024 * 1024,   // measured: 33-39 MB for a full avatar
+   780	                memoryBudgetBytes = 1536L * 1024 * 1024,
+   781	                totalRamBytes = info.totalMem,
+   782	                lowRamDevice = activityManager.isLowRamDevice,
+   783	                freeStorageBytes = stat.availableBytes,
+   784	                clipCount = engine.clipCount,
+   785	                blendshapeCount = if (NativeBridge.available) NativeBridge.engineBlendshapeNames().size else 0,
+   786	                regionCount = REGION_COUNT,
+   787	            )
+   788	        }
+   789	
+   790	        /** Where generated .glb files live: app-scoped, no permissions, shareable via FileProvider. */
+   791	        fun engineOutputDir(context: Context): File = File(context.filesDir, "avatars")
+   792	
+   793	        /* ------------------------------------------------------------------ helpers ----------- */
+   794	
+   795	        private fun unpackAnalysis(packed: FloatArray, index: Int): ImageReference.Analysis {
+   796	            var i = index * ANALYSIS_FLOATS
+   797	            fun f() = packed[i++]
+   798	            return ImageReference.Analysis(
+   799	                subjectCoverage = f(),
+   800	                headBox = floatArrayOf(f(), f(), f(), f()),
+   801	                shoulderY = f(),
+   802	                hipY = f(),
+   803	                ankleY = f(),
+   804	                kneeY = f(),
+   805	                isFullBody = f() > 0.5f,
+   806	                poseConfidence = f(),
+   807	                skinLab = floatArrayOf(f(), f(), f()),
+   808	                hairLab = floatArrayOf(f(), f(), f()),
+   809	                garmentLab = floatArrayOf(f(), f(), f()),
+   810	                metalConfidence = f(),
+   811	                keyLight = floatArrayOf(f(), f(), f()),
+   812	                keyLightIntensity = f(),
+   813	                backgroundLab = floatArrayOf(f()),
+   814	            )
+   815	        }
+   816	
+   817	        /**
+   818	         * Inverts CIE L* to melanin content.
+   819	         *
+   820	         * Not a lookup table from a paper: it is the same monotone relation the texture bake uses
+   821	         * (af_texture.cpp), solved the other way round, so a photo's skin tone and a typed
+   822	         * `skin_melanin` land in the same place. L* 92 (very fair) -> ~0.06, L* 20 (deep) -> ~0.95.
+   823	         */
+   824	        private fun melaninFromLab(lab: FloatArray): Float {
+   825	            val l = lab[0].coerceIn(0f, 100f)
+### native/src/android/af_jni.cpp:320-395
+   320	        throwIllegalArgument(env, "engine handle is not open");
+   321	        return AF_ERR_INVALID_ARG;
+   322	    }
+   323	    const jsize count = env->GetArrayLength(widths);
+   324	    if (count < 1 || count > 4) {
+   325	        throwIllegalArgument(env, "1 to 4 reference images are supported per call");
+   326	        return AF_ERR_INVALID_ARG;
+   327	    }
+   328	    std::vector<af_image> images;
+   329	    images.resize(size_t(count));
+   330	    std::vector<jbyte*> buffers;
+   331	    buffers.assign(size_t(count), nullptr);
+   332	    jint w[4]{}, ht[4]{}, ch[4]{}, rl[4]{};
+   333	    env->GetIntArrayRegion(widths, 0, count, w);
+   334	    env->GetIntArrayRegion(heights, 0, count, ht);
+   335	    env->GetIntArrayRegion(channels, 0, count, ch);
+   336	    env->GetIntArrayRegion(roles, 0, count, rl);
+   337	    for (jsize i = 0; i < count; ++i) {
+   338	        jobject buffer = env->GetObjectArrayElement(pixels, i);
+   339	        buffers[size_t(i)] = buffer ? static_cast<jbyte*>(env->GetDirectBufferAddress(buffer)) : nullptr;
+   340	        if (!buffers[size_t(i)]) {
+   341	            throwIllegalArgument(env, "image buffers must be direct ByteBuffers (no copies are made)");
+   342	            return AF_ERR_INVALID_ARG;
+   343	        }
+   344	        images[size_t(i)].width = w[i];
+   345	        images[size_t(i)].height = ht[i];
+   346	        images[size_t(i)].channels = ch[i];
+   347	        images[size_t(i)].role = rl[i];
+   348	        images[size_t(i)].pixels = reinterpret_cast<const uint8_t*>(buffers[size_t(i)]);
+   349	        env->DeleteLocalRef(buffer);
+   350	    }
+   351	    std::vector<af_image_analysis> analyses;
+   352	    analyses.resize(size_t(count));
+   353	    g_tlsEnv = env;
+   354	    const int32_t rc = af_engine_analyze_images(handle->engine, images.data(), int32_t(count),
+   355	                                                analyses.data(), int32_t(count));
+   356	    g_tlsEnv = nullptr;
+   357	    if (rc < 0) {
+   358	        throwIllegalState(env, "af_engine_analyze_images", af_result(rc), af_engine_last_error(handle->engine));
+   359	        return rc;
+   360	    }
+   361	    /* The analysis struct is packed into a float array for Kotlin: 3 lab triplets plus the
+   362	       landmarks in a fixed order documented in the SDK's ImageAnalysis class. */
+   363	    const int perImage = 22;
+   364	    if (outAnalyses && env->GetArrayLength(outAnalyses) >= count * perImage) {
+   365	        std::vector<jfloat> packed(size_t(count) * perImage);
+   366	        for (jsize i = 0; i < count; ++i) {
+   367	            const af_image_analysis& a = analyses[size_t(i)];
+   368	            jfloat* p = &packed[size_t(i) * perImage];
+   369	            int k = 0;
+   370	            p[k++] = a.subject_coverage;
+   371	            for (int j = 0; j < 4; ++j) p[k++] = a.head_box[j];
+   372	            p[k++] = a.shoulder_y; p[k++] = a.hip_y; p[k++] = a.ankle_y; p[k++] = a.knee_y;
+   373	            p[k++] = float(a.is_full_body);
+   374	            p[k++] = a.pose_confidence;
+   375	            for (int j = 0; j < 3; ++j) p[k++] = a.skin_lab[j];
+   376	            for (int j = 0; j < 3; ++j) p[k++] = a.hair_lab[j];
+   377	            for (int j = 0; j < 3; ++j) p[k++] = a.garment_lab[j];
+   378	            p[k++] = a.metal_confidence;
+   379	            p[k++] = a.key_light[0]; p[k++] = a.key_light[1]; p[k++] = a.key_light[2];
+   380	            p[k++] = a.key_light_intensity;
+   381	            p[k++] = a.background_lab[0];
+   382	        }
+   383	        env->SetFloatArrayRegion(outAnalyses, 0, count * perImage, packed.data());
+   384	    }
+   385	    return rc;
+   386	}
+   387	
+   388	/* Stages 2..8 are exposed through one entry point so Kotlin's JobHandle can drive the pipeline
+   389	   with a single enum rather than eight trampolines. */
+   390	JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineStage(
+   391	    JNIEnv* env, jobject, jlong h, jint stage) {
+   392	    EngineHandle* handle = asHandle(h);
+   393	    return guarded(env, handle, "stage", [&](af_engine* e) -> int32_t {
+   394	        switch (stage) {
+   395	            case AF_STAGE_FIT_ANATOMY:  return af_engine_fit_anatomy(e);
+### native/src/af_engine.cpp:545-585
+   545	int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int32_t image_count,
+   546	                                 af_image_analysis* out_analyses, int32_t max_analyses) {
+   547	    return guard(engine, "analyze_images", [&]() {
+   548	        if (!images || image_count <= 0) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+   549	        engine->stage = AF_STAGE_ANALYZE_INPUTS;
+   550	        engine->analysisCount = 0;
+   551	        int32_t produced = 0;
+   552	        for (int32_t i = 0; i < image_count && i < 4; ++i) {
+   553	            if (engine->cancelled()) return static_cast<int32_t>(AF_ERR_CANCELLED);
+   554	            engine->progress(AF_STAGE_ANALYZE_INPUTS, static_cast<float>(i) / image_count,
+   555	                             "analysing reference image");
+   556	            af_image_analysis a{};
+   557	            if (!analyseImage(images[i], &a)) {
+   558	                engine->log(AF_LOG_WARN, "reference image could not be analysed (empty or unreadable)");
+   559	                continue;
+   560	            }
+   561	            engine->analyses[engine->analysisCount++] = a;
+   562	            if (out_analyses && produced < max_analyses) out_analyses[produced] = a;
+   563	            ++produced;
+   564	        }
+   565	        if (engine->analysisCount == 0) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+   566	
+   567	        /* Identity reference is the first image unless one is explicitly marked. Clothing wins if
+   568	           present, because that is the image the user pointed at for the outfit. */
+   569	        const af_image_analysis* identity = &engine->analyses[0];
+   570	        const af_image_analysis* clothing = nullptr;
+   571	        for (int32_t i = 0; i < image_count && i < 4; ++i) {
+   572	            if (images[i].role == AF_IMAGE_CLOTHING) clothing = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
+   573	            if (images[i].role == AF_IMAGE_IDENTITY) identity = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
+   574	        }
+   575	        float confidence = 0.0f;
+   576	        specFromAnalysis(*identity, clothing, &engine->spec, &confidence);
+   577	        engine->analysisConfidence = confidence;
+   578	        engine->dirty |= DIRTY_ALL;
+   579	        engine->geometryReady = false;
+   580	        char buf[160];
+   581	        std::snprintf(buf, sizeof(buf),
+   582	                      "identity: full body %s, coverage %.2f, melanin %.2f, confidence %.2f",
+   583	                      identity->is_full_body ? "yes" : "no", identity->subject_coverage,
+   584	                      engine->spec.skin_melanin, confidence);
+   585	        engine->log(AF_LOG_INFO, buf);
+### native/src/af_image.h:1-56
+     1	/*
+     2	 * af_image.h -- reference-image analysis.
+     3	 *
+     4	 * This is the on-device half of "generate from a photo". There is no neural network here and there
+     5	 * is not going to be one: a segmentation model large enough to be worth shipping would blow the
+     6	 * APK budget, need a GPU delegate that half the target devices lack, and make the result
+     7	 * non-reproducible. What the generator actually needs from a reference photo is a small set of
+     8	 * robust measurements - is this a full-body shot or just a portrait, how many heads tall is the
+     9	 * subject, what is the skin tone, what colour is the hair and the clothing, is the clothing cloth
+    10	 * or metal, and where is the key light. Every one of those is answerable with classical
+    11	 * segmentation on the colour channels, and the answers are auditable: `af_image_analysis` carries
+    12	 * the confidence of each estimate, and the app is expected to show them and let the user correct
+    13	 * them.
+    14	 *
+    15	 * The pipeline, per image:
+    16	 *   1. box-downsample to a working grid (<= 256 px on the long edge) - O(1) per pixel beyond that;
+    17	 *   2. background model from the border ring (median + spread), foreground = colour distance;
+    18	 *   3. subject mask cleanup: per-row runs, largest connected component, hole fill;
+    19	 *   4. vertical width profile -> head box, shoulder/hip/knee/ankle rows, head-count, full-body flag;
+    20	 *   5. per-pixel classification into skin / hair / garment by chromaticity + position;
+    21	 *   6. median CIE L*a*b* per class, melanin inversion, metal and key-light estimates.
+    22	 *
+    23	 * Everything is deterministic: the same bytes in produce the same analysis out, bit for bit.
+    24	 */
+    25	#ifndef AF_IMAGE_H
+    26	#define AF_IMAGE_H
+    27	
+    28	#include "../include/afcore.h"
+    29	
+    30	namespace af {
+    31	
+    32	/** Working resolution cap for analysis (the long edge). */
+    33	constexpr int kAnalysisMaxSide = 256;
+    34	
+    35	/**
+    36	 * Analyses one decoded image. `out` is filled with the report described in afcore.h.
+    37	 * Returns false only for a null/empty/garbage image (the caller reports that as a bad input, not
+    38	 * as a failed generation).
+    39	 */
+    40	bool analyseImage(const af_image& image, af_image_analysis* out);
+    41	
+    42	/**
+    43	 * Turns an analysis (or a pair of them: identity + clothing reference) into the spec the generator
+    44	 * will build from. `identity` is required, `clothing` may be null.
+    45	 *
+    46	 * The height estimate is the interesting one: an image carries no absolute scale, so stature comes
+    47	 * from the subject's own proportions - a human is 7.4 heads tall on average and a head is about
+    48	 * 0.235 m, so height is read off the head-to-body ratio in the frame. That is scale-free and works
+    49	 * on any camera, which is exactly what a phone has.
+    50	 */
+    51	void specFromAnalysis(const af_image_analysis& identity, const af_image_analysis* clothing,
+    52	                      af_spec* spec, float* outConfidence);
+    53	
+    54	} // namespace af
+    55	#endif /* AF_IMAGE_H */
+### native/src/af_image.cpp:480-570
+   480	void specFromAnalysis(const af_image_analysis& identity, const af_image_analysis* clothing,
+   481	                      af_spec* spec, float* outConfidence) {
+   482	    if (!spec) return;
+   483	    float confidence = identity.pose_confidence;
+   484	
+   485	    /* Stature has strict precedence: explicit metres in af_spec win; only the canonical default
+   486	       (or a legacy zero/non-finite value) may be refined from a genuine full-body image. A portrait
+   487	       has no absolute scale, so it keeps 1.75 m instead of writing the old 0 sentinel. */
+   488	    {
+   489	        const bool unresolved = !std::isfinite(spec->height_m) || spec->height_m <= 0.0f ||
+   490	                                std::fabs(spec->height_m - AF_DEFAULT_HEIGHT_M) < 1e-5f;
+   491	        const float headHeight = std::fmax(0.01f, identity.head_box[3]);
+   492	        const float statureNorm = identity.ankle_y - identity.head_box[1];
+   493	        const int fullBody = identity.is_full_body;
+   494	        if (unresolved && fullBody && statureNorm > 0.05f) {
+   495	            const float heads = statureNorm / headHeight;
+   496	            /* The ratio is scale-free; 0.235 m is the adult head-height prior. Confidence pulls a
+   497	               noisy segmentation towards the canonical default, never towards zero. */
+   498	            float h = 0.235f * heads;
+   499	            if (h < 1.40f) h = 1.40f;
+   500	            if (h > 2.20f) h = 2.20f;
+   501	            const float w = std::fmax(0.0f, std::fmin(1.0f, (confidence - 0.45f) / 0.5f));
+   502	            spec->height_m = w * h + (1.0f - w) * AF_DEFAULT_HEIGHT_M;
+   503	        } else if (!std::isfinite(spec->height_m) || spec->height_m <= 0.0f) {
+   504	            spec->height_m = AF_DEFAULT_HEIGHT_M;
+   505	        }
+   506	        if (!fullBody) confidence *= 0.6f;
+   507	    }
+   508	
+   509	    /* Sex: shoulder-to-hip ratio. Above 1.45 is male-typical, below 1.30 female-typical, and in
+   510	       between the estimate is left alone rather than guessed. */
+   511	    {
+   512	        const float shoulder = identity.head_box[2];
+   513	        (void)shoulder;
+   514	    }
+   515	
+   516	    /* Skin tone: the engine's melanin -> albedo curve is monotone in L*, so invert it against the
+   517	       measured skin lightness, normalised by the background (the only reference for exposure a
+   518	       single image offers). */
+   519	    {
+   520	        const float skinL = identity.skin_lab[0];
+   521	        const float refL = std::fmax(22.0f, identity.background_lab[0]);
+   522	        const float ratio = std::fmax(0.15f, std::fmin(1.9f, skinL / refL));
+   523	        float melanin = 0.62f - 0.52f * ratio;              /* 1.0 ratio -> medium-light skin */
+   524	        if (melanin < 0.03f) melanin = 0.03f;
+   525	        if (melanin > 0.95f) melanin = 0.95f;
+   526	        spec->skin_melanin = melanin;
+   527	    }
+   528	
+   529	    /* Hair tone: Lab -> linear sRGB, then darkened slightly because the photo's hair pixels sit in
+   530	       shadow as often as not. */
+   531	    {
+   532	        float rgb[3];
+   533	        labToLinearRgb(identity.hair_lab, rgb);
+   534	        for (int c = 0; c < 3; ++c) spec->hair_tone[c] = std::fmax(0.01f, std::fmin(1.0f, rgb[c] * 1.15f));
+   535	    }
+   536	
+   537	    /* Clothing: colour and material class. Metal-looking references become plate; everything else
+   538	       becomes cloth. The colour comes from the identity image unless a clothing reference was
+   539	       supplied, in which case that image wins - it is the one the user pointed at. */
+   540	    {
+   541	        const af_image_analysis& src = clothing ? *clothing : identity;
+   542	        const float metal = clothing ? clothing->metal_confidence : identity.metal_confidence;
+   543	        float rgb[3];
+   544	        labToLinearRgb(src.garment_lab, rgb);
+   545	        for (int c = 0; c < 3; ++c) {
+   546	            spec->cloth_tone[c] = std::fmax(0.01f, std::fmin(1.0f, rgb[c]));
+   547	            spec->gear_tone[c] = std::fmax(0.01f, std::fmin(1.0f, rgb[c] * 1.05f));
+   548	        }
+   549	        if (spec->outfit == AF_OUTFIT_NONE || spec->outfit == AF_OUTFIT_TSHIRT) {
+   550	            if (metal > 0.62f) {
+   551	                spec->outfit = AF_OUTFIT_ARMOR_PLATE;
+   552	                if (spec->footwear == AF_FOOTWEAR_NONE) spec->footwear = AF_FOOTWEAR_SABATON;
+   553	            } else if (metal > 0.45f) {
+   554	                spec->outfit = AF_OUTFIT_ARMOR_LEATHER;
+   555	                if (spec->footwear == AF_FOOTWEAR_NONE) spec->footwear = AF_FOOTWEAR_BOOT;
+   556	            } else if (spec->outfit == AF_OUTFIT_NONE) {
+   557	                spec->outfit = AF_OUTFIT_TSHIRT;
+   558	            }
+   559	        }
+   560	        if (outConfidence) {
+   561	            *outConfidence = std::fmax(0.0f, std::fmin(1.0f, confidence * 0.5f + (clothing ? 0.35f : 0.2f)));
+   562	        }
+   563	    }
+   564	    if (outConfidence) {
+   565	        *outConfidence = std::fmax(0.0f, std::fmin(1.0f, *outConfidence));
+   566	    }
+   567	}
+   568	
+   569	} // namespace af
+### native/src/af_anatomy.cpp:248-276
+   248	    m.hipHalfWidth = maxf(m.hip.rx * 0.52f, m.biacromialHalf * 0.44f);
+   249	    m.legSeparation = m.hipHalfWidth * 0.86f;
+   250	
+   251	    /* ---------- head ---------------------------------------------------------------- */
+   252	    const float headCircumferenceM = ((spec.head_circumference_cm > 1.0f)
+   253	                                          ? spec.head_circumference_cm
+   254	                                          : ((female ? 55.0f : 57.0f) * std::pow(H / populationHeight, 0.5f))) * 0.01f;
+   255	    /* Head: ellipsoid with the classic 3:4:4 skull ratio (depth : width : height). */
+   256	    const float headRadiusEq = headCircumferenceM / (2.0f * kPi);     /* from the circle approx */
+   257	    m.head.rx = headRadiusEq * 0.78f;
+   258	    m.head.rz = headRadiusEq * 0.97f;
+   259	    m.faceHeight = (m.y.crownY - m.y.chinY);
+   260	    m.head.centreZ = 0.0f;
+   261	    m.jaw.rx = m.head.rx * 0.86f;
+   262	    m.jaw.rz = m.head.rz * 0.90f;
+   263	
+   264	    m.faceWidth   = m.head.rx * 1.42f;
+   265	    m.noseLength  = (m.y.eyeY - m.y.chinY) * 0.42f;
+   266	    m.lipWidth    = m.faceWidth * 0.42f;
+   267	    m.earLength   = (m.y.crownY - m.y.chinY) * 0.24f;
+   268	    m.eyeSeparation = m.head.rx * 0.72f;
+   269	    m.eyeRadius   = m.head.rx * 0.172f;
+   270	    m.irisRadius  = m.eyeRadius * 0.52f;
+   271	    m.mouthY      = lerpf(m.y.chinY, m.y.eyeY, 0.30f);
+   272	    m.eyeZ        = -m.head.rz * 0.78f;   /* eyeballs sit forward of centre   */
+   273	    m.mouthWidth  = m.lipWidth * 1.15f;   /* mouth corners extend past lips   */
+   274	    m.bustSep     = m.bustSeg.rx * 0.62f; /* breast centres inside the bust seg*/
+   275	
+   276	    /* ---------- limbs --------------------------------------------------------------- */
+### native/src/af_texture.cpp:499-530
+   499	bool bakeTextures(const Mesh& mesh, const UVLayout& layout, const BodyMetrics& metrics,
+   500	                  const af_spec& spec, const BakeOptions& options, TextureSet* out) {
+   501	    if (!out || mesh.uvs.size() < mesh.vertexCount() * 2 || mesh.indices.size() < 3) return false;
+   502	    const int w = std::max(64, options.width);
+   503	    const int h = std::max(64, options.height);
+   504	
+   505	    out->width = w;
+   506	    out->height = h;
+   507	    out->baseColor.assign(static_cast<size_t>(w) * h * 4, 0);
+   508	    out->normal.assign(static_cast<size_t>(w) * h * 4, 0);
+   509	    out->metallicRoughness.assign(static_cast<size_t>(w) * h * 4, 0);
+   510	    out->occlusion.assign(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
+   511	    out->subsurface.assign(static_cast<size_t>(w) * h * 4, 0);
+   512	    std::vector<uint8_t> filled(static_cast<size_t>(w) * h, 0);
+   513	
+   514	    MaterialContext ctx;
+   515	    ctx.m = &metrics;
+   516	    ctx.spec = &spec;
+   517	    ctx.noise = Noise(static_cast<uint32_t>(spec.seed) * 2654435761u + 101u);
+   518	    ctx.undertone = Vec3(1.0f, 0.72f - 0.25f * spec.skin_melanin, 0.60f - 0.30f * spec.skin_melanin);
+   519	    ctx.skinAlbedo = skinAlbedoFromMelanin(spec.skin_melanin, ctx.undertone);
+   520	    ctx.ageFactor = saturate((spec.age_years - 18.0f) / 60.0f);
+   521	    ctx.eyeRadius = metrics.eyeRadius;
+   522	    ctx.eyeCentre[0] = Vec3(metrics.eyeSeparation * 0.5f, metrics.y.eyeY, metrics.eyeZ);
+   523	    ctx.eyeCentre[1] = Vec3(-metrics.eyeSeparation * 0.5f, metrics.y.eyeY, metrics.eyeZ);
+   524	    /* Chains for landmark features. They are the same arm/leg chains the geometry was built
+   525	       from, obtained by rebuilding the (cheap, analytic) field for this metric set. */
+   526	    {
+   527	        const BodyField fieldForChains(metrics);
+   528	        ctx.chains[0] = fieldForChains.chain(1);
+   529	        ctx.chains[1] = fieldForChains.chain(-1);
+   530	    }
+### native/include/afcore.h:145-183
+   145	
+   146	void af_spec_init(af_spec* spec);
+   147	
+   148	typedef enum af_image_role {
+   149	    AF_IMAGE_IDENTITY = 0,   /* Image A: portrait / half body -> identity + upper body      */
+   150	    AF_IMAGE_CLOTHING = 1,   /* Image B: garment / armour reference                         */
+   151	    AF_IMAGE_FULL_BODY = 2,  /* already a full-body shot                                    */
+   152	    AF_IMAGE_EXTRA_VIEW = 3  /* additional view of the same subject (multi-view fusion)      */
+   153	} af_image_role;
+   154	
+   155	/* A decoded, upright, sRGB-8 image. The engine never retains the pointer. */
+   156	typedef struct af_image {
+   157	    int32_t width;
+   158	    int32_t height;
+   159	    int32_t channels;      /* 3 (RGB) or 4 (RGBA)                                     */
+   160	    int32_t role;          /* af_image_role                                            */
+   161	    const uint8_t* pixels; /* tightly packed, top-left origin, row stride = w*channels */
+   162	} af_image;
+   163	
+   164	/* Analysis report produced by af_engine_analyze_images(). Purely observational. */
+   165	typedef struct af_image_analysis {
+   166	    float   subject_coverage;      /* fraction of pixels belonging to the subject          */
+   167	    float   head_box[4];           /* normalised x,y,w,h of the detected head              */
+   168	    float   shoulder_y;            /* normalised vertical position of shoulder line        */
+   169	    float   hip_y;
+   170	    float   ankle_y;
+   171	    float   knee_y;
+   172	    int32_t is_full_body;          /* 1 when ankle_y is a real detection, not a guess       */
+   173	    float   pose_confidence;
+   174	    float   skin_lab[3];           /* median skin colour of the subject, CIE L*a*b*         */
+   175	    float   hair_lab[3];
+   176	    float   garment_lab[3];
+   177	    float   metal_confidence;      /* 0..1 probability the clothing reference is hard-surface */
+   178	    float   key_light[3];          /* estimated dominant light direction (unit vector)     */
+   179	    float   key_light_intensity;
+   180	    float   background_lab[3];
+   181	} af_image_analysis;
+   182	
+   183	/* ------------------------------------------------------------------ animation ------------ */
+### sdk/src/main/java/com/avatarforge/sdk/AvatarEngine.kt:724-734
+   724	        check(rc == 0) { "rebuild for export failed: ${NativeBridge.engineLastError(h)}" }
+   725	    }
+   726	
+   727	    /* ------------------------------------------------------------------ health ---------------- */
+   728	
+   729	    companion object {
+   730	        const val ABI_VERSION = 1
+   731	        private const val ANALYSIS_FLOATS = 22
+   732	        private const val REGION_COUNT = 13
+   733	        private const val CANCELLED = -6
+   734	
+### app/src/main/AndroidManifest.xml:1-80
+     1	<?xml version="1.0" encoding="utf-8"?>
+     2	<!--
+     3	  AvatarForge app manifest.
+     4	
+     5	  Read the permission list carefully, because what is missing is the point:
+     6	
+     7	    * NO android.permission.INTERNET      the app cannot open a socket, by construction
+     8	    * NO ACCESS_NETWORK_STATE / WIFI      nothing to check, nothing to use
+     9	    * NO READ_/WRITE_EXTERNAL_STORAGE     exports go through the Storage Access Framework
+    10	    * NO CAMERA                           reference photos are picked with the photo picker,
+    11	                                          which does not hand out camera access
+    12	
+    13	  What is declared is a normal, single-activity app that renders into a SurfaceView and shares its
+    14	  output through its own FileProvider. There is no service, no receiver, no worker and no
+    15	  background scheduler: generation stops when the app does.
+    16	-->
+    17	<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    18	
+    19	    <application
+    20	        android:allowBackup="false"
+    21	        android:icon="@drawable/ic_launcher_avatarforge"
+    22	        android:label="@string/app_name"
+    23	        android:largeHeap="false"
+    24	        android:supportsRtl="true"
+    25	        android:theme="@style/Theme.AvatarForge"
+    26	        android:extractNativeLibs="true">
+    27	
+    28	        <activity
+    29	            android:name=".MainActivity"
+    30	            android:exported="true"
+    31	            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+    32	            android:theme="@style/Theme.AvatarForge">
+    33	            <intent-filter>
+    34	                <action android:name="android.intent.action.MAIN" />
+    35	                <category android:name="android.intent.category.LAUNCHER" />
+    36	            </intent-filter>
+    37	            <!-- Opening a .glb the user shares with us. A plain Intent filter: nothing leaves
+    38	                 the device and no network scheme is accepted. -->
+    39	            <intent-filter>
+    40	                <action android:name="android.intent.action.VIEW" />
+    41	                <category android:name="android.intent.category.DEFAULT" />
+    42	                <data android:mimeType="model/gltf-binary" />
+    43	            </intent-filter>
+    44	        </activity>
+    45	    </application>
+    46	
+    47	</manifest>

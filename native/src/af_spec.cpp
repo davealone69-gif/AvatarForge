@@ -20,7 +20,11 @@ void af_spec_init(af_spec* spec) {
     spec->footwear      = AF_FOOTWEAR_NONE;
     spec->seed          = 1337;
 
-    spec->height_m      = 0.0f;   /* 0 => sex-specific default stature                */
+    /* Height is resolved here, at the root of every C/JNI/Rust request. Keeping a zero sentinel
+       in the public value made the UI report 0.00 m and allowed later stages to disagree about
+       whether they had received a stature. Legacy callers may still pass zero explicitly; the
+       engine normalises that to this same value before fitting anatomy. */
+    spec->height_m      = AF_DEFAULT_HEIGHT_M;
     spec->age_years     = 30.0f;
     spec->muscle        = 0.45f;
     spec->body_fat      = 0.22f;

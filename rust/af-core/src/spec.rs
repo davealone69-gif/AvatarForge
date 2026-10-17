@@ -3,13 +3,25 @@
 // ==============================================================================================
 //
 //  `af_spec_init` is small but load-bearing: every caller in the project (Kotlin's AvatarSpec,
-//  the Rust wrapper, the probes, the harness) starts from it, and the "0 means derive it" rule is
-//  what lets a caller set only the two or three fields a UI exposes. The defaults here are checked
+//  the Rust wrapper, the probes, the harness) starts from it. Stature is deliberately non-zero at
+//  this root boundary so no downstream stage can mistake an unresolved sentinel for metres. The
+//  defaults here are checked
 //  against the C++ kernel by tools/abi_conformance.py, field by field.
 // ==============================================================================================
 
 use crate::abi::*;
 use core::ffi::c_char;
+
+fn has_minor_prompt_marker(prompt: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "boy", "child", "girl", "kid", "minor", "schoolboy", "schoolgirl", "teen", "teenage",
+        "underage",
+    ];
+    prompt
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| MARKERS.iter().any(|marker| token.eq_ignore_ascii_case(marker)))
+}
 
 impl AfSpec {
     /// The documented defaults, identical to the C++ `af_spec_init`.
@@ -22,7 +34,7 @@ impl AfSpec {
             outfit: AF_OUTFIT_NONE,
             footwear: AF_FOOTWEAR_NONE,
             seed: 1337,
-            height_m: 0.0, /* 0 => sex-specific default stature */
+            height_m: AF_DEFAULT_HEIGHT_M,
             age_years: 30.0,
             muscle: 0.45,
             body_fat: 0.22,
@@ -70,6 +82,16 @@ impl AfSpec {
         }
         if !(0..=AF_OUTFIT_COAT).contains(&self.outfit) {
             return Err("outfit");
+        }
+        /* AF_OUTFIT_NONE is the genuine unclothed surface, not a placeholder garment. The same
+           adult-only invariant is enforced by C++, Kotlin and this standalone Rust kernel. */
+        if self.outfit == AF_OUTFIT_NONE {
+            if has_minor_prompt_marker(self.prompt_str()) {
+                return Err("adult_nude_prompt");
+            }
+            if !self.age_years.is_finite() || self.age_years < 18.0 {
+                return Err("adult_nude_age");
+            }
         }
         if !(0..=AF_FOOTWEAR_HEEL).contains(&self.footwear) {
             return Err("footwear");
@@ -144,6 +166,7 @@ mod tests {
         let s = AfSpec::defaulted();
         assert_eq!(s.struct_size as usize, core::mem::size_of::<AfSpec>());
         assert_eq!(s.seed, 1337);
+        assert_eq!(s.height_m, AF_DEFAULT_HEIGHT_M);
         assert_eq!(s.muscle, 0.45);
         assert_eq!(s.body_fat, 0.22);
         assert_eq!(s.cloth_roughness, -1.0);
@@ -161,6 +184,23 @@ mod tests {
         s = AfSpec::defaulted();
         s.muscle = 1.4;
         assert_eq!(s.validate(), Err("muscle"));
+    }
+
+    #[test]
+    fn nude_anatomical_base_is_adult_only() {
+        let mut s = AfSpec::defaulted();
+        s.age_years = 17.0;
+        assert_eq!(s.validate(), Err("adult_nude_age"));
+
+        s.age_years = 22.0;
+        s.set_prompt("adult woman, nude");
+        assert!(s.validate().is_ok());
+        s.set_prompt("teenage girl, nude");
+        assert_eq!(s.validate(), Err("adult_nude_prompt"));
+
+        s.outfit = AF_OUTFIT_TSHIRT;
+        s.age_years = 17.0;
+        assert!(s.validate().is_ok());
     }
 
     #[test]

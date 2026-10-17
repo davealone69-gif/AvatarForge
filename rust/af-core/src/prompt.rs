@@ -447,8 +447,14 @@ pub fn parse_prompt(prompt: &str, spec: &mut AfSpec, mut out: Option<&mut Prompt
         }
 
         /* ---- age adjectives ---- */
-        if any_of(w, &["young", "teen", "teenage"]) {
-            spec.age_years = 19.0;
+        if w == "young" {
+            spec.age_years = 22.0;
+            rec.record(w, "age_years");
+            i += 1;
+            continue;
+        }
+        if any_of(w, &["teen", "teenage"]) {
+            spec.age_years = 17.0;
             rec.record(w, "age_years");
             i += 1;
             continue;
@@ -847,7 +853,7 @@ mod tests {
         let n = parse_prompt("qwertyuiop zxcvbnm", &mut spec, None);
         assert_eq!(n, 0);
         assert_eq!(spec.sex, AF_SEX_UNSPECIFIED);
-        assert_eq!(spec.height_m, 0.0);
+        assert_eq!(spec.height_m, AF_DEFAULT_HEIGHT_M);
         assert!(spec.prompt_str().is_empty(), "no prompt is stored when nothing matched");
         assert!(!looks_like_avatar_request("qwertyuiop"));
         assert!(looks_like_avatar_request("a tall woman"));

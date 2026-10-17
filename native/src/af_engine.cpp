@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -68,6 +69,54 @@ const char* regionLabel(int region) {
         "nail", "cloth_upper", "cloth_lower", "shoe", "gear"
     };
     return (region >= 0 && region < 13) ? kNames[region] : "skin";
+}
+
+/* Resolve ABI-1 legacy values before any stage can observe the spec. Height stays in metres here;
+   centimetre inputs are converted by their parser/UI boundary, never guessed from magnitude. */
+void resolveSpecDefaults(af_spec* spec) {
+    if (!spec) return;
+    if (!std::isfinite(spec->height_m) || spec->height_m <= 0.0f) {
+        spec->height_m = AF_DEFAULT_HEIGHT_M;
+    }
+    spec->height_m = std::max(1.30f, std::min(2.25f, spec->height_m));
+}
+
+bool hasMinorPromptMarker(const af_spec& spec) {
+    static const char* const kMarkers[] = {
+        "boy", "child", "girl", "kid", "minor", "schoolboy", "schoolgirl", "teen",
+        "teenage", "underage"
+    };
+    const size_t length = strnlen(spec.prompt, sizeof(spec.prompt));
+    std::string token;
+    token.reserve(16);
+    for (size_t i = 0; i <= length; ++i) {
+        const unsigned char c = (i < length) ? static_cast<unsigned char>(spec.prompt[i]) : 0;
+        if (std::isalnum(c)) {
+            token.push_back(static_cast<char>(std::tolower(c)));
+            continue;
+        }
+        if (!token.empty()) {
+            for (const char* marker : kMarkers) {
+                if (token == marker) return true;
+            }
+            token.clear();
+        }
+    }
+    return false;
+}
+
+/* Outfit NONE is the real unclothed body surface. It is therefore adult-only even before detailed
+   sexual anatomy exists. Keeping this rule at the C ABI means JNI, Rust and direct native callers
+   cannot bypass the UI. */
+const char* adultSafetyError(const af_spec& spec) {
+    if (spec.outfit != AF_OUTFIT_NONE) return nullptr;
+    if (hasMinorPromptMarker(spec)) {
+        return "nude/anatomical generation rejects minor or teen prompt terms";
+    }
+    if (!std::isfinite(spec.age_years) || spec.age_years < 18.0f) {
+        return "nude/anatomical generation requires age_years >= 18";
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -134,7 +183,11 @@ int32_t guard(af_engine* e, const char* what, const std::function<int32_t()>& bo
     if (!e) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
     if (e->cancelled()) return static_cast<int32_t>(AF_ERR_CANCELLED);
     try {
-        return body();
+        const int32_t rc = body();
+        /* Error text describes the most recent call, not an old failure that a later successful
+           operation recovered from. Positive values are successful record/match counts. */
+        if (rc >= 0) e->lastError.clear();
+        return rc;
     } catch (const std::bad_alloc&) {
         e->lastError = std::string(what) + ": out of memory";
         return static_cast<int32_t>(AF_ERR_OUT_OF_MEMORY);
@@ -431,6 +484,11 @@ int32_t af_engine_create(const af_spec* spec, const af_callbacks* callbacks, af_
         std::memcpy(&e->spec, spec, n);
         e->spec.struct_size = static_cast<int32_t>(sizeof(af_spec));
     }
+    resolveSpecDefaults(&e->spec);
+    if (adultSafetyError(e->spec)) {
+        delete e;
+        return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+    }
     if (callbacks) e->cb = *callbacks;
     e->blendWeights.assign(kBlendshapeCount, 0.0f);
     e->stats.blendshape_count = 0;
@@ -452,6 +510,11 @@ int32_t af_engine_reset(af_engine* engine, const af_spec* spec) {
                                  : sizeof(af_spec);
             std::memcpy(&fresh, spec, n);
             fresh.struct_size = static_cast<int32_t>(sizeof(af_spec));
+        }
+        resolveSpecDefaults(&fresh);
+        if (const char* safety = adultSafetyError(fresh)) {
+            engine->lastError = std::string("reset: ") + safety;
+            return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         }
         engine->spec = fresh;
         engine->field.reset();
@@ -510,8 +573,15 @@ int32_t af_engine_analyze_prompt(af_engine* engine, const char* prompt, af_spec*
         if (!prompt) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         engine->stage = AF_STAGE_ANALYZE_INPUTS;
         engine->progress(AF_STAGE_ANALYZE_INPUTS, 0.0f, "reading prompt");
+        const af_spec previous = engine->spec;
         PromptParse parse;
         const int matched = parsePrompt(prompt, &engine->spec, &parse);
+        if (const char* safety = adultSafetyError(engine->spec)) {
+            engine->spec = previous;
+            engine->lastError = std::string("analyze_prompt: ") + safety;
+            if (out_spec) *out_spec = previous;
+            return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+        }
         engine->promptMatched = matched;
         for (int i = 0; i < parse.tokenCount; ++i) {
             engine->log(AF_LOG_INFO, std::string("understood \"") + parse.tokens[i].text +
@@ -581,10 +651,17 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
  * ============================================================================================ */
 int32_t af_engine_fit_anatomy(af_engine* engine) {
     return guard(engine, "fit_anatomy", [&]() {
+        if (const char* safety = adultSafetyError(engine->spec)) {
+            engine->lastError = std::string("fit_anatomy: ") + safety;
+            return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+        }
         engine->stage = AF_STAGE_FIT_ANATOMY;
         engine->progress(AF_STAGE_FIT_ANATOMY, 0.0f, "solving anthropometry");
         const float t0 = nowMs();
         engine->metrics = Anatomy::solve(engine->spec);
+        /* Publish the exact resolved stature back into the canonical spec used by texture/export.
+           This keeps metadata, renderer bounds and anatomy on one non-zero value. */
+        engine->spec.height_m = engine->metrics.height;
         engine->field.reset(new BodyField(engine->metrics));
         ApparelOptions ap;
         ap.outfit = engine->spec.outfit;

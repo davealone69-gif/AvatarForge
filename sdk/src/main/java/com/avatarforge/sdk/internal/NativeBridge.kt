@@ -45,6 +45,9 @@ internal object NativeBridge {
     external fun abiVersion(): Int
     external fun engineVersion(): String
 
+    /** Native wire stride for one af_image_analysis record; Kotlin refuses a schema mismatch. */
+    external fun imageAnalysisFloatCount(): Int
+
     /* ------------------------------------------------------------------ engine lifetime ------ */
     /*
      * The specification travels as two flat arrays plus the prompt text - the same layout as
@@ -53,7 +56,7 @@ internal object NativeBridge {
      */
     external fun engineCreate(ints: IntArray, floats: FloatArray, prompt: String?, callbacks: Any?): Long
     external fun engineDestroy(handle: Long)
-    external fun engineReset(handle: Long, ints: IntArray, floats: FloatArray, prompt: String?)
+    external fun engineReset(handle: Long, ints: IntArray, floats: FloatArray, prompt: String?): Int
     external fun engineSetMemoryBudget(handle: Long, bytes: Long)
     external fun engineLastError(handle: Long): String
 
@@ -70,8 +73,8 @@ internal object NativeBridge {
 
     /**
      * 1..4 reference images. `pixels` must be **direct** ByteBuffers of width*height*channels bytes
-     * in RGBA order (the kernel reads R,G,B and ignores A). `outAnalyses` receives 22 floats per
-     * image - see ImageReference.Analysis for the field order.
+     * in RGB/RGBA order (the kernel reads R,G,B and ignores A). `outAnalyses` must contain exactly
+     * [imageAnalysisFloatCount] floats per image; see ImageAnalysisPacking for the checked field order.
      */
     external fun engineAnalyzeImages(
         handle: Long,

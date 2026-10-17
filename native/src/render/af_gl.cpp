@@ -150,6 +150,7 @@ private:
 
     /* ---- state ---- */
     RendererOptions options_{};
+    RendererOptions activeTargetOptions_{};  /* last target set that completed successfully */
     RendererInfo info_{};
     RendererStats stats_{};
     af_engine* engine_ = nullptr;
@@ -377,7 +378,10 @@ bool GlRenderer::makeFramebufferWithTexture(GLuint* fbo, GLuint* texture, int w,
 bool GlRenderer::createTargets(std::string* error) {
     const int w = surfaceWidth_ > 0 ? surfaceWidth_ : 1080;
     const int h = surfaceHeight_ > 0 ? surfaceHeight_ : 1920;
-    const int samples = options_.msaaSamples > 1 ? options_.msaaSamples : 1;
+    GLint maxSamples = 1;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    const int samples = std::max(1, std::min(options_.msaaSamples, int(maxSamples)));
+    options_.msaaSamples = samples;
 
     /* Resolved HDR image, sampled by bloom and composite. */
     if (!makeFramebufferWithTexture(&hdrFbo_, &hdrTexture_, w, h, hdrInternalFormat_, GL_RGBA,
@@ -399,8 +403,11 @@ bool GlRenderer::createTargets(std::string* error) {
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, w, h);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msaaDepthRb_);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        /* The device refused the requested sample count; drop to 1x and try once more. */
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, 1, hdrInternalFormat_, w, h);
+        /* The device refused the requested sample count; drop both attachments to 1x and try once
+           more. The old fallback accidentally allocated the depth renderbuffer with the HDR colour
+           format, guaranteeing an incomplete FBO exactly when auto quality changed tier. */
+        glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRb_);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, 1, GL_DEPTH_COMPONENT24, w, h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msaaDepthRb_);
         glDeleteRenderbuffers(1, &msaaColorRb_);
         glGenRenderbuffers(1, &msaaColorRb_);
@@ -555,6 +562,7 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     }
 
     if (!createTargets(error)) return false;
+    activeTargetOptions_ = options_;
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -997,9 +1005,24 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     if (contextLost_ || display_ == EGL_NO_DISPLAY) return;
     if (targetsDirty_) {
         targetsDirty_ = false;
+        const RendererOptions rollback = activeTargetOptions_;
         destroyTargets();
         std::string error;
-        if (!createTargets(&error)) return;
+        if (createTargets(&error)) {
+            activeTargetOptions_ = options_;
+        } else {
+            /* A quality transition is never allowed to turn a valid frame into an empty stage.
+               Clean partial allocations and reconstruct the last known-good target set in the same
+               frame. Only a lost EGL context may stop drawing. */
+            destroyTargets();
+            options_ = rollback;
+            std::string rollbackError;
+            if (!createTargets(&rollbackError)) {
+                contextLost_ = true;
+                return;
+            }
+            activeTargetOptions_ = options_;
+        }
     }
 
     stats_.frames++;
@@ -1017,7 +1040,7 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     eglQuerySurface(display_, surface_, EGL_WIDTH, &w);
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &h);
     if (w > 0 && h > 0 && (w != surfaceWidth_ || h != surfaceHeight_)) {
-        resize(w, h);
+        if (!resize(w, h)) return;
     }
 
     updateScene(deltaSeconds);
@@ -1074,7 +1097,9 @@ bool GlRenderer::resize(int width, int height) {
     surfaceHeight_ = height;
     destroyTargets();
     std::string error;
-    return createTargets(&error);
+    if (!createTargets(&error)) return false;
+    activeTargetOptions_ = options_;
+    return true;
 }
 
 void GlRenderer::destroyTargets() {

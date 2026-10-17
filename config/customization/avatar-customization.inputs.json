@@ -1,0 +1,1289 @@
+{
+  "schema_version": 1,
+  "id": "avatar_customization",
+  "title": "Avatar customization inputs",
+  "source": "requirements/custom-inputs/avatar-customization.user.json",
+  "source_sha256": "6cff3e591379655ad2feeb2025012b1f5f3e486408413d16d6276dfc06f47f9d",
+  "input_count": 58,
+  "offline_only": true,
+  "ui_policy": {
+    "expose_only_statuses": [
+      "VERIFIED"
+    ],
+    "hide_unimplemented": true,
+    "no_placeholder_controls": true
+  },
+  "notes": [
+    "PARTIAL inputs have a real engine binding but remain hidden until Android device validation completes.",
+    "BLOCKED inputs are import vocabulary only and must not appear as interactive production controls.",
+    "The source file is preserved unchanged; enum aliases keep its original display strings importable."
+  ],
+  "inputs": [
+    {
+      "key": "body_height_cm",
+      "group": "Body Measurements",
+      "label": "Height",
+      "type": "float",
+      "unit": "cm",
+      "minimum": 120.0,
+      "maximum": 250.0,
+      "step": 0.1,
+      "default": 170.0,
+      "requires_rebuild": true,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.heightM",
+        "native_target": "af_spec.height_m",
+        "transform": {
+          "kind": "scale",
+          "factor": 0.01
+        },
+        "supported_input_range": [
+          140.0,
+          220.0
+        ]
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "body_weight_kg",
+      "group": "Body Measurements",
+      "label": "Weight",
+      "type": "float",
+      "unit": "kg",
+      "minimum": 30.0,
+      "maximum": 200.0,
+      "step": 0.5,
+      "default": 65.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_shoulder_width",
+      "group": "Body Measurements",
+      "label": "Shoulder Width",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_waist_cm",
+      "group": "Body Measurements",
+      "label": "Waist",
+      "type": "float",
+      "unit": "cm",
+      "minimum": 40.0,
+      "maximum": 180.0,
+      "step": 0.1,
+      "default": 70.0,
+      "requires_rebuild": true,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.waistCm",
+        "native_target": "af_spec.waist_cm",
+        "transform": {
+          "kind": "identity"
+        }
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "body_hip_width",
+      "group": "Body Measurements",
+      "label": "Hip Width",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_arm_length",
+      "group": "Body Measurements",
+      "label": "Arm Length",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.8,
+      "maximum": 1.2,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_leg_length",
+      "group": "Body Measurements",
+      "label": "Leg Length",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.8,
+      "maximum": 1.2,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_type_preset",
+      "group": "Body Type",
+      "label": "Body Shape Preset",
+      "type": "enum",
+      "options": [
+        "slim",
+        "athletic",
+        "average",
+        "curvy",
+        "bbw",
+        "muscular",
+        "robotic"
+      ],
+      "default": "average",
+      "requires_rebuild": true,
+      "option_labels": {
+        "slim": "Slim",
+        "athletic": "Athletic",
+        "average": "Average",
+        "curvy": "Curvy",
+        "bbw": "BBW",
+        "muscular": "Muscular",
+        "robotic": "Robotic"
+      },
+      "import_aliases": {
+        "Slim": "slim",
+        "Athletic": "athletic",
+        "Average": "average",
+        "Curvy": "curvy",
+        "BBW": "bbw",
+        "Muscular": "muscular",
+        "Robotic": "robotic"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "body_muscle_definition",
+      "group": "Body Type",
+      "label": "Muscle Definition",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 20.0,
+      "requires_rebuild": true,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.muscle",
+        "native_target": "af_spec.muscle",
+        "transform": {
+          "kind": "scale",
+          "factor": 0.01
+        }
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "body_fat_percentage",
+      "group": "Body Type",
+      "label": "Body Fat",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 3.0,
+      "maximum": 60.0,
+      "step": 0.5,
+      "default": 20.0,
+      "requires_rebuild": true,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.bodyFat",
+        "native_target": "af_spec.body_fat",
+        "transform": {
+          "kind": "scale",
+          "factor": 0.01
+        }
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "chest_bust_size",
+      "group": "Chest",
+      "label": "Bust Size",
+      "type": "enum",
+      "options": [
+        "flat",
+        "small",
+        "average",
+        "big",
+        "huge",
+        "custom"
+      ],
+      "default": "average",
+      "requires_rebuild": true,
+      "option_labels": {
+        "flat": "Flat",
+        "small": "Small",
+        "average": "Average",
+        "big": "Big",
+        "huge": "Huge",
+        "custom": "Custom"
+      },
+      "import_aliases": {
+        "Flat": "flat",
+        "Small": "small",
+        "Average": "average",
+        "Big": "big",
+        "Huge": "huge",
+        "Custom": "custom"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "chest_bust_volume",
+      "group": "Chest",
+      "label": "Bust Volume Fine-Tune",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.0,
+      "maximum": 2.0,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "chest_bust_size": [
+          "custom"
+        ]
+      }
+    },
+    {
+      "key": "chest_separation",
+      "group": "Chest",
+      "label": "Bust Separation",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.5,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "butt_size",
+      "group": "Lower Body",
+      "label": "Glute Size",
+      "type": "enum",
+      "options": [
+        "small",
+        "slim",
+        "athletic",
+        "big",
+        "huge",
+        "custom"
+      ],
+      "default": "athletic",
+      "requires_rebuild": true,
+      "option_labels": {
+        "small": "Small",
+        "slim": "Slim",
+        "athletic": "Athletic",
+        "big": "Big",
+        "huge": "Huge",
+        "custom": "Custom"
+      },
+      "import_aliases": {
+        "Small": "small",
+        "Slim": "slim",
+        "Athletic": "athletic",
+        "Big": "big",
+        "Huge": "huge",
+        "Custom": "custom"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "butt_volume",
+      "group": "Lower Body",
+      "label": "Glute Volume Fine-Tune",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.0,
+      "maximum": 2.0,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "butt_size": [
+          "custom"
+        ]
+      }
+    },
+    {
+      "key": "leg_thickness",
+      "group": "Lower Body",
+      "label": "Thigh Thickness",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "ethnicity_primary",
+      "group": "Heritage",
+      "label": "Primary Ethnicity",
+      "type": "enum",
+      "options": [
+        "white",
+        "asian",
+        "black",
+        "latina",
+        "south_asian",
+        "middle_eastern",
+        "synthetic"
+      ],
+      "default": "white",
+      "requires_rebuild": true,
+      "option_labels": {
+        "white": "White",
+        "asian": "Asian",
+        "black": "Black",
+        "latina": "Latina",
+        "south_asian": "South Asian",
+        "middle_eastern": "Middle Eastern",
+        "synthetic": "Synthetic"
+      },
+      "import_aliases": {
+        "White": "white",
+        "Asian": "asian",
+        "Black": "black",
+        "Latina": "latina",
+        "South Asian": "south_asian",
+        "Middle Eastern": "middle_eastern",
+        "Synthetic": "synthetic"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "ethnicity_blend",
+      "group": "Heritage",
+      "label": "Secondary Ethnicity Blend",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 0.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_shape",
+      "group": "Face",
+      "label": "Face Shape",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": -1.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_jaw_width",
+      "group": "Face",
+      "label": "Jawline Width",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_cheekbone_height",
+      "group": "Face",
+      "label": "Cheekbone Height",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "step": 0.01,
+      "default": 0.5,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_eye_size",
+      "group": "Face",
+      "label": "Eye Size",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_nose_width",
+      "group": "Face",
+      "label": "Nose Width",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.5,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 1.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "face_lip_fullness",
+      "group": "Face",
+      "label": "Lip Fullness",
+      "type": "float",
+      "unit": "ratio",
+      "minimum": 0.0,
+      "maximum": 1.5,
+      "step": 0.01,
+      "default": 0.5,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "hair_style",
+      "group": "Hair",
+      "label": "Hair Style",
+      "type": "enum",
+      "options": [
+        "straight",
+        "bangs",
+        "braids",
+        "curly",
+        "bun",
+        "ponytail",
+        "bob",
+        "bald",
+        "pigtails",
+        "mohawk",
+        "long_wavy"
+      ],
+      "default": "straight",
+      "requires_rebuild": true,
+      "option_labels": {
+        "straight": "Straight",
+        "bangs": "Bangs",
+        "braids": "Braids",
+        "curly": "Curly",
+        "bun": "Bun",
+        "ponytail": "Ponytail",
+        "bob": "Bob",
+        "bald": "Bald",
+        "pigtails": "Pigtails",
+        "mohawk": "Mohawk",
+        "long_wavy": "Long Wavy"
+      },
+      "import_aliases": {
+        "Straight": "straight",
+        "Bangs": "bangs",
+        "Braids": "braids",
+        "Curly": "curly",
+        "Bun": "bun",
+        "Ponytail": "ponytail",
+        "Bob": "bob",
+        "Bald": "bald",
+        "Pigtails": "pigtails",
+        "Mohawk": "mohawk",
+        "Long Wavy": "long_wavy"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "hair_color",
+      "group": "Hair",
+      "label": "Hair Color",
+      "type": "color",
+      "default": "#4A3728",
+      "requires_rebuild": false,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.hairTone",
+        "native_target": "af_spec.hair_tone",
+        "transform": {
+          "kind": "hex_srgb_to_linear_rgb"
+        }
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "hair_length",
+      "group": "Hair",
+      "label": "Hair Length",
+      "type": "float",
+      "unit": "cm",
+      "minimum": 0.0,
+      "maximum": 150.0,
+      "step": 1.0,
+      "default": 40.0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "hair_physics_stiffness",
+      "group": "Hair",
+      "label": "Hair Physics Stiffness",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 30.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_RIG",
+      "blocked_reason": "No matching runtime simulation/rig parameter exists"
+    },
+    {
+      "key": "eye_iris_color",
+      "group": "Eyes",
+      "label": "Iris Color",
+      "type": "color",
+      "default": "#3B7A57",
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "eye_glow_intensity",
+      "group": "Eyes",
+      "label": "Eye Glow Intensity",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 0.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "eye_glow_color",
+      "group": "Eyes",
+      "label": "Eye Glow Color",
+      "type": "color",
+      "default": "#00FFFF",
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end",
+      "visible_when": {
+        "eye_glow_intensity": [
+          "nonzero"
+        ]
+      }
+    },
+    {
+      "key": "eye_pupil_shape",
+      "group": "Eyes",
+      "label": "Pupil Shape",
+      "type": "enum",
+      "options": [
+        "round",
+        "slit",
+        "square",
+        "crosshair",
+        "mechanical_aperture"
+      ],
+      "default": "round",
+      "requires_rebuild": true,
+      "option_labels": {
+        "round": "Round",
+        "slit": "Slit",
+        "square": "Square",
+        "crosshair": "Crosshair",
+        "mechanical_aperture": "Mechanical Aperture"
+      },
+      "import_aliases": {
+        "Round": "round",
+        "Slit": "slit",
+        "Square": "square",
+        "Crosshair": "crosshair",
+        "Mechanical Aperture": "mechanical_aperture"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "skin_material_type",
+      "group": "Skin",
+      "label": "Skin Material",
+      "type": "enum",
+      "options": [
+        "organic",
+        "synthetic_silicone",
+        "brushed_metal",
+        "carbon_fiber",
+        "chrome",
+        "matte_black"
+      ],
+      "default": "organic",
+      "requires_rebuild": true,
+      "option_labels": {
+        "organic": "Organic",
+        "synthetic_silicone": "Synthetic Silicone",
+        "brushed_metal": "Brushed Metal",
+        "carbon_fiber": "Carbon Fiber",
+        "chrome": "Chrome",
+        "matte_black": "Matte Black"
+      },
+      "import_aliases": {
+        "Organic": "organic",
+        "Synthetic Silicone": "synthetic_silicone",
+        "Brushed Metal": "brushed_metal",
+        "Carbon Fiber": "carbon_fiber",
+        "Chrome": "chrome",
+        "Matte Black": "matte_black"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "skin_base_color",
+      "group": "Skin",
+      "label": "Skin Tone / Base Color",
+      "type": "color",
+      "default": "#E0AC69",
+      "requires_rebuild": false,
+      "implementation_status": "PARTIAL",
+      "engine_binding": {
+        "target": "AvatarSpec.skinTone",
+        "native_target": "af_spec.skin_tone",
+        "transform": {
+          "kind": "hex_srgb_to_linear_rgb"
+        }
+      },
+      "blocked_reason": "Android 0.10.1 rebuild and physical-device validation pending"
+    },
+    {
+      "key": "skin_roughness",
+      "group": "Skin",
+      "label": "Skin Roughness / Gloss",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 50.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "skin_metallic_value",
+      "group": "Skin",
+      "label": "Metallic Reflection",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 0.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "cyber_exposed_joints",
+      "group": "Cybernetics",
+      "label": "Exposed Mechanical Joints",
+      "type": "bool",
+      "default": false,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "cyber_panel_lines",
+      "group": "Cybernetics",
+      "label": "Panel Line Visibility",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 0.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "cyber_accent_glow",
+      "group": "Cybernetics",
+      "label": "Chassis Accent Glow",
+      "type": "color",
+      "default": "#00FFFF",
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "cyber_cranial_plating",
+      "group": "Cybernetics",
+      "label": "Cranial Plating (Helmet)",
+      "type": "bool",
+      "default": false,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "armor_torso_type",
+      "group": "Armor - Torso",
+      "label": "Torso Armor",
+      "type": "enum",
+      "options": [
+        "none",
+        "roman_lorica_segmentata",
+        "tactical_ballistic_vest",
+        "futuristic_chest_plate",
+        "demon_corset"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "roman_lorica_segmentata": "Roman Lorica Segmentata",
+        "tactical_ballistic_vest": "Tactical Ballistic Vest",
+        "futuristic_chest_plate": "Futuristic Chest Plate",
+        "demon_corset": "Demon Corset"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Roman Lorica Segmentata": "roman_lorica_segmentata",
+        "Tactical Ballistic Vest": "tactical_ballistic_vest",
+        "Futuristic Chest Plate": "futuristic_chest_plate",
+        "Demon Corset": "demon_corset"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "armor_helmet_type",
+      "group": "Armor - Head",
+      "label": "Helmet Type",
+      "type": "enum",
+      "options": [
+        "none",
+        "roman_galea",
+        "tactical_ballistic_helmet",
+        "cyber_visor",
+        "horns"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "roman_galea": "Roman Galea",
+        "tactical_ballistic_helmet": "Tactical Ballistic Helmet",
+        "cyber_visor": "Cyber Visor",
+        "horns": "Horns"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Roman Galea": "roman_galea",
+        "Tactical Ballistic Helmet": "tactical_ballistic_helmet",
+        "Cyber Visor": "cyber_visor",
+        "Horns": "horns"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "armor_shoulder_pads",
+      "group": "Armor - Limbs",
+      "label": "Shoulder Pads",
+      "type": "enum",
+      "options": [
+        "none",
+        "roman_pauldrons",
+        "tactical_kevlar_pads",
+        "spiked"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "roman_pauldrons": "Roman Pauldrons",
+        "tactical_kevlar_pads": "Tactical Kevlar Pads",
+        "spiked": "Spiked"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Roman Pauldrons": "roman_pauldrons",
+        "Tactical Kevlar Pads": "tactical_kevlar_pads",
+        "Spiked": "spiked"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "armor_torso_type": [
+          "roman_lorica_segmentata",
+          "tactical_ballistic_vest",
+          "futuristic_chest_plate",
+          "demon_corset"
+        ]
+      }
+    },
+    {
+      "key": "armor_knee_pads",
+      "group": "Armor - Limbs",
+      "label": "Knee Guards",
+      "type": "bool",
+      "default": false,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "armor_torso_type": [
+          "roman_lorica_segmentata",
+          "tactical_ballistic_vest",
+          "futuristic_chest_plate",
+          "demon_corset"
+        ]
+      }
+    },
+    {
+      "key": "armor_webbing_straps",
+      "group": "Armor - Details",
+      "label": "Strapping & Webbing",
+      "type": "bool",
+      "default": false,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "armor_torso_type": [
+          "tactical_ballistic_vest",
+          "futuristic_chest_plate"
+        ]
+      }
+    },
+    {
+      "key": "armor_pouches",
+      "group": "Armor - Details",
+      "label": "Utility Pouches",
+      "type": "int",
+      "unit": "count",
+      "minimum": 0,
+      "maximum": 10,
+      "step": 1,
+      "default": 0,
+      "requires_rebuild": true,
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists",
+      "visible_when": {
+        "armor_torso_type": [
+          "tactical_ballistic_vest",
+          "futuristic_chest_plate"
+        ]
+      }
+    },
+    {
+      "key": "armor_wear_tear",
+      "group": "Armor - Details",
+      "label": "Battle Damage / Wear",
+      "type": "float",
+      "unit": "percentage",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "step": 1.0,
+      "default": 0.0,
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end",
+      "visible_when": {
+        "armor_torso_type": [
+          "roman_lorica_segmentata",
+          "tactical_ballistic_vest",
+          "futuristic_chest_plate",
+          "demon_corset"
+        ]
+      }
+    },
+    {
+      "key": "outfit_top_style",
+      "group": "Clothing",
+      "label": "Top Style",
+      "type": "enum",
+      "options": [
+        "none",
+        "bralette",
+        "corset",
+        "crop_top",
+        "leather_bustier",
+        "armored_tunic"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "bralette": "Bralette",
+        "corset": "Corset",
+        "crop_top": "Crop Top",
+        "leather_bustier": "Leather Bustier",
+        "armored_tunic": "Armored Tunic"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Bralette": "bralette",
+        "Corset": "corset",
+        "Crop Top": "crop_top",
+        "Leather Bustier": "leather_bustier",
+        "Armored Tunic": "armored_tunic"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "outfit_bottom_style",
+      "group": "Clothing",
+      "label": "Bottom Style",
+      "type": "enum",
+      "options": [
+        "none",
+        "ruffled_skirt",
+        "leather_pants",
+        "leggings",
+        "roman_pteruges",
+        "combat_trousers"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "ruffled_skirt": "Ruffled Skirt",
+        "leather_pants": "Leather Pants",
+        "leggings": "Leggings",
+        "roman_pteruges": "Roman Pteruges",
+        "combat_trousers": "Combat Trousers"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Ruffled Skirt": "ruffled_skirt",
+        "Leather Pants": "leather_pants",
+        "Leggings": "leggings",
+        "Roman Pteruges": "roman_pteruges",
+        "Combat Trousers": "combat_trousers"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "clothing_fabric",
+      "group": "Clothing",
+      "label": "Fabric Material",
+      "type": "enum",
+      "options": [
+        "cotton",
+        "leather",
+        "latex",
+        "silk",
+        "kevlar",
+        "metal_mesh"
+      ],
+      "default": "cotton",
+      "requires_rebuild": false,
+      "option_labels": {
+        "cotton": "Cotton",
+        "leather": "Leather",
+        "latex": "Latex",
+        "silk": "Silk",
+        "kevlar": "Kevlar",
+        "metal_mesh": "Metal Mesh"
+      },
+      "import_aliases": {
+        "Cotton": "cotton",
+        "Leather": "leather",
+        "Latex": "latex",
+        "Silk": "silk",
+        "Kevlar": "kevlar",
+        "Metal Mesh": "metal_mesh"
+      },
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "accessory_horns",
+      "group": "Accessories",
+      "label": "Demon Horns",
+      "type": "enum",
+      "options": [
+        "none",
+        "small_curved",
+        "large_ram",
+        "crown"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "small_curved": "Small Curved",
+        "large_ram": "Large Ram",
+        "crown": "Crown"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Small Curved": "small_curved",
+        "Large Ram": "large_ram",
+        "Crown": "crown"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "accessory_tail",
+      "group": "Accessories",
+      "label": "Tail",
+      "type": "enum",
+      "options": [
+        "none",
+        "demon_spade",
+        "cybernetic_cable"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "demon_spade": "Demon Spade",
+        "cybernetic_cable": "Cybernetic Cable"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Demon Spade": "demon_spade",
+        "Cybernetic Cable": "cybernetic_cable"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "accessory_gloves",
+      "group": "Accessories",
+      "label": "Gloves",
+      "type": "enum",
+      "options": [
+        "none",
+        "long_leather",
+        "fingerless",
+        "tactical_combat",
+        "gauntlets"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "long_leather": "Long Leather",
+        "fingerless": "Fingerless",
+        "tactical_combat": "Tactical Combat",
+        "gauntlets": "Gauntlets"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Long Leather": "long_leather",
+        "Fingerless": "fingerless",
+        "Tactical Combat": "tactical_combat",
+        "Gauntlets": "gauntlets"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "accessory_footwear",
+      "group": "Accessories",
+      "label": "Footwear",
+      "type": "enum",
+      "options": [
+        "none",
+        "roman_sandals",
+        "combat_boots",
+        "platform_heels",
+        "sneakers",
+        "cyber_legs"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "roman_sandals": "Roman Sandals",
+        "combat_boots": "Combat Boots",
+        "platform_heels": "Platform Heels",
+        "sneakers": "Sneakers",
+        "cyber_legs": "Cyber Legs"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Roman Sandals": "roman_sandals",
+        "Combat Boots": "combat_boots",
+        "Platform Heels": "platform_heels",
+        "Sneakers": "sneakers",
+        "Cyber Legs": "cyber_legs"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "weapon_primary",
+      "group": "Weapons",
+      "label": "Primary Weapon / Item",
+      "type": "enum",
+      "options": [
+        "none",
+        "roman_pilum_spear",
+        "gladius_sword",
+        "tactical_rifle",
+        "whip",
+        "mallet"
+      ],
+      "default": "none",
+      "requires_rebuild": true,
+      "option_labels": {
+        "none": "None",
+        "roman_pilum_spear": "Roman Pilum (Spear)",
+        "gladius_sword": "Gladius (Sword)",
+        "tactical_rifle": "Tactical Rifle",
+        "whip": "Whip",
+        "mallet": "Mallet"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Roman Pilum (Spear)": "roman_pilum_spear",
+        "Gladius (Sword)": "gladius_sword",
+        "Tactical Rifle": "tactical_rifle",
+        "Whip": "whip",
+        "Mallet": "mallet"
+      },
+      "implementation_status": "BLOCKED_ENGINE_GEOMETRY",
+      "blocked_reason": "No matching C ABI, SDF/mesh, material, and GLB-export implementation exists"
+    },
+    {
+      "key": "makeup_style",
+      "group": "Makeup & Markings",
+      "label": "Makeup Preset",
+      "type": "enum",
+      "options": [
+        "none",
+        "natural",
+        "smokey_eye",
+        "clown_harley_style",
+        "gothic_demon",
+        "cyberpunk_neon"
+      ],
+      "default": "none",
+      "requires_rebuild": false,
+      "option_labels": {
+        "none": "None",
+        "natural": "Natural",
+        "smokey_eye": "Smokey Eye",
+        "clown_harley_style": "Clown (Harley Style)",
+        "gothic_demon": "Gothic/Demon",
+        "cyberpunk_neon": "Cyberpunk Neon"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Natural": "natural",
+        "Smokey Eye": "smokey_eye",
+        "Clown (Harley Style)": "clown_harley_style",
+        "Gothic/Demon": "gothic_demon",
+        "Cyberpunk Neon": "cyberpunk_neon"
+      },
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    },
+    {
+      "key": "makeup_lip_color",
+      "group": "Makeup & Markings",
+      "label": "Lipstick Color",
+      "type": "color",
+      "default": "#CC0000",
+      "requires_rebuild": false,
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end",
+      "visible_when": {
+        "makeup_style": [
+          "natural",
+          "smokey_eye",
+          "clown_harley_style",
+          "gothic_demon",
+          "cyberpunk_neon"
+        ]
+      }
+    },
+    {
+      "key": "tattoo_style",
+      "group": "Makeup & Markings",
+      "label": "Tattoo / Body Markings",
+      "type": "enum",
+      "options": [
+        "none",
+        "harlequin_diamonds",
+        "cybernetic_circuitry",
+        "tribal",
+        "glowing_runes"
+      ],
+      "default": "none",
+      "requires_rebuild": false,
+      "option_labels": {
+        "none": "None",
+        "harlequin_diamonds": "Harlequin Diamonds",
+        "cybernetic_circuitry": "Cybernetic Circuitry",
+        "tribal": "Tribal",
+        "glowing_runes": "Glowing Runes"
+      },
+      "import_aliases": {
+        "None": "none",
+        "Harlequin Diamonds": "harlequin_diamonds",
+        "Cybernetic Circuitry": "cybernetic_circuitry",
+        "Tribal": "tribal",
+        "Glowing Runes": "glowing_runes"
+      },
+      "implementation_status": "BLOCKED_TEXTURE",
+      "blocked_reason": "No matching material, texture, or shader parameter is wired end-to-end"
+    }
+  ]
+}

@@ -22,8 +22,8 @@ android {
         applicationId = "com.avatarforge"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.10.0"
+        versionCode = 2
+        versionName = "0.10.1"
 
         /* Same ABIs as the SDK module; the native libraries arrive through the :sdk dependency. */
         /* Override the ABI list for a low-RAM build machine: -Paf.abIs=arm64-v8a builds one

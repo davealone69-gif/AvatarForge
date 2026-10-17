@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "../../include/afcore.h"
+#include "../af_image_pack.h"
 #include "../render/af_render.h"
 #include "../render/af_render_common.h"   /* screenRay / pickRegion */
 
@@ -218,6 +219,10 @@ JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineV
     return env->NewStringUTF(af_engine_version());
 }
 
+JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_imageAnalysisFloatCount(JNIEnv*, jobject) {
+    return af::kImageAnalysisFloatCount;
+}
+
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCreate(
     JNIEnv* env, jobject, jintArray ints, jfloatArray floats, jstring prompt, jobject callbacks) {
     af_spec spec{};
@@ -320,36 +325,66 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
         throwIllegalArgument(env, "engine handle is not open");
         return AF_ERR_INVALID_ARG;
     }
+    if (!widths || !heights || !channels || !roles || !pixels || !outAnalyses) {
+        throwIllegalArgument(env, "image metadata, pixels and analysis output must not be null");
+        return AF_ERR_INVALID_ARG;
+    }
+
     const jsize count = env->GetArrayLength(widths);
     if (count < 1 || count > 4) {
         throwIllegalArgument(env, "1 to 4 reference images are supported per call");
         return AF_ERR_INVALID_ARG;
     }
-    std::vector<af_image> images;
-    images.resize(size_t(count));
-    std::vector<jbyte*> buffers;
-    buffers.assign(size_t(count), nullptr);
+    if (env->GetArrayLength(heights) != count || env->GetArrayLength(channels) != count ||
+        env->GetArrayLength(roles) != count || env->GetArrayLength(pixels) != count) {
+        throwIllegalArgument(env, "all image metadata and pixel arrays must have the same length");
+        return AF_ERR_INVALID_ARG;
+    }
+
+    constexpr int perImage = af::kImageAnalysisFloatCount;
+    const jsize expectedFloats = count * perImage;
+    const jsize actualFloats = env->GetArrayLength(outAnalyses);
+    if (actualFloats != expectedFloats) {
+        throwIllegalArgument(env, "analysis output has " + std::to_string(actualFloats) +
+                                     " floats; expected exactly " + std::to_string(expectedFloats));
+        return AF_ERR_INVALID_ARG;
+    }
+
+    std::vector<af_image> images(static_cast<size_t>(count));
     jint w[4]{}, ht[4]{}, ch[4]{}, rl[4]{};
     env->GetIntArrayRegion(widths, 0, count, w);
     env->GetIntArrayRegion(heights, 0, count, ht);
     env->GetIntArrayRegion(channels, 0, count, ch);
     env->GetIntArrayRegion(roles, 0, count, rl);
     for (jsize i = 0; i < count; ++i) {
+        if (w[i] <= 0 || ht[i] <= 0 || (ch[i] != 3 && ch[i] != 4)) {
+            throwIllegalArgument(env, "each image needs positive dimensions and 3 RGB or 4 RGBA channels");
+            return AF_ERR_INVALID_ARG;
+        }
+        if (rl[i] < AF_IMAGE_IDENTITY || rl[i] > AF_IMAGE_EXTRA_VIEW) {
+            throwIllegalArgument(env, "image role is outside the af_image_role range");
+            return AF_ERR_INVALID_ARG;
+        }
+
         jobject buffer = env->GetObjectArrayElement(pixels, i);
-        buffers[size_t(i)] = buffer ? static_cast<jbyte*>(env->GetDirectBufferAddress(buffer)) : nullptr;
-        if (!buffers[size_t(i)]) {
-            throwIllegalArgument(env, "image buffers must be direct ByteBuffers (no copies are made)");
+        void* address = buffer ? env->GetDirectBufferAddress(buffer) : nullptr;
+        const jlong capacity = buffer ? env->GetDirectBufferCapacity(buffer) : -1;
+        const uint64_t required = static_cast<uint64_t>(w[i]) * static_cast<uint64_t>(ht[i]) *
+                                  static_cast<uint64_t>(ch[i]);
+        if (!address || capacity < 0 || static_cast<uint64_t>(capacity) < required) {
+            if (buffer) env->DeleteLocalRef(buffer);
+            throwIllegalArgument(env, "each image must use a sufficiently large direct ByteBuffer");
             return AF_ERR_INVALID_ARG;
         }
         images[size_t(i)].width = w[i];
         images[size_t(i)].height = ht[i];
         images[size_t(i)].channels = ch[i];
         images[size_t(i)].role = rl[i];
-        images[size_t(i)].pixels = reinterpret_cast<const uint8_t*>(buffers[size_t(i)]);
+        images[size_t(i)].pixels = static_cast<const uint8_t*>(address);
         env->DeleteLocalRef(buffer);
     }
-    std::vector<af_image_analysis> analyses;
-    analyses.resize(size_t(count));
+
+    std::vector<af_image_analysis> analyses(static_cast<size_t>(count));
     g_tlsEnv = env;
     const int32_t rc = af_engine_analyze_images(handle->engine, images.data(), int32_t(count),
                                                 analyses.data(), int32_t(count));
@@ -358,31 +393,25 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
         throwIllegalState(env, "af_engine_analyze_images", af_result(rc), af_engine_last_error(handle->engine));
         return rc;
     }
-    /* The analysis struct is packed into a float array for Kotlin: 3 lab triplets plus the
-       landmarks in a fixed order documented in the SDK's ImageAnalysis class. */
-    const int perImage = 22;
-    if (outAnalyses && env->GetArrayLength(outAnalyses) >= count * perImage) {
-        std::vector<jfloat> packed(size_t(count) * perImage);
-        for (jsize i = 0; i < count; ++i) {
-            const af_image_analysis& a = analyses[size_t(i)];
-            jfloat* p = &packed[size_t(i) * perImage];
-            int k = 0;
-            p[k++] = a.subject_coverage;
-            for (int j = 0; j < 4; ++j) p[k++] = a.head_box[j];
-            p[k++] = a.shoulder_y; p[k++] = a.hip_y; p[k++] = a.ankle_y; p[k++] = a.knee_y;
-            p[k++] = float(a.is_full_body);
-            p[k++] = a.pose_confidence;
-            for (int j = 0; j < 3; ++j) p[k++] = a.skin_lab[j];
-            for (int j = 0; j < 3; ++j) p[k++] = a.hair_lab[j];
-            for (int j = 0; j < 3; ++j) p[k++] = a.garment_lab[j];
-            p[k++] = a.metal_confidence;
-            p[k++] = a.key_light[0]; p[k++] = a.key_light[1]; p[k++] = a.key_light[2];
-            p[k++] = a.key_light_intensity;
-            p[k++] = a.background_lab[0];
-        }
-        env->SetFloatArrayRegion(outAnalyses, 0, count * perImage, packed.data());
+    if (rc != count) {
+        throwIllegalState(env, "af_engine_analyze_images", AF_ERR_INVALID_ARG,
+                          "not every reference image produced a valid analysis");
+        return AF_ERR_INVALID_ARG;
     }
-    return rc;
+
+    /* Exact 28-float records: every Lab value, including all three background components, is
+       transferred. packImageAnalysis is also exercised by the host harness with guard sentinels. */
+    std::vector<jfloat> packed(static_cast<size_t>(expectedFloats));
+    for (jsize i = 0; i < count; ++i) {
+        jfloat* record = &packed[size_t(i) * perImage];
+        if (af::packImageAnalysis(analyses[size_t(i)], record, perImage) != perImage) {
+            throwIllegalState(env, "packImageAnalysis", AF_ERR_INTERNAL,
+                              "native image-analysis schema did not fill its declared stride");
+            return AF_ERR_INTERNAL;
+        }
+    }
+    env->SetFloatArrayRegion(outAnalyses, 0, expectedFloats, packed.data());
+    return env->ExceptionCheck() ? AF_ERR_INTERNAL : rc;
 }
 
 /* Stages 2..8 are exposed through one entry point so Kotlin's JobHandle can drive the pipeline

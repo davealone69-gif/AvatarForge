@@ -24,6 +24,7 @@
  */
 #include "../src/af_anatomy.h"
 #include "../src/af_field.h"
+#include "../src/af_image_pack.h"
 #include "../include/afcore.h"
 #include "../src/af_isosurface.h"
 #include "../src/af_mesh.h"
@@ -43,7 +44,9 @@
 #include "../src/af_png_decode.h"
 #include "../src/af_scene.h"
 #include "../src/af_profiler.h"
+#include <algorithm>
 #include <chrono>
+#include <iterator>
 
 using namespace af;
 
@@ -80,26 +83,118 @@ static af_spec defaultSpec(int sex, int build, float height) {
     return s;
 }
 
+/* ------------------------------------------------------- 0. image-analysis wire schema ----- */
+static void testImageAnalysisPacking() {
+    std::printf("[0] image-analysis wire schema\n");
+    CHECK(AF_IMAGE_ANALYSIS_FLOAT_COUNT == 28 && af::kImageAnalysisFloatCount == 28,
+          "native analysis stride is the complete 28-float schema");
+
+    bool allRecordsExact = true;
+    bool allGuardsIntact = true;
+    for (int recordIndex = 0; recordIndex < 4; ++recordIndex) {
+        const float b = static_cast<float>(recordIndex * 100);
+        af_image_analysis a{};
+        a.subject_coverage = b + 0;
+        for (int i = 0; i < 4; ++i) a.head_box[i] = b + 1 + i;
+        a.shoulder_y = b + 5;
+        a.hip_y = b + 6;
+        a.ankle_y = b + 7;
+        a.knee_y = b + 8;
+        a.is_full_body = recordIndex & 1;
+        a.pose_confidence = b + 10;
+        for (int i = 0; i < 3; ++i) a.skin_lab[i] = b + 11 + i;
+        for (int i = 0; i < 3; ++i) a.hair_lab[i] = b + 14 + i;
+        for (int i = 0; i < 3; ++i) a.garment_lab[i] = b + 17 + i;
+        a.metal_confidence = b + 20;
+        for (int i = 0; i < 3; ++i) a.key_light[i] = b + 21 + i;
+        a.key_light_intensity = b + 24;
+        for (int i = 0; i < 3; ++i) a.background_lab[i] = b + 25 + i;
+
+        float guarded[AF_IMAGE_ANALYSIS_FLOAT_COUNT + 2];
+        std::fill(std::begin(guarded), std::end(guarded), -9876.5f);
+        const int written = af::packImageAnalysis(a, guarded + 1, AF_IMAGE_ANALYSIS_FLOAT_COUNT);
+        if (written != AF_IMAGE_ANALYSIS_FLOAT_COUNT) allRecordsExact = false;
+        for (int i = 0; i < AF_IMAGE_ANALYSIS_FLOAT_COUNT; ++i) {
+            const float expected = (i == 9) ? static_cast<float>(a.is_full_body) : b + i;
+            if (guarded[i + 1] != expected) allRecordsExact = false;
+        }
+        if (guarded[0] != -9876.5f || guarded[AF_IMAGE_ANALYSIS_FLOAT_COUNT + 1] != -9876.5f) {
+            allGuardsIntact = false;
+        }
+    }
+    CHECK(allRecordsExact, "1-4 analysis records preserve all fields in exact order");
+    CHECK(allGuardsIntact, "28-float writes leave both guard values untouched");
+
+    float undersized[AF_IMAGE_ANALYSIS_FLOAT_COUNT];
+    std::fill(std::begin(undersized), std::end(undersized), 1234.5f);
+    af_image_analysis zero{};
+    const int shortWrite = af::packImageAnalysis(zero, undersized, AF_IMAGE_ANALYSIS_FLOAT_COUNT - 1);
+    bool untouched = true;
+    for (float v : undersized) if (v != 1234.5f) untouched = false;
+    CHECK(shortWrite == 0 && untouched, "undersized destinations are rejected without a partial write");
+    CHECK(af::packImageAnalysis(zero, nullptr, AF_IMAGE_ANALYSIS_FLOAT_COUNT) == 0,
+          "null analysis destinations are rejected");
+    std::printf("  %s  stride=%d, all Lab triplets retained, guards intact\n", PASS,
+                AF_IMAGE_ANALYSIS_FLOAT_COUNT);
+}
+
 /* ------------------------------------------------------------------ 1. anthropometry ----- */
 static void testAnthropometry() {
     std::printf("[1] anthropometric exactness\n");
+
+    /* Height is a resolved SI value at the public boundary, never a UI-only zero sentinel. Legacy
+       zero and NaN inputs still resolve safely before they can poison the field. */
+    af_spec defaults;
+    af_spec_init(&defaults);
+    CHECK_NEAR(defaults.height_m, AF_DEFAULT_HEIGHT_M, 1e-6f,
+               "af_spec_init publishes a non-zero default stature");
+    const BodyMetrics defaultMetrics = Anatomy::solve(defaults);
+    CHECK_NEAR(defaultMetrics.height, AF_DEFAULT_HEIGHT_M, 1e-6f,
+               "default stature reaches anatomy in metres");
+    af_spec legacyZero = defaults;
+    legacyZero.height_m = 0.0f;
+    CHECK_NEAR(Anatomy::solve(legacyZero).height, AF_DEFAULT_HEIGHT_M, 1e-6f,
+               "legacy zero height resolves before field generation");
+    af_spec explicitHeight = defaults;
+    explicitHeight.height_m = 1.82f;
+    CHECK_NEAR(Anatomy::solve(explicitHeight).height, 1.82f, 1e-6f,
+               "explicit metre override wins over the default");
+
     af_spec spec = defaultSpec(AF_SEX_FEMALE, AF_BUILD_ATHLETIC, 1.70f);
     spec.waist_cm = 68.0f;
     spec.hip_cm = 96.0f;
     spec.chest_cm = 90.0f;
     spec.inseam_cm = 79.0f;
 
+    af_spec withoutInseam = spec;
+    withoutInseam.inseam_cm = 0.0f;
+    const BodyMetrics base = Anatomy::solve(withoutInseam);
     const BodyMetrics m = Anatomy::solve(spec);
     CHECK_NEAR(Anatomy::perimeter(m.waist) * 100.0f, 68.0f, 0.15f, "waist perimeter must equal the requested tape value");
     CHECK_NEAR(Anatomy::perimeter(m.hip) * 100.0f, 96.0f, 0.15f, "hip perimeter must equal the requested tape value");
     CHECK_NEAR(Anatomy::perimeter(m.chest) * 100.0f, 90.0f, 0.15f, "chest perimeter must equal the requested tape value");
-    CHECK_NEAR(m.y.crotchY * 100.0f, 79.0f, 0.30f, "inseam must move the crotch landmark");
+    CHECK_NEAR(m.y.crotchY * 100.0f, 79.0f, 0.30f, "inseam cm converts once and pins crotch metres");
+    const float legScale = m.y.crotchY / base.y.crotchY;
+    CHECK_NEAR(m.y.ankleY, base.y.ankleY * legScale, 1e-5f,
+               "inseam remaps ankle on the same lower-leg scale");
+    CHECK_NEAR(m.y.kneeY, base.y.kneeY * legScale, 1e-5f,
+               "inseam remaps knee on the same lower-leg scale");
+    CHECK_NEAR(m.y.crownY, spec.height_m, 1e-6f,
+               "inseam changes proportions, never total stature");
 
     /* Landmarks must be strictly ordered or the field would invert. */
-    CHECK(m.y.ankleY < m.y.kneeY && m.y.kneeY < m.y.hipY, "leg landmarks ordered");
+    CHECK(m.y.soleY < m.y.ankleY && m.y.ankleY < m.y.calfMaxY &&
+          m.y.calfMaxY < m.y.kneeY && m.y.kneeY < m.y.midThighY &&
+          m.y.midThighY < m.y.crotchY && m.y.crotchY < m.y.hipY,
+          "complete leg landmark chain ordered after inseam override");
     CHECK(m.y.hipY < m.y.waistY && m.y.waistY < m.y.bustY, "torso landmarks ordered");
-    CHECK(m.y.bustY < m.y.shoulderY && m.y.shoulderY < m.y.jawY, "upper landmarks ordered");
-    CHECK(m.y.chinY < m.y.eyeY && m.y.eyeY < m.y.crownY, "head landmarks ordered");
+    CHECK(m.y.bustY < m.y.shoulderY && m.y.shoulderY < m.y.neckBaseY,
+          "upper torso landmarks ordered");
+    CHECK(m.y.neckBaseY < m.y.chinY && m.y.chinY < m.y.jawY &&
+          m.y.jawY < m.y.eyeY && m.y.eyeY < m.y.crownY,
+          "with +Y up, chin is below jaw and the complete head chain is ordered");
+    CHECK(m.noseLength > 0.0f && std::isfinite(m.noseLength),
+          "facial lengths remain positive after chin/jaw solve (nose %.4f m)", m.noseLength);
     CHECK(m.y.crownY <= spec.height_m + 1e-4f, "crown must not exceed stature");
     CHECK(m.biacromialHalf > 0.10f && m.biacromialHalf < 0.30f, "shoulder half-width plausible");
 
@@ -479,6 +574,39 @@ static void testAbi() {
     cb.should_cancel = testAbiCancel;
     af_engine* engine = nullptr;
     CHECK(af_engine_create(&spec, &cb, &engine) == AF_OK && engine != nullptr, "engine created");
+
+    /* Outfit NONE is a genuine unclothed surface, so the adult-only rule must live below the UI.
+       Exercise direct create, reset and prompt entry points to prove no C/JNI/Rust caller bypasses it. */
+    af_spec minorNude;
+    af_spec_init(&minorNude);
+    minorNude.age_years = 17.0f;
+    minorNude.outfit = AF_OUTFIT_NONE;
+    af_engine* rejected = nullptr;
+    CHECK(af_engine_create(&minorNude, nullptr, &rejected) == AF_ERR_INVALID_ARG && rejected == nullptr,
+          "minor nude spec is rejected at engine creation");
+
+    af_spec minorClothed = minorNude;
+    minorClothed.outfit = AF_OUTFIT_TSHIRT;
+    af_engine* allowed = nullptr;
+    CHECK(af_engine_create(&minorClothed, nullptr, &allowed) == AF_OK && allowed != nullptr,
+          "the adult-only nude rule does not reject a clothed age-17 spec");
+    af_engine_destroy(allowed);
+
+    CHECK(af_engine_reset(engine, &minorNude) == AF_ERR_INVALID_ARG &&
+              std::strstr(af_engine_last_error(engine), "age_years >= 18") != nullptr,
+          "minor nude spec is rejected on reset with a diagnostic");
+    af_spec rejectedPrompt;
+    af_spec_init(&rejectedPrompt);
+    CHECK(af_engine_analyze_prompt(engine, "teenage girl, nude", &rejectedPrompt) == AF_ERR_INVALID_ARG &&
+              std::strstr(af_engine_last_error(engine), "minor or teen") != nullptr,
+          "minor/teen nude prompt is rejected by the native parser boundary");
+
+    af_spec centimetrePrompt;
+    af_spec_init(&centimetrePrompt);
+    CHECK(af_engine_analyze_prompt(engine, "person 175 cm", &centimetrePrompt) >= 1,
+          "centimetre stature is recognised");
+    CHECK_NEAR(centimetrePrompt.height_m, 1.75f, 1e-6f,
+               "height converts from centimetres to metres exactly once");
 
     spec.sex = AF_SEX_FEMALE; spec.height_m = 1.68f; spec.seed = 4242;
     af_spec fromPrompt;
@@ -2050,7 +2178,16 @@ static void testEngineImport() {
 int main(int argc, char** argv) {
     std::printf("\n\x1b[1mAvatarForge kernel host tests\x1b[0m  (ABI %d, %d threads)\n\n", AF_ABI_VERSION, defaultThreadCount());
     const bool quick = (argc > 1 && std::strcmp(argv[1], "--quick") == 0);
+    const bool abiOnly = (argc > 1 && std::strcmp(argv[1], "--abi-only") == 0);
 
+    if (abiOnly) {
+        testImageAnalysisPacking();
+        testAbi();
+        std::printf("\n\x1b[1mABI-only %d checks complete: %d failure(s)\x1b[0m\n\n", g_checks, g_failures);
+        return g_failures == 0 ? 0 : 1;
+    }
+
+    testImageAnalysisPacking();
     testAnthropometry();
     testField();
     testIsosurface();

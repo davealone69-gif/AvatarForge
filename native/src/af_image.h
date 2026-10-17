@@ -40,8 +40,9 @@ constexpr int kAnalysisMaxSide = 256;
 bool analyseImage(const af_image& image, af_image_analysis* out);
 
 /**
- * Turns an analysis (or a pair of them: identity + clothing reference) into the spec the generator
- * will build from. `identity` is required, `clothing` may be null.
+ * Turns an analysis pair (primary appearance/proportion hint plus optional garment/material hint)
+ * into the coarse spec the procedural generator will build. The ABI-stable parameter names remain
+ * `identity` and `clothing`, but this function performs no face reconstruction or garment transfer.
  *
  * The height estimate is the interesting one: an image carries no absolute scale, so stature comes
  * from the subject's own proportions - a human is 7.4 heads tall on average and a head is about

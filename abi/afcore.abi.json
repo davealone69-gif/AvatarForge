@@ -2,10 +2,12 @@
   "generated_by": "tools/abi_manifest.py - do not edit by hand",
   "source": "native/include/afcore.h",
   "abi_version": 1,
-  "engine_version": "0.10.0",
+  "engine_version": "0.10.1",
   "defines": {
     "AF_ABI_VERSION": 1,
-    "AF_ENGINE_VERSION": "0.10.0"
+    "AF_DEFAULT_HEIGHT_M": "1.75f",
+    "AF_ENGINE_VERSION": "0.10.1",
+    "AF_IMAGE_ANALYSIS_FLOAT_COUNT": 28
   },
   "enums": {
     "af_result": {

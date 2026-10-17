@@ -1,0 +1,33 @@
+{
+  "status": "USER_SPECIFIED_APPROXIMATION",
+  "role": "anatomical_and_colour_base_only",
+  "canonical_identity_reference": "/FavouritesMYLOVE/Love.jpg",
+  "af_spec": {
+    "sex": 2,
+    "sex_name": "AF_SEX_FEMALE",
+    "build": 1,
+    "build_name": "AF_BUILD_SLIM",
+    "hair_style": 4,
+    "hair_style_name": "AF_HAIR_LONG",
+    "outfit": 0,
+    "outfit_name": "AF_OUTFIT_NONE",
+    "footwear": 0,
+    "footwear_name": "AF_FOOTWEAR_NONE",
+    "seed": 1337,
+    "seed_note": "The user said any seed; 1337 is retained only as a deterministic reproducible value and has no identity meaning.",
+    "height_m": 1.68,
+    "age_years": 22.0,
+    "muscle": 0.25,
+    "body_fat": 0.18,
+    "bust": 0.65,
+    "skin_melanin": 0.08,
+    "hair_tone_linear_srgb": [0.35, 0.05, 0.05]
+  },
+  "capability_limits": {
+    "face_identity": "The current af_spec and image analyser do not reconstruct or preserve the Love.jpg face.",
+    "eyes": "No af_spec eye-colour field or identity-conditioned eye reconstruction exists; the canonical red-eye treatment needs a new material/character parameter or a separate approved rendering effect.",
+    "fangs": "The engine has generic dental-arch geometry but no dedicated canine/fang geometry and no ARKit fang channel. Fangs require custom geometry and, if retractable, custom non-ARKit morph targets.",
+    "blendshapes": "The current 52 channels are the standard ARKit-compatible facial set; none represents fangs.",
+    "wardrobe": "OUTFIT_NONE and FOOTWEAR_NONE describe the fitting base only. A final compliant full-avatar export still requires an explicitly selected, fully modelled/textured outfit and footwear."
+  }
+}

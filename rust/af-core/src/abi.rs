@@ -114,7 +114,8 @@ pub const AF_CLIP_COUNT: i32 = 16;
 pub const AF_REGION_COUNT: usize = 13;
 
 pub const AF_ABI_VERSION: i32 = 1;
-pub const AF_ENGINE_VERSION: &str = "0.10.0";
+pub const AF_DEFAULT_HEIGHT_M: f32 = 1.75;
+pub const AF_ENGINE_VERSION: &str = "0.10.1";
 
 /* ------------------------------------------------------------------ structs ---------------- */
 pub const AF_PROMPT_BYTES: usize = 512;

@@ -71,6 +71,10 @@ android {
         }
     }
 
+    /* Data-driven customization contracts are packaged into the AAR as offline assets. The raw
+       user submissions remain under requirements/; only normalized, status-gated contracts ship. */
+    sourceSets.getByName("main").assets.srcDir("../config")
+
     if (prebuiltJni == null) {
         externalNativeBuild {
             cmake {
