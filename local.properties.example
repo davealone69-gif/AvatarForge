@@ -1,0 +1,14 @@
+# Copy to local.properties (which is git-ignored) and point sdk.dir at your Android SDK.
+# The NDK must be the one the CMake toolchain file names below, or the exported ANDROID_NDK_HOME.
+sdk.dir=/path/to/android-sdk
+ndk.dir=/path/to/android-sdk/ndk/26.1.10909125
+
+# ---------------------------------------------------------------------------------------------
+# Release signing (optional). Copy the four keys below into keystore.properties at the repo root
+# and the release build will use your keystore. Without that file the release APK is signed with
+# the debug keystore (~/.android/debug.keystore) so it can still be installed on a test device.
+# ---------------------------------------------------------------------------------------------
+# storeFile=/absolute/path/to/avatarforge-release.jks
+# storePassword=...
+# keyAlias=avatarforge
+# keyPassword=...

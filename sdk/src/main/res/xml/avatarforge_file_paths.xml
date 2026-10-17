@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths the FileProvider may hand out. Only the app's own private storage is listed: generated
+  avatars in filesDir/avatars and the exported .glb files in cacheDir/exports. Nothing outside the
+  app's sandbox is exposed, and every URI is per-request (Context.grantUriPermission or an
+  Intent.EXTRA_STREAM with FLAG_GRANT_READ_URI_PERMISSION).
+-->
+<paths>
+    <files-path name="avatars" path="avatars/" />
+    <cache-path name="exports" path="exports/" />
+</paths>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AvatarForge app manifest.
+
+  Read the permission list carefully, because what is missing is the point:
+
+    * NO android.permission.INTERNET      the app cannot open a socket, by construction
+    * NO ACCESS_NETWORK_STATE / WIFI      nothing to check, nothing to use
+    * NO READ_/WRITE_EXTERNAL_STORAGE     exports go through the Storage Access Framework
+    * NO CAMERA                           reference photos are picked with the photo picker,
+                                          which does not hand out camera access
+
+  What is declared is a normal, single-activity app that renders into a SurfaceView and shares its
+  output through its own FileProvider. There is no service, no receiver, no worker and no
+  background scheduler: generation stops when the app does.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher_avatarforge"
+        android:label="@string/app_name"
+        android:largeHeap="false"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AvatarForge"
+        android:extractNativeLibs="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.AvatarForge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Opening a .glb the user shares with us. A plain Intent filter: nothing leaves
+                 the device and no network scheme is accepted. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="model/gltf-binary" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

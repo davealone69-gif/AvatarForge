@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AvatarForge SDK manifest.
+
+  A library manifest is merged into the consuming app's manifest, so declaring the FileProvider here
+  means every app that uses the SDK gets a working export share target without having to remember
+  to add one - which is the difference between "the export button works" and "the export button
+  throws FileUriExposedException on Android 7 and up".
+
+  Note what is NOT here:
+    * no <uses-permission android:name="android.permission.INTERNET">
+      The app must work in airplane mode. Nothing in this SDK opens a socket, and the absence of
+      INTERNET is the enforceable form of that promise: if a future change tried to phone home, the
+      request would fail rather than succeed quietly.
+    * no services, no receivers, no background work: the generation runs in-process, on a thread
+      owned by the SDK's job, and stops when the app does.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+          Exports generated .glb files (and anything else the app chooses to share) to other apps
+          through a content:// URI. App-scoped storage, no permissions, no network.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.avatarforge.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/avatarforge_file_paths" />
+        </provider>
+    </application>
+
+</manifest>

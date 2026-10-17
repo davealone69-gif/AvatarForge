@@ -1,0 +1,34 @@
+# ==============================================================================================
+#  AvatarForge :: rust/Cargo.toml  --  workspace for the Rust side of the engine
+# ==============================================================================================
+#
+#  Three crates, all dependency-free (they build offline, like the app):
+#
+#     af-core  the Rust native core: an implementation OF the C ABI, not a binding to it. Engine
+#              state machine, budget, stage sequencing and the numerics, ported subsystem by
+#              subsystem; checked against the same manifest as the C++ kernel.
+#     af-sys   raw `extern "C"` bindings to native/include/afcore.h - the same ABI the Kotlin
+#              layer uses through JNI, and the same one an AIDL/bound-service client would use.
+#     af       a safe wrapper: lifetimes, RAII, error types, progress/cancel plumbing, typed
+#              access to the mesh, textures and animation clips.
+#
+#  Nothing here reaches the network, and no crate is fetched from a registry: the workspace has
+#  no external dependencies at all, so `cargo build --offline` is the normal way to build it.
+# ==============================================================================================
+[workspace]
+resolver = "2"
+members = ["af-core", "af-sys", "af"]
+
+[workspace.package]
+version = "0.9.0"
+edition = "2021"
+rust-version = "1.70"
+license = "Apache-2.0"
+repository = "https://example.invalid/avatarforge"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

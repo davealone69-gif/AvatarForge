@@ -1,0 +1,492 @@
+{
+  "generated_by": "tools/abi_manifest.py - do not edit by hand",
+  "source": "native/include/afcore.h",
+  "abi_version": 1,
+  "engine_version": "0.10.0",
+  "defines": {
+    "AF_ABI_VERSION": 1,
+    "AF_ENGINE_VERSION": "0.10.0"
+  },
+  "enums": {
+    "af_result": {
+      "AF_OK": 0,
+      "AF_ERR_INVALID_ARG": -1,
+      "AF_ERR_OUT_OF_MEMORY": -2,
+      "AF_ERR_UNSUPPORTED": -3,
+      "AF_ERR_NOT_READY": -4,
+      "AF_ERR_IO": -5,
+      "AF_ERR_CANCELLED": -6,
+      "AF_ERR_INTERNAL": -7,
+      "AF_ERR_ABI_MISMATCH": -8,
+      "AF_ERR_BUDGET_EXCEEDED": -9
+    },
+    "af_stage": {
+      "AF_STAGE_IDLE": 0,
+      "AF_STAGE_ANALYZE_INPUTS": 1,
+      "AF_STAGE_FIT_ANATOMY": 2,
+      "AF_STAGE_GEOMETRY": 3,
+      "AF_STAGE_UV_UNWRAP": 4,
+      "AF_STAGE_BAKE_TEXTURES": 5,
+      "AF_STAGE_RIG": 6,
+      "AF_STAGE_BLENDSHAPES": 7,
+      "AF_STAGE_ANIMATION": 8,
+      "AF_STAGE_EXPORT": 9,
+      "AF_STAGE_DONE": 10,
+      "AF_STAGE_COUNT": 11
+    },
+    "af_severity": {
+      "AF_LOG_DEBUG": 0,
+      "AF_LOG_INFO": 1,
+      "AF_LOG_WARN": 2,
+      "AF_LOG_ERROR": 3
+    },
+    "af_sex": {
+      "AF_SEX_UNSPECIFIED": 0,
+      "AF_SEX_MALE": 1,
+      "AF_SEX_FEMALE": 2
+    },
+    "af_build": {
+      "AF_BUILD_AVERAGE": 0,
+      "AF_BUILD_SLIM": 1,
+      "AF_BUILD_ATHLETIC": 2,
+      "AF_BUILD_MUSCULAR": 3,
+      "AF_BUILD_HEAVY": 4
+    },
+    "af_hair_style": {
+      "AF_HAIR_NONE": 0,
+      "AF_HAIR_BUZZ": 1,
+      "AF_HAIR_SHORT": 2,
+      "AF_HAIR_MEDIUM": 3,
+      "AF_HAIR_LONG": 4,
+      "AF_HAIR_PONYTAIL": 5,
+      "AF_HAIR_BUN": 6,
+      "AF_HAIR_BRAIDS": 7,
+      "AF_HAIR_AFRO": 8,
+      "AF_HAIR_MOHAWK": 9
+    },
+    "af_outfit": {
+      "AF_OUTFIT_NONE": 0,
+      "AF_OUTFIT_TSHIRT": 1,
+      "AF_OUTFIT_DRESS": 2,
+      "AF_OUTFIT_SUIT": 3,
+      "AF_OUTFIT_JEANS_JACKET": 4,
+      "AF_OUTFIT_ARMOR_PLATE": 5,
+      "AF_OUTFIT_ARMOR_LEATHER": 6,
+      "AF_OUTFIT_SPACESUIT": 7,
+      "AF_OUTFIT_ATHLETIC": 8,
+      "AF_OUTFIT_COAT": 9
+    },
+    "af_footwear": {
+      "AF_FOOTWEAR_NONE": 0,
+      "AF_FOOTWEAR_SNEAKER": 1,
+      "AF_FOOTWEAR_BOOT": 2,
+      "AF_FOOTWEAR_SABATON": 3,
+      "AF_FOOTWEAR_HEEL": 4
+    },
+    "af_image_role": {
+      "AF_IMAGE_IDENTITY": 0,
+      "AF_IMAGE_CLOTHING": 1,
+      "AF_IMAGE_FULL_BODY": 2,
+      "AF_IMAGE_EXTRA_VIEW": 3
+    },
+    "af_clip": {
+      "AF_CLIP_REST": 0,
+      "AF_CLIP_IDLE": 1,
+      "AF_CLIP_BREATHE": 2,
+      "AF_CLIP_WALK": 3,
+      "AF_CLIP_RUN": 4,
+      "AF_CLIP_JOG": 5,
+      "AF_CLIP_SQUAT": 6,
+      "AF_CLIP_JUMP": 7,
+      "AF_CLIP_WAVE": 8,
+      "AF_CLIP_PUNCH": 9,
+      "AF_CLIP_KICK": 10,
+      "AF_CLIP_T_POSE": 11,
+      "AF_CLIP_A_POSE": 12,
+      "AF_CLIP_SIT": 13,
+      "AF_CLIP_TURN_360": 14,
+      "AF_CLIP_PUSHUP": 15,
+      "AF_CLIP_COUNT": 16
+    },
+    "af_joint_flags": {
+      "AF_JOINT_TWIST": 1,
+      "AF_JOINT_FINGER": 2,
+      "AF_JOINT_FACE": 4
+    },
+    "af_texture_slot": {
+      "AF_TEX_BASE_COLOR": 0,
+      "AF_TEX_NORMAL": 1,
+      "AF_TEX_METALLIC_ROUGHNESS": 2,
+      "AF_TEX_OCCLUSION": 3,
+      "AF_TEX_SUBSURFACE": 4,
+      "AF_TEX_COUNT": 5
+    }
+  },
+  "enum_sizes": {
+    "af_result": 4,
+    "af_stage": 4,
+    "af_severity": 4,
+    "af_sex": 4,
+    "af_build": 4,
+    "af_hair_style": 4,
+    "af_outfit": 4,
+    "af_footwear": 4,
+    "af_image_role": 4,
+    "af_clip": 4,
+    "af_joint_flags": 4
+  },
+  "structs": {
+    "af_spec": {
+      "size": 672,
+      "fields": {
+        "struct_size": 0,
+        "sex": 4,
+        "build": 8,
+        "hair_style": 12,
+        "outfit": 16,
+        "footwear": 20,
+        "seed": 24,
+        "height_m": 28,
+        "age_years": 32,
+        "muscle": 36,
+        "body_fat": 40,
+        "bust": 44,
+        "neck_cm": 48,
+        "chest_cm": 52,
+        "underbust_cm": 56,
+        "waist_cm": 60,
+        "hip_cm": 64,
+        "thigh_cm": 68,
+        "calf_cm": 72,
+        "bicep_cm": 76,
+        "forearm_cm": 80,
+        "wrist_cm": 84,
+        "shoulder_width_cm": 88,
+        "inseam_cm": 92,
+        "head_circumference_cm": 96,
+        "skin_tone": 100,
+        "skin_melanin": 112,
+        "hair_tone": 116,
+        "cloth_tone": 128,
+        "gear_tone": 140,
+        "cloth_roughness": 152,
+        "gear_metalness": 156,
+        "prompt": 160
+      }
+    },
+    "af_callbacks": {
+      "size": 32,
+      "fields": {
+        "user": 0,
+        "on_progress": 8,
+        "on_log": 16,
+        "should_cancel": 24
+      }
+    },
+    "af_vertex": {
+      "size": 88,
+      "fields": {
+        "pos": 0,
+        "normal": 12,
+        "tangent": 24,
+        "uv": 40,
+        "color": 48,
+        "joints": 64,
+        "weights": 72
+      }
+    },
+    "af_submesh": {
+      "size": 48,
+      "fields": {}
+    },
+    "af_material": {
+      "size": 108,
+      "fields": {}
+    },
+    "af_texture": {
+      "size": 32,
+      "fields": {}
+    },
+    "af_joint_info": {
+      "size": 100,
+      "fields": {
+        "name": 0,
+        "parent": 64,
+        "flags": 68,
+        "rest_translation": 72
+      }
+    },
+    "af_pose": {
+      "size": 16,
+      "fields": {}
+    },
+    "af_image": {
+      "size": 24,
+      "fields": {
+        "width": 0,
+        "height": 4,
+        "channels": 8,
+        "role": 12,
+        "pixels": 16
+      }
+    },
+    "af_image_analysis": {
+      "size": 112,
+      "fields": {}
+    },
+    "af_stats": {
+      "size": 152,
+      "fields": {
+        "vertex_count": 0,
+        "index_count": 4,
+        "triangle_count": 8,
+        "submesh_count": 12,
+        "joint_count": 16,
+        "blendshape_count": 20,
+        "texture_bytes": 24,
+        "geometry_bytes": 32,
+        "peak_field_bytes": 40,
+        "fit_anatomy_ms": 48,
+        "rig_ms": 76,
+        "gpu_hint": 84
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "af_arena_free",
+      "returns": "void",
+      "args": "void* ptr"
+    },
+    {
+      "name": "af_engine_abi_version",
+      "returns": "int32_t",
+      "args": "void"
+    },
+    {
+      "name": "af_engine_analyze_images",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const af_image* images, int32_t image_count, af_image_analysis* out_analyses, int32_t max_analyses"
+    },
+    {
+      "name": "af_engine_analyze_prompt",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const char* prompt, af_spec* out_spec"
+    },
+    {
+      "name": "af_engine_apply_blendshapes",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const float* weights, int32_t count"
+    },
+    {
+      "name": "af_engine_apply_clip",
+      "returns": "int32_t",
+      "args": "af_engine* engine, int32_t clip, float time_seconds"
+    },
+    {
+      "name": "af_engine_apply_pose",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const af_pose* pose"
+    },
+    {
+      "name": "af_engine_bake_animation",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_bake_blendshapes",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_bake_textures",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_blendshape_names",
+      "returns": "int32_t",
+      "args": "char names_out[][64], int32_t max_names"
+    },
+    {
+      "name": "af_engine_build_geometry",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_clip_duration",
+      "returns": "float",
+      "args": "const af_engine* engine, int32_t clip"
+    },
+    {
+      "name": "af_engine_clip_name",
+      "returns": "int32_t",
+      "args": "int32_t clip, char* out_name, int32_t max_bytes"
+    },
+    {
+      "name": "af_engine_create",
+      "returns": "int32_t",
+      "args": "const af_spec* spec, const af_callbacks* callbacks, af_engine** out_engine"
+    },
+    {
+      "name": "af_engine_destroy",
+      "returns": "void",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_dirty_mask",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_export_glb",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const char* absolute_path"
+    },
+    {
+      "name": "af_engine_export_glb_to_memory",
+      "returns": "int32_t",
+      "args": "af_engine* engine, uint8_t** out_bytes, size_t* out_size"
+    },
+    {
+      "name": "af_engine_fit_anatomy",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_import_glb",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const char* absolute_path"
+    },
+    {
+      "name": "af_engine_import_glb_from_memory",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const uint8_t* bytes, size_t size"
+    },
+    {
+      "name": "af_engine_index_count",
+      "returns": "int32_t",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_indices",
+      "returns": "const uint32_t*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_joint_count",
+      "returns": "int32_t",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_joint_info",
+      "returns": "int32_t",
+      "args": "const af_engine* engine, int32_t joint, af_joint_info* out"
+    },
+    {
+      "name": "af_engine_joint_matrices",
+      "returns": "int32_t",
+      "args": "const af_engine* engine, float* out_matrices4x4, int32_t max_joints"
+    },
+    {
+      "name": "af_engine_last_error",
+      "returns": "const char*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_material_count",
+      "returns": "int32_t",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_materials",
+      "returns": "const af_material*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_region_name",
+      "returns": "const char*",
+      "args": "int32_t region"
+    },
+    {
+      "name": "af_engine_reset",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const af_spec* spec"
+    },
+    {
+      "name": "af_engine_rig",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_run_all",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_sample_clip",
+      "returns": "int32_t",
+      "args": "af_engine* engine, int32_t clip, float time_seconds, af_pose* out_pose"
+    },
+    {
+      "name": "af_engine_set_gpu_hint",
+      "returns": "int32_t",
+      "args": "af_engine* engine, const char* hint"
+    },
+    {
+      "name": "af_engine_set_memory_budget",
+      "returns": "int32_t",
+      "args": "af_engine* engine, uint64_t bytes"
+    },
+    {
+      "name": "af_engine_stats",
+      "returns": "int32_t",
+      "args": "const af_engine* engine, af_stats* out"
+    },
+    {
+      "name": "af_engine_submesh_count",
+      "returns": "int32_t",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_submeshes",
+      "returns": "const af_submesh*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_texture",
+      "returns": "int32_t",
+      "args": "const af_engine* engine, int32_t slot, af_texture* out"
+    },
+    {
+      "name": "af_engine_unwrap_uv",
+      "returns": "int32_t",
+      "args": "af_engine* engine"
+    },
+    {
+      "name": "af_engine_version",
+      "returns": "const char*",
+      "args": "void"
+    },
+    {
+      "name": "af_engine_vertex_count",
+      "returns": "int32_t",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_vertices",
+      "returns": "const af_vertex*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_engine_vertices_rest",
+      "returns": "const af_vertex*",
+      "args": "const af_engine* engine"
+    },
+    {
+      "name": "af_spec_init",
+      "returns": "void",
+      "args": "af_spec* spec"
+    }
+  ]
+}

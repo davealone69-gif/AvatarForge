@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches Material 3's dark surface so the first frame does not flash. -->
+    <color name="window_background">#FF111318</color>
+    <color name="launcher_background">#FF1B2330</color>
+    <color name="launcher_accent">#FF6FB6FF</color>
+</resources>

@@ -1,0 +1,64 @@
+# ==============================================================================================
+#  .gitignore -- AvatarForge
+# ==============================================================================================
+#  Rule of thumb for this repository: source, documentation and test tooling are tracked; anything
+#  that a documented command can regenerate is not. Every ignored directory below is produced by
+#  `tools/build_host.sh`, `tools/build_android.sh` or `tools/build_gradle.sh`, and BUILD.md says
+#  which command regenerates it.
+#
+#  Deliberately NOT ignored (tracked, because they are the contract or the evidence of it):
+#    abi/afcore.abi.json   the generated ABI manifest is checked in on purpose - the conformance
+#                          tool diffs against it, so a change to the header must show up as a diff
+#    abi/                  in this repository, not as a silent regeneration
+# ==============================================================================================
+
+# ---- host build (tools/build_host.sh) ---------------------------------------------------------
+build-host/
+
+# ---- Android native build (tools/build_android.sh) --------------------------------------------
+build-android/
+build-android-*.log
+
+# ---- Rust (cargo) -----------------------------------------------------------------------------
+rust/target/
+**/*.rs.bk
+
+# ---- Gradle / Android SDK ---------------------------------------------------------------------
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+captures/
+*.hprof
+
+# ---- signing material: never in a repository ----------------------------------------------
+keystore.properties
+*.jks
+*.keystore
+
+# ---- build logs (the commands are documented; the logs are noise) -----------------------------
+*.log
+
+# ---- generated binaries -----------------------------------------------------------------------
+# The native libraries are built per ABI and per NDK version by tools/build_android.sh, and the
+# Gradle build consumes them through -Paf.prebuiltJni. Committing 14 MB of .so files that a
+# documented command rebuilds would make every NDK bump a 14 MB diff.
+prebuilt/
+
+# The APKs, the SDK AAR and the 34 MB sample export are release outputs, not sources: 51 MB of
+# binaries in history forever. Regenerate with
+#     tools/build_gradle.sh :app:assembleDebug :app:assembleRelease :sdk:assembleRelease
+#     build-host/export_probe artifacts/avatarforge-sample.glb
+# If you *do* want a published build tracked, force-add that single file (`git add -f`) rather
+# than removing these patterns.
+artifacts/*.apk
+artifacts/*.aar
+artifacts/*.glb
+out/
+
+# ---- OS / editor cruft ------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~

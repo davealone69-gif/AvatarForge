@@ -1,0 +1,30 @@
+# ==============================================================================================
+#  AvatarForge :: af  --  safe Rust wrapper over the kernel and (optionally) the renderer
+# ==============================================================================================
+#  No dependencies. The only feature, `renderer`, links against libafrender.so - leave it off for
+#  desktop builds and unit tests (the renderer needs an Android window and a Vulkan/GLES driver),
+#  turn it on when building inside the Android app.
+# ==============================================================================================
+[package]
+name = "af"
+description = "Safe Rust API for the AvatarForge on-device avatar engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+build = "build.rs"
+
+[dependencies]
+af-sys = { path = "../af-sys", version = "0.9.0" }
+
+[features]
+default = []
+# Drives the custom Vulkan/GLES renderer through the C ABI in native/src/render/af_render_capi.cpp.
+# Requires libafrender.so to be linkable (Android target only).
+renderer = []
+
+[[test]]
+name = "engine"
+harness = true

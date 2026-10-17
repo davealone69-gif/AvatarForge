@@ -1,0 +1,94 @@
+# ==============================================================================================
+#  tools/prompt_corpus.txt -- prompts the C++ and the Rust parsers must agree on, exactly.
+# ==============================================================================================
+# Read by tools/prompt_probe.cpp (C++ reference) and rust/af-core/src/bin/promptdump.rs (Rust),
+# and diffed by tools/prompt_parity.sh. Lines starting with '#' are comments.
+#
+# The corpus is deliberately adversarial: word orders both ways round, colours that belong to a
+# following noun, colours that do not, material modifiers anywhere in the sentence, negation the
+# grammar cannot express, unicode, punctuation, numbers that are not measurements, and prompts
+# that name nothing at all.
+
+# --- plain attributes ---
+a tall muscular man
+a slim woman with long hair
+an athletic female, fit and toned
+short elderly gentleman
+middle-aged woman with a bun
+a young man, 22 years old
+aged 34 woman
+a teenage girl with braids
+a bald senior man with a beard
+
+# --- stature and measurements, both word orders ---
+a woman 172 cm
+a man 1.83 m
+a man 6 ft 1 in
+a woman 5 foot 9
+a female waist 68 cm, hips 96 cm
+a female 68 cm waist, 96 cm hips
+a man 104 cm chest, 82 cm waist, 42 cm neck
+a woman with 88 cm bust, 70 cm waist, 100 cm hips
+a woman inseam 78 cm
+a man shoulder 46 cm, bicep 38 cm
+a woman head 56 cm
+a woman 2.5 m
+a woman 0.9 m
+a man 45 stone
+
+# --- colour -> noun attachment ---
+a woman in a red dress
+a man in a black suit
+a knight in black plate armour
+a knight in black sabatons
+a ranger in green leather armour
+a woman in a long white coat
+a man in a navy blue jacket
+a woman with brown hair
+a woman with long dark hair
+a man with grey hair
+a woman with olive skin
+a man with dark skin
+a woman with black hair and pale skin
+a cheerleader in pink
+a woman in red
+a woman in a green dress with black boots
+
+# --- outfits and footwear ---
+a woman in a t-shirt and jeans
+a man in sportswear and sneakers
+a woman in high heels
+a knight in full plate armour with sabatons
+an astronaut in a spacesuit
+a woman in a space suit
+a man in a trench coat
+a nude figure
+a woman in a hoodie
+a woman in a business suit
+
+# --- hair styles ---
+a woman with a ponytail
+a woman with an afro
+a man with a mohawk
+a woman with dreadlocks
+a man with a buzz cut
+a bald man
+a woman with short hair
+a woman with medium hair
+a woman with shoulder-length hair
+a man with shoulder length hair and a beard
+
+# --- noise, near-misses, unicode and punctuation ---
+qwertyuiop
+hello world
+a person
+a model
+generate an avatar
+“curly” woman — 1.75 m!
+WOMAN, TALL, 172 CM
+   leading spaces and trailing spaces
+a woman with 172cm
+a 1.8m man
+a man aged 45
+a 45 year old man
+a woman with red hair and green eyes

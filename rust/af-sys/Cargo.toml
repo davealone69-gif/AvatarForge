@@ -1,0 +1,23 @@
+# ==============================================================================================
+#  AvatarForge :: af-sys  --  raw bindings to native/include/afcore.h
+# ==============================================================================================
+#  No build dependencies: build.rs only emits linker flags, so nothing is fetched from a registry
+#  and `cargo build --offline` works on a machine with no network at all (like the phone this app
+#  is for).
+# ==============================================================================================
+[package]
+name = "af-sys"
+description = "Raw FFI bindings for the AvatarForge on-device avatar engine kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+links = "afcore"
+build = "build.rs"
+
+[lib]
+name = "af_sys"
+path = "src/lib.rs"
+
+[dependencies]
