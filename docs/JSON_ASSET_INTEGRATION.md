@@ -38,3 +38,18 @@ The current repository does not contain a large JSON asset collection. The regis
 ## Verification
 
 This remote edit session cannot execute Gradle/NDK builds or install on the physical Samsung phone. Kotlin compilation, APK build, JSON-to-generated-mesh effect and device lifecycle/performance remain **UNVERIFIED** until CI and phone testing pass. The avatar disappearance around 26 FPS is not addressed by this registry change.
+
+
+## Advanced parameter catalog (new)
+
+The supplied advanced controls are preserved in `assets/parameters/advanced-parameters.json` (45 unique keys), with structural schema `schemas/parameter-definitions.schema.json`. This is a definition catalogue, not a claim that all controls already alter the renderer. `requires_rebuild` describes intended edit cost only; it does not automatically rebuild anything.
+
+Before exposing controls in the UI, the next implementation step is a typed parameter registry that validates type-specific constraints (range, step, default, enum membership, colour format, duplicate keys) and maps each supported key to an actual generator/material/rig/animation/voice consumer. Unknown keys must be shown as unsupported, not silently accepted. Controls with no real runtime consumer must be marked unavailable in the UI.
+
+Initial implementation priority:
+1. Face geometry parameters that can be represented by the current procedural generator.
+2. Skin/hair/material controls only after confirming the renderer has corresponding shader/material inputs.
+3. Accessories, capes, clothing layering, cybernetics, skeleton variants and animation controls only after their mesh/rig/physics assets and runtime consumers exist.
+4. Voice and personality fields belong to the character/AI profile layer, not the mesh renderer.
+
+No physical APK/device verification has been performed for this catalogue.
