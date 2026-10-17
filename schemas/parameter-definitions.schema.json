@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AvatarForge runtime parameter definitions",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "required": ["key","group","label","type","default","requires_rebuild"],
+    "properties": {
+      "key": {"type":"string","pattern":"^[a-z][a-z0-9_]{1,95}$"},
+      "group": {"type":"string","minLength":1},
+      "label": {"type":"string","minLength":1},
+      "type": {"enum":["float","int","enum","bool","color"]},
+      "unit": {"type":"string"},
+      "minimum": {"type":"number"},
+      "maximum": {"type":"number"},
+      "step": {"type":"number","exclusiveMinimum":0},
+      "default": {},
+      "options": {"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
+      "requires_rebuild": {"type":"boolean"}
+    },
+    "additionalProperties": false,
+    "allOf": [
+      {"if":{"properties":{"type":{"const":"enum"}},"required":["type"]},"then":{"required":["options"],"properties":{"default":{"type":"string"}}}},
+      {"if":{"properties":{"type":{"const":"bool"}},"required":["type"]},"then":{"properties":{"default":{"type":"boolean"}}}},
+      {"if":{"properties":{"type":{"enum":["float","int"]}},"required":["type"]},"then":{"required":["minimum","maximum","step"],"properties":{"default":{"type":"number"}}}},
+      {"if":{"properties":{"type":{"const":"color"}},"required":["type"]},"then":{"properties":{"default":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"}}}
+    ]
+  }
+}
