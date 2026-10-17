@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
@@ -65,6 +67,8 @@ enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER }
 fun ViewerScreen(
     result: EngineResult,
     engine: AvatarEngine,
+    rendererError: String?,
+    onBack: () -> Unit,
     rendererInfo: RendererInfo?,
     stats: RendererStats,
     camera: CameraSettings,
@@ -122,16 +126,29 @@ fun ViewerScreen(
         Column(
             Modifier
                 .align(Alignment.TopStart)
+                .statusBarsPadding()
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            TextButton(onClick = onBack) { Text("← Back to editor") }
             Header(result, rendererInfo, stats)
+            if (rendererError != null) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("3D viewer failed to start", fontWeight = FontWeight.SemiBold)
+                        Text(rendererError, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
 
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .horizontalScroll(rememberScrollState())
                 .padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -150,6 +167,7 @@ fun ViewerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .padding(bottom = 56.dp),
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
