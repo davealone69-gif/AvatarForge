@@ -60,7 +60,7 @@ class AssetRegistry private constructor(private val root: File, private val reco
                 v.toFloat()
             }
         }
-        fun <T> enum(key: String, values: Array<T>, name: (T) -> String, fallback: T): T {
+        fun <T> enumValue(key: String, values: Array<T>, name: (T) -> String, fallback: T): T {
             if (!obj.has(key)) return fallback
             val raw = obj.opt(key)
             if (raw !is String) throw AssetRegistryException(key + " must be a string enum")
@@ -70,13 +70,13 @@ class AssetRegistry private constructor(private val root: File, private val reco
         val defaults = AvatarSpec()
         return try {
             AvatarSpec(
-                sex = enum("sex", Sex.entries.toTypedArray(), { it.name }, defaults.sex),
-                build = enum("build", Build.entries.toTypedArray(), { it.name }, defaults.build),
-                hairStyle = enum("hairStyle", HairStyle.entries.toTypedArray(), { it.name }, defaults.hairStyle),
-                outfit = enum("outfit", Outfit.entries.toTypedArray(), { it.name }, defaults.outfit),
-                footwear = enum("footwear", Footwear.entries.toTypedArray(), { it.name }, defaults.footwear),
+                sex = enumValue("sex", Sex.entries.toTypedArray(), { it.name }, defaults.sex),
+                build = enumValue("build", Build.entries.toTypedArray(), { it.name }, defaults.build),
+                hairStyle = enumValue("hairStyle", HairStyle.entries.toTypedArray(), { it.name }, defaults.hairStyle),
+                outfit = enumValue("outfit", Outfit.entries.toTypedArray(), { it.name }, defaults.outfit),
+                footwear = enumValue("footwear", Footwear.entries.toTypedArray(), { it.name }, defaults.footwear),
                 seed = obj.optInt("seed", defaults.seed),
-                heightM = number("heightM", defaults.heightM, 0f, 2.2f),
+                heightM = number("heightM", defaults.heightM, 0f, 2.2f).also { if (it != 0f && it < 1.4f) throw AssetRegistryException("heightM must be 0 or 1.4..2.2") },
                 ageYears = number("ageYears", defaults.ageYears, 16f, 70f),
                 muscle = number("muscle", defaults.muscle, 0f, 1f),
                 bodyFat = number("bodyFat", defaults.bodyFat, 0f, 1f),
@@ -134,7 +134,7 @@ class AssetRegistry private constructor(private val root: File, private val reco
             rejectKeys(obj, MANIFEST_KEYS, "asset manifest")
             if (obj.optInt("schemaVersion", -1) != 1) throw AssetRegistryException("Manifest schemaVersion must be 1")
             val array = obj.optJSONArray("assets") ?: throw AssetRegistryException("Manifest assets must be an array")
-            if (array.length() > 10000) throw AssetRegistryException("Manifest has more than 10000 assets")
+            if (array.length() > 1000) throw AssetRegistryException("Manifest has more than 1000 assets")
             val map = linkedMapOf<String, AssetRecord>()
             for (i in 0 until array.length()) {
                 val item = array.optJSONObject(i) ?: throw AssetRegistryException("assets[" + i + "] must be an object")
