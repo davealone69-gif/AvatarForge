@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: avatarforge-android-\${{ github.ref }}
+  group: avatarforge-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -83,7 +83,7 @@ jobs:
       - name: Upload APKs for direct download
         uses: actions/upload-artifact@v4
         with:
-          name: AvatarForge-Android-\${{ github.sha }}
+          name: AvatarForge-Android-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
           retention-days: 30
@@ -92,7 +92,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: AvatarForge \${{ github.ref_name }}
+          name: AvatarForge ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             dist/AvatarForge-debug-arm64.apk
