@@ -40,21 +40,15 @@ keystore.properties
 # ---- build logs (the commands are documented; the logs are noise) -----------------------------
 *.log
 
-# ---- generated binaries -----------------------------------------------------------------------
-# The native libraries are built per ABI and per NDK version by tools/build_android.sh, and the
-# Gradle build consumes them through -Paf.prebuiltJni. Committing 14 MB of .so files that a
-# documented command rebuilds would make every NDK bump a 14 MB diff.
-prebuilt/
-
-# The APKs, the SDK AAR and the 34 MB sample export are release outputs, not sources: 51 MB of
-# binaries in history forever. Regenerate with
-#     tools/build_gradle.sh :app:assembleDebug :app:assembleRelease :sdk:assembleRelease
-#     build-host/export_probe artifacts/avatarforge-sample.glb
-# If you *do* want a published build tracked, force-add that single file (`git add -f`) rather
-# than removing these patterns.
-artifacts/*.apk
-artifacts/*.aar
-artifacts/*.glb
+# ---- generated binaries: TRACKED BY DECISION --------------------------------------------------
+# prebuilt/ and artifacts/ are deliberately committed. They are build outputs, but they are also
+# the deliverables: someone cloning this repository can install the APK, open the sample .glb, or
+# build the app without an NDK, which matters more here than a tidy diff.
+#
+# The cost, stated plainly: ~65 MB in history (of which the sample model is 34 MB), and a new
+# blob for every rebuild rather than a small diff. To stop tracking them later:
+#     git rm -r --cached prebuilt artifacts   # and add the patterns back here
+# Everything else that a documented command regenerates stays ignored.
 out/
 
 # ---- OS / editor cruft ------------------------------------------------------------------------
