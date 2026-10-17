@@ -37,7 +37,7 @@ class AssetRegistry private constructor(private val root: File, private val reco
         val obj = try { JSONObject(readBounded(file, MAX_FILE_BYTES).toString(Charsets.UTF_8)) }
         catch (e: Exception) { throw AssetRegistryException("Cannot parse preset " + id + ": " + e.message, e) }
         rejectKeys(obj, PRESET_KEYS, "preset " + id)
-        if (obj.optInt("schemaVersion", -1) != 1 || obj.optString("id") != id) {
+        if (exactInt(obj, "schemaVersion", 1, 1) != 1 || obj.optString("id") != id) {
             throw AssetRegistryException("Preset schemaVersion must be 1 and id must match manifest id")
         }
         fun number(key: String, fallback: Float, min: Float, max: Float): Float {
@@ -75,7 +75,7 @@ class AssetRegistry private constructor(private val root: File, private val reco
                 hairStyle = enumValue("hairStyle", HairStyle.entries.toTypedArray(), { it.name }, defaults.hairStyle),
                 outfit = enumValue("outfit", Outfit.entries.toTypedArray(), { it.name }, defaults.outfit),
                 footwear = enumValue("footwear", Footwear.entries.toTypedArray(), { it.name }, defaults.footwear),
-                seed = obj.optInt("seed", defaults.seed),
+                seed = if (obj.has("seed")) exactInt(obj, "seed", Int.MIN_VALUE, Int.MAX_VALUE) else defaults.seed,
                 heightM = number("heightM", defaults.heightM, 0f, 2.2f).also { if (it != 0f && it < 1.4f) throw AssetRegistryException("heightM must be 0 or 1.4..2.2") },
                 ageYears = number("ageYears", defaults.ageYears, 16f, 70f),
                 muscle = number("muscle", defaults.muscle, 0f, 1f),
@@ -132,7 +132,7 @@ class AssetRegistry private constructor(private val root: File, private val reco
             val obj = try { JSONObject(readBounded(manifest, MAX_MANIFEST_BYTES).toString(Charsets.UTF_8)) }
             catch (e: Exception) { throw AssetRegistryException("Cannot read asset manifest: " + e.message, e) }
             rejectKeys(obj, MANIFEST_KEYS, "asset manifest")
-            if (obj.optInt("schemaVersion", -1) != 1) throw AssetRegistryException("Manifest schemaVersion must be 1")
+            if (exactInt(obj, "schemaVersion", 1, 1) != 1) throw AssetRegistryException("Manifest schemaVersion must be 1")
             val array = obj.optJSONArray("assets") ?: throw AssetRegistryException("Manifest assets must be an array")
             if (array.length() > 1000) throw AssetRegistryException("Manifest has more than 1000 assets")
             val map = linkedMapOf<String, AssetRecord>()
@@ -146,14 +146,14 @@ class AssetRegistry private constructor(private val root: File, private val reco
                 if (!PATH.matches(path) || path.startsWith("/") || path.split('/').any { it == ".." || it.isEmpty() }) {
                     throw AssetRegistryException("Unsafe asset path: " + path)
                 }
-                val version = item.optInt("version", -1)
-                if (version < 1) throw AssetRegistryException("Asset " + id + " version must be positive")
+                val version = exactInt(item, "version", 1, Int.MAX_VALUE)
                 val depArray = item.optJSONArray("dependencies") ?: JSONArray()
                 val deps = (0 until depArray.length()).map { n ->
                     val dep = depArray.opt(n)
                     if (dep !is String || !ID.matches(dep)) throw AssetRegistryException("Invalid dependency on asset " + id)
                     dep
                 }
+                if (deps.distinct().size != deps.size) throw AssetRegistryException("Asset " + id + " has duplicate dependencies")
                 map[id] = AssetRecord(id, AssetType.parse(requiredString(item, "type")), path, version, deps,
                     item.optString("license").takeIf { it.isNotBlank() },
                     item.optString("source").takeIf { it.isNotBlank() })
@@ -177,6 +177,13 @@ class AssetRegistry private constructor(private val root: File, private val reco
             return AssetRegistry(root, map)
         }
 
+        private fun exactInt(obj: JSONObject, key: String, min: Int, max: Int): Int {
+            val value = obj.opt(key)
+            if (value !is Number || !value.toDouble().isFinite() || value.toDouble() != value.toInt().toDouble() || value.toDouble() < min.toDouble() || value.toDouble() > max.toDouble()) {
+                throw AssetRegistryException("\u0027" + key + "\u0027 must be an integer in " + min + ".." + max)
+            }
+            return value.toInt()
+        }
         private fun requiredString(obj: JSONObject, key: String): String {
             val value = obj.opt(key)
             if (value !is String || value.isBlank()) throw AssetRegistryException("'" + key + "' must be a non-empty string")
