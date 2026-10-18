@@ -26,8 +26,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -111,9 +119,11 @@ class MainActivity : ComponentActivity() {
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
         var pickedRegion by remember { mutableStateOf(-1) }
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
+        var menuExpanded by remember { mutableStateOf(false) }
 
         BackHandler(enabled = screen != Screen.INPUT) {
-            when (screen) {
+            Box(Modifier.fillMaxSize()) {
+        when (screen) {
                 Screen.VIEWER -> screen = Screen.INPUT
                 Screen.PROGRESS -> {
                     job?.cancel()
@@ -322,6 +332,51 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                             )
+                        },
+                    )
+                }
+            }
+        }
+        // Grok-Girls Compose navigation pattern, adapted to destinations that actually exist
+        // in AvatarForge. No placeholder routes are exposed.
+        if (screen != Screen.PROGRESS) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(8.dp),
+            ) {
+                TextButton(onClick = { menuExpanded = true }) {
+                    Text("☰ MENU")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Builder") },
+                        onClick = {
+                            menuExpanded = false
+                            screen = Screen.INPUT
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("3D Viewer") },
+                        enabled = result != null,
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) screen = Screen.VIEWER
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Render settings") },
+                        enabled = result != null,
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) {
+                                panel = ViewerPanel.RENDER
+                                screen = Screen.VIEWER
+                            }
                         },
                     )
                 }
