@@ -278,6 +278,16 @@ private:
     uint64_t indexCapacity_ = 0;
     int32_t indexCount_ = 0;
 
+    /* CPU-populated, GPU-consumed draw arguments.  The command buffer still binds each
+       submesh's material independently, but index/instance counts no longer travel through
+       vkCmdDrawIndexed's scalar arguments.  This is the safe Vulkan-1.0 baseline for the
+       GPU-driven path; a future compute pass can overwrite the same buffer after culling. */
+    VkBuffer indirectBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory indirectMem_ = VK_NULL_HANDLE;
+    void* indirectMapped_ = nullptr;
+    uint64_t indirectCapacity_ = 0;
+    uint32_t indirectCommandCount_ = 0;
+
     VkBuffer materialUbo_ = VK_NULL_HANDLE;
     VkDeviceMemory materialUboMem_ = VK_NULL_HANDLE;
     void* materialUboMapped_ = nullptr;
@@ -2192,6 +2202,42 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
             if (indexMapped_) std::memcpy(indexMapped_, indices, size_t(ineed));
             indexCount_ = icount;
         }
+
+        const int submeshCount = af_engine_submesh_count(engine_);
+        const af_submesh* submeshes = af_engine_submeshes(engine_);
+        const uint64_t indirectNeed = uint64_t(std::max(0, submeshCount)) *
+                                      sizeof(VkDrawIndexedIndirectCommand);
+        if (indirectNeed > 0 && submeshes) {
+            if (indirectNeed > indirectCapacity_) {
+                if (indirectBuffer_ != VK_NULL_HANDLE) {
+                    vkDestroyBuffer(device_, indirectBuffer_, nullptr);
+                    vkFreeMemory(device_, indirectMem_, nullptr);
+                    indirectBuffer_ = VK_NULL_HANDLE;
+                    indirectMapped_ = nullptr;
+                }
+                const uint64_t capacity = indirectNeed + indirectNeed / 2;
+                if (!createBuffer(capacity, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                  &indirectBuffer_, &indirectMem_, &indirectMapped_)) {
+                    indirectCapacity_ = 0;
+                    indirectCommandCount_ = 0;
+                } else {
+                    indirectCapacity_ = capacity;
+                }
+            }
+            if (indirectMapped_ && indirectBuffer_ != VK_NULL_HANDLE) {
+                auto* commands = static_cast<VkDrawIndexedIndirectCommand*>(indirectMapped_);
+                for (int i = 0; i < submeshCount; ++i) {
+                    commands[i].indexCount = uint32_t(std::max(0, submeshes[i].index_count));
+                    commands[i].instanceCount = 1;
+                    commands[i].firstIndex = uint32_t(std::max(0, submeshes[i].index_offset));
+                    commands[i].vertexOffset = 0;
+                    commands[i].firstInstance = 0;
+                }
+                indirectCommandCount_ = uint32_t(submeshCount);
+            }
+        }
     }
 
     /* The uploads above were plain CPU stores into host-coherent memory; the GPU needs to see
@@ -2199,7 +2245,8 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
     VkMemoryBarrier bar{};
     bar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     bar.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+    bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+                        VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
                          0, 1, &bar, 0, nullptr, 0, nullptr);
@@ -2239,8 +2286,16 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
         }
         const af_submesh* submeshes = af_engine_submeshes(engine_);
         const int n = af_engine_submesh_count(engine_);
-        for (int i = 0; i < n; ++i)
-            vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1, uint32_t(submeshes[i].index_offset), 0, 0);
+        if (indirectBuffer_ != VK_NULL_HANDLE && indirectCommandCount_ >= uint32_t(n)) {
+            for (int i = 0; i < n; ++i)
+                vkCmdDrawIndexedIndirect(cmd, indirectBuffer_,
+                                         VkDeviceSize(i) * sizeof(VkDrawIndexedIndirectCommand), 1,
+                                         sizeof(VkDrawIndexedIndirectCommand));
+        } else {
+            for (int i = 0; i < n; ++i)
+                vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1,
+                                 uint32_t(submeshes[i].index_offset), 0, 0);
+        }
     }
     vkCmdEndRenderPass(cmd);
 }
@@ -2303,8 +2358,14 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 1, 1,
                                         &materialSet_, 1, &matOffset);
             }
-            vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1,
-                             uint32_t(submeshes[i].index_offset), 0, 0);
+            if (indirectBuffer_ != VK_NULL_HANDLE && indirectCommandCount_ > uint32_t(i)) {
+                vkCmdDrawIndexedIndirect(cmd, indirectBuffer_,
+                                         VkDeviceSize(i) * sizeof(VkDrawIndexedIndirectCommand), 1,
+                                         sizeof(VkDrawIndexedIndirectCommand));
+            } else {
+                vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1,
+                                 uint32_t(submeshes[i].index_offset), 0, 0);
+            }
             ++drawCallsThisFrame_;
         }
         trianglesThisFrame_ = indexCount_ / 3;
@@ -2648,9 +2709,11 @@ void VulkanRenderer::destroyAll() {
         if (atlasImages_[i]) vkDestroyImage(device_, atlasImages_[i], nullptr);
         if (atlasMemory_[i]) vkFreeMemory(device_, atlasMemory_[i], nullptr);
     }
-    for (VkBuffer* b : {&vertexBuffer_, &indexBuffer_, &materialUbo_, &groundBuffer_, &lineBuffer_, &postUbo_})
+    for (VkBuffer* b : {&vertexBuffer_, &indexBuffer_, &indirectBuffer_, &materialUbo_,
+                        &groundBuffer_, &lineBuffer_, &postUbo_})
         if (*b) vkDestroyBuffer(device_, *b, nullptr);
-    for (VkDeviceMemory* m : {&vertexMem_, &indexMem_, &materialUboMem_, &groundMem_, &lineMem_, &postUboMem_})
+    for (VkDeviceMemory* m : {&vertexMem_, &indexMem_, &indirectMem_, &materialUboMem_,
+                              &groundMem_, &lineMem_, &postUboMem_})
         if (*m) vkFreeMemory(device_, *m, nullptr);
     for (size_t i = 0; i < cameraUbos_.size(); ++i) {
         vkDestroyBuffer(device_, cameraUbos_[i], nullptr);
