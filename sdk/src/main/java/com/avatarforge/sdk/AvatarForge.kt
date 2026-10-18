@@ -17,6 +17,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.os.StatFs
 import androidx.core.content.FileProvider
 import com.avatarforge.sdk.render.Quality
@@ -73,11 +74,18 @@ object AvatarForge {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val info = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(info)
+        val resources = DeviceResourceGovernor(context).snapshot()
         val gb = info.totalMem / (1024.0 * 1024.0 * 1024.0)
         val lowRam = activityManager.isLowRamDevice
+        val thermal = resources.thermalStatus
+        val severeThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_SEVERE
+        val moderateThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_MODERATE
         val preset = when {
-            lowRam || gb < 4.0 -> Quality.LOW
-            gb < 6.0 -> Quality.MEDIUM
+            lowRam || gb < 4.0 || info.lowMemory ||
+                resources.availableRamBytes < 1536L * 1024 * 1024 ||
+                resources.state == DeviceResourceState.LOW_STORAGE || severeThermal -> Quality.LOW
+            gb < 6.0 || resources.availableRamBytes < 2L * 1024 * 1024 * 1024 ||
+                moderateThermal -> Quality.MEDIUM
             else -> Quality.HIGH
         }
         return RenderSettings(
@@ -112,6 +120,21 @@ object AvatarForge {
                 appendLine("Clips       : ${it.clipCount}, blendshapes: ${it.blendshapeCount}, regions: ${it.regionCount}")
             }
             appendLine("Free storage: ${stat.availableBytes / 1048576} MB")
+            val resources = DeviceResourceGovernor(context).snapshot()
+            appendLine("Available RAM: ${resources.availableRamBytes / 1048576} MB")
+            appendLine("Resource state: ${resources.state}")
+            appendLine("Thermal status: ${resources.thermalStatus?.let { thermal ->
+                when (thermal) {
+                    PowerManager.THERMAL_STATUS_NONE -> "none"
+                    PowerManager.THERMAL_STATUS_LIGHT -> "light"
+                    PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+                    PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+                    PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+                    PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+                    PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+                    else -> "unknown($thermal)"
+                }
+            } ?: "unavailable on this Android version"}")
         }
     }
 }
