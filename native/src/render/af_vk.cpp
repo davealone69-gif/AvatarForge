@@ -52,6 +52,22 @@ namespace {
 constexpr int kFramesInFlight = 2;
 constexpr int kMaxBloomLevels = 5;
 constexpr uint32_t kPostSlices = 16;   /* one PostUbo slice per post pass                */
+constexpr uint32_t kForwardTilesX = 16;
+constexpr uint32_t kForwardTilesY = 9;
+constexpr uint32_t kForwardMaxLights = 16;
+
+struct ForwardLightGpu {
+    float positionRange[4];
+    float colorIntensity[4];
+    float reserved[4];
+};
+
+struct ForwardLightHeader {
+    float count;
+    float width;
+    float height;
+    float enabled;
+};
 
 /* ------------------------------------------------------------------ helpers ---------------- */
 void setError(std::string* error, const char* what, VkResult result) {
@@ -227,6 +243,7 @@ private:
 
     /* pipelines */
     VkPipelineLayout avatarLayout_ = VK_NULL_HANDLE;   /* set0 camera + set1 material */
+    VkPipelineLayout forwardPlusLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout postLayout_ = VK_NULL_HANDLE;     /* set0 only                   */
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
     VkPipeline forwardPipeline_ = VK_NULL_HANDLE;
@@ -235,10 +252,12 @@ private:
     VkPipeline bloomDownPipeline_ = VK_NULL_HANDLE;
     VkPipeline bloomUpPipeline_ = VK_NULL_HANDLE;
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
+    VkPipeline forwardPlusPipeline_ = VK_NULL_HANDLE;
 
     /* descriptors */
     VkDescriptorSetLayout setLayout0_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout setLayout1_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout setLayout2_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> cameraSets_;     /* kFramesInFlight                    */
     VkDescriptorSet materialSet_ = VK_NULL_HANDLE;      /* set 1, dynamic offset       */
@@ -246,6 +265,7 @@ private:
     std::vector<VkDescriptorSet> bloomUpSets_;    /* per level                          */
     VkDescriptorSet compositeSet_ = VK_NULL_HANDLE;
     VkDescriptorSet lineSet_ = VK_NULL_HANDLE;
+    VkDescriptorSet forwardPlusSet_ = VK_NULL_HANDLE;
 
     VkSampler atlasSampler_ = VK_NULL_HANDLE;
     VkSampler shadowSampler_ = VK_NULL_HANDLE;
@@ -287,6 +307,13 @@ private:
     void* indirectMapped_ = nullptr;
     uint64_t indirectCapacity_ = 0;
     uint32_t indirectCommandCount_ = 0;
+
+    VkBuffer forwardLightsBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory forwardLightsMem_ = VK_NULL_HANDLE;
+    void* forwardLightsMapped_ = nullptr;
+    VkBuffer forwardTilesBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory forwardTilesMem_ = VK_NULL_HANDLE;
+    void* forwardTilesMapped_ = nullptr;
 
     VkBuffer materialUbo_ = VK_NULL_HANDLE;
     VkDeviceMemory materialUboMem_ = VK_NULL_HANDLE;
@@ -1020,6 +1047,16 @@ bool VulkanRenderer::createDescriptorLayouts(std::string* error) {
     li.bindingCount = 6;
     li.pBindings = b1;
     AF_VK_CHECK(vkCreateDescriptorSetLayout(device_, &li, nullptr, &setLayout1_));
+
+    /* Set 2: Forward+ light input and GPU-written tile lists. */
+    VkDescriptorSetLayoutBinding b2[2]{};
+    b2[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+             VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    b2[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+             VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    li.bindingCount = 2;
+    li.pBindings = b2;
+    AF_VK_CHECK(vkCreateDescriptorSetLayout(device_, &li, nullptr, &setLayout2_));
     return true;
 }
 
@@ -1032,6 +1069,40 @@ bool VulkanRenderer::createBuffers(std::string* error) {
         *error = "post uniform buffer allocation failed";
         return false;
     }
+
+    const uint64_t lightBytes = sizeof(ForwardLightHeader) + sizeof(ForwardLightGpu) * kForwardMaxLights;
+    if (!createBuffer(lightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      &forwardLightsBuffer_, &forwardLightsMem_, &forwardLightsMapped_)) {
+        *error = "Forward+ light buffer allocation failed";
+        return false;
+    }
+    if (!createBuffer(uint64_t(kForwardTilesX) * kForwardTilesY * sizeof(uint32_t) * 4,
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      &forwardTilesBuffer_, &forwardTilesMem_, &forwardTilesMapped_)) {
+        *error = "Forward+ tile buffer allocation failed";
+        return false;
+    }
+    auto* header = static_cast<ForwardLightHeader*>(forwardLightsMapped_);
+    header->count = 8.0f;
+    header->width = float(std::max(swapExtent_.width, 1u));
+    header->height = float(std::max(swapExtent_.height, 1u));
+    header->enabled = 1.0f;
+    auto* lights = reinterpret_cast<ForwardLightGpu*>(header + 1);
+    for (uint32_t i = 0; i < 8; ++i) {
+        const float angle = float(i) * 0.78539816339f;
+        lights[i].positionRange[0] = std::cos(angle) * 1.8f;
+        lights[i].positionRange[1] = 1.0f + 0.35f * std::sin(angle * 2.0f);
+        lights[i].positionRange[2] = std::sin(angle) * 1.8f;
+        lights[i].positionRange[3] = 2.5f;
+        lights[i].colorIntensity[0] = 0.65f + 0.35f * std::cos(angle);
+        lights[i].colorIntensity[1] = 0.65f + 0.35f * std::cos(angle + 2.094f);
+        lights[i].colorIntensity[2] = 0.65f + 0.35f * std::cos(angle + 4.188f);
+        lights[i].colorIntensity[3] = 1.0f;
+    }
+    std::memset(static_cast<uint8_t*>(forwardTilesMapped_), 0,
+                size_t(kForwardTilesX) * kForwardTilesY * sizeof(uint32_t) * 4);
 
     /* Studio ground quad: two triangles in the XZ plane, positions only (the shader ignores y). */
     VkBuffer staging = VK_NULL_HANDLE;
@@ -1284,12 +1355,34 @@ void VulkanRenderer::generateMips(VkCommandBuffer cmd, VkImage image, int32_t wi
  *  Pipelines
  * ============================================================================================ */
 bool VulkanRenderer::createPipelines(std::string* error) {
-    VkDescriptorSetLayout sets[2] = {setLayout0_, setLayout1_};
+    VkDescriptorSetLayout sets[3] = {setLayout0_, setLayout1_, setLayout2_};
     VkPipelineLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    li.setLayoutCount = 2;
+    li.setLayoutCount = 3;
     li.pSetLayouts = sets;
     AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &avatarLayout_));
+
+    /* Forward+ uses the same camera block and storage-buffer set as the graphics path. */
+    AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &forwardPlusLayout_));
+    {
+        const AfShaderVk* cs = afShaderVk("forward_plus", AF_STAGE_COMP);
+        if (!cs) { *error = "forward_plus.comp missing from the SPIR-V table"; return false; }
+        VkShaderModule module = makeModule(cs);
+        if (!module) { *error = "Forward+ compute module creation failed"; return false; }
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = module;
+        stage.pName = "main";
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage = stage;
+        ci.layout = forwardPlusLayout_;
+        const VkResult r = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr,
+                                                     &forwardPlusPipeline_);
+        vkDestroyShaderModule(device_, module, nullptr);
+        if (r != VK_SUCCESS) { setError(error, "vkCreateComputePipelines(Forward+)", r); return false; }
+    }
 
     li.setLayoutCount = 1;
     AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &postLayout_));
@@ -1635,17 +1728,18 @@ bool VulkanRenderer::createPipelines(std::string* error) {
  *  Descriptors
  * ============================================================================================ */
 bool VulkanRenderer::createDescriptorPool(std::string* error) {
-    const int sets = 1 /*forward*/ + 2 * bloomLevels_ + 2 /*composite, spare*/;
+    const int sets = 1 /*forward*/ + 2 * bloomLevels_ + 2 /*composite, spare*/ + 1 /*Forward+*/;
     const int samplers = sets * 4 + 8;
     const int ubos = sets * 2 + 4;
-    VkDescriptorPoolSize sizes[2] = {
+    VkDescriptorPoolSize sizes[3] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, uint32_t(samplers)},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, uint32_t(ubos)},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
     };
     VkDescriptorPoolCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     ci.maxSets = uint32_t(sets + 4);
-    ci.poolSizeCount = 2;
+    ci.poolSizeCount = 3;
     ci.pPoolSizes = sizes;
     AF_VK_CHECK(vkCreateDescriptorPool(device_, &ci, nullptr, &descriptorPool_));
     return true;
@@ -1690,6 +1784,11 @@ bool VulkanRenderer::writeDescriptorSets(std::string* error) {
     compositeSet_ = compositeSet;
     bloomDownSets_ = bloomDown;
     bloomUpSets_ = bloomUp;
+
+    VkDescriptorSetAllocateInfo fpa = ai;
+    fpa.descriptorSetCount = 1;
+    fpa.pSetLayouts = &setLayout2_;
+    AF_VK_CHECK(vkAllocateDescriptorSets(device_, &fpa, &forwardPlusSet_));
 
     VkDescriptorBufferInfo camInfo{cameraUbos_.empty() ? VK_NULL_HANDLE : cameraUbos_[0], 0, sizeof(CameraUbo)};
     VkDescriptorBufferInfo postInfo{postUbo_, 0, sizeof(PostUbo)};
@@ -1755,6 +1854,21 @@ bool VulkanRenderer::writeDescriptorSets(std::string* error) {
             w[i + 1].pImageInfo = &tex[i];
         }
         vkUpdateDescriptorSets(device_, 6, w, 0, nullptr);
+    }
+    {
+        VkDescriptorBufferInfo lights{forwardLightsBuffer_, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo tiles{forwardTilesBuffer_, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet w[2]{};
+        for (int i = 0; i < 2; ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = forwardPlusSet_;
+            w[i].dstBinding = uint32_t(i);
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        }
+        w[0].pBufferInfo = &lights;
+        w[1].pBufferInfo = &tiles;
+        vkUpdateDescriptorSets(device_, 2, w, 0, nullptr);
     }
     (void)error;
     return true;
@@ -2246,9 +2360,10 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
     bar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     bar.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
     bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
-                        VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+                        VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 1, &bar, 0, nullptr, 0, nullptr);
     meshDirty_ = false;
 }
@@ -2336,6 +2451,9 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1, &set0, 2, offsets0);
             const uint32_t matOffset = uint32_t(materialCount_) * materialStride_;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 1, 1, &materialSet_, 1, &matOffset);
+            if (forwardPlusSet_ != VK_NULL_HANDLE)
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 2, 1,
+                                        &forwardPlusSet_, 0, nullptr);
         }
         vkCmdDraw(cmd, 4, 1, 0, 0);
         ++drawCallsThisFrame_;
@@ -2349,6 +2467,9 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
         vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         if (set0 != VK_NULL_HANDLE)
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1, &set0, 2, offsets0);
+        if (forwardPlusSet_ != VK_NULL_HANDLE)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 2, 1,
+                                    &forwardPlusSet_, 0, nullptr);
 
         const af_submesh* submeshes = af_engine_submeshes(engine_);
         const int n = af_engine_submesh_count(engine_);
@@ -2394,6 +2515,28 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     vkBeginCommandBuffer(cmd, &bi);
 
     uploadDynamicGeometry(cmd);
+
+    /* 0. Forward+ light culling. The compute shader writes one compact light list per screen tile;
+       the explicit barrier keeps the result ordered before any fragment stage consumes it. */
+    if (forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusPipeline_);
+        const uint32_t cameraOffset = frameIndex_ * uboAlignment_;
+        VkDescriptorSet sets[3] = {cameraSets_[0], materialSet_, forwardPlusSet_};
+        const uint32_t dynamicOffsets[2] = {cameraOffset, 0};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusLayout_, 0, 3,
+                                sets, 2, dynamicOffsets);
+        vkCmdDispatch(cmd, (kForwardTilesX + 7) / 8, (kForwardTilesY + 7) / 8, 1);
+        VkBufferMemoryBarrier tileBarrier{};
+        tileBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        tileBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        tileBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        tileBarrier.srcQueueFamilyIndex = tileBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        tileBarrier.buffer = forwardTilesBuffer_;
+        tileBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 1,
+                             &tileBarrier, 0, nullptr);
+    }
 
     /* 1. shadow */
     recordShadowPass(cmd);
@@ -2682,7 +2825,8 @@ void VulkanRenderer::destroyTargets() {
 
 void VulkanRenderer::destroyPipelines() {
     for (VkPipeline* p : {&shadowPipeline_, &forwardPipeline_, &groundPipeline_, &linePipeline_,
-                          &bloomDownPipeline_, &bloomUpPipeline_, &compositePipeline_})
+                          &bloomDownPipeline_, &bloomUpPipeline_, &compositePipeline_,
+                          &forwardPlusPipeline_})
         if (*p) { vkDestroyPipeline(device_, *p, nullptr); *p = VK_NULL_HANDLE; }
     if (descriptorPool_) { vkDestroyDescriptorPool(device_, descriptorPool_, nullptr); descriptorPool_ = VK_NULL_HANDLE; }
     cameraSets_.clear();
@@ -2691,6 +2835,7 @@ void VulkanRenderer::destroyPipelines() {
     materialSet_ = VK_NULL_HANDLE;
     compositeSet_ = VK_NULL_HANDLE;
     lineSet_ = VK_NULL_HANDLE;
+    forwardPlusSet_ = VK_NULL_HANDLE;
 }
 
 void VulkanRenderer::destroyAll() {
@@ -2710,10 +2855,12 @@ void VulkanRenderer::destroyAll() {
         if (atlasMemory_[i]) vkFreeMemory(device_, atlasMemory_[i], nullptr);
     }
     for (VkBuffer* b : {&vertexBuffer_, &indexBuffer_, &indirectBuffer_, &materialUbo_,
-                        &groundBuffer_, &lineBuffer_, &postUbo_})
+                        &groundBuffer_, &lineBuffer_, &postUbo_, &forwardLightsBuffer_,
+                        &forwardTilesBuffer_})
         if (*b) vkDestroyBuffer(device_, *b, nullptr);
     for (VkDeviceMemory* m : {&vertexMem_, &indexMem_, &indirectMem_, &materialUboMem_,
-                              &groundMem_, &lineMem_, &postUboMem_})
+                              &groundMem_, &lineMem_, &postUboMem_, &forwardLightsMem_,
+                              &forwardTilesMem_})
         if (*m) vkFreeMemory(device_, *m, nullptr);
     for (size_t i = 0; i < cameraUbos_.size(); ++i) {
         vkDestroyBuffer(device_, cameraUbos_[i], nullptr);
@@ -2726,9 +2873,11 @@ void VulkanRenderer::destroyAll() {
     if (shadowSampler_) vkDestroySampler(device_, shadowSampler_, nullptr);
     if (postSampler_) vkDestroySampler(device_, postSampler_, nullptr);
     if (avatarLayout_) vkDestroyPipelineLayout(device_, avatarLayout_, nullptr);
+    if (forwardPlusLayout_) vkDestroyPipelineLayout(device_, forwardPlusLayout_, nullptr);
     if (postLayout_) vkDestroyPipelineLayout(device_, postLayout_, nullptr);
     if (setLayout0_) vkDestroyDescriptorSetLayout(device_, setLayout0_, nullptr);
     if (setLayout1_) vkDestroyDescriptorSetLayout(device_, setLayout1_, nullptr);
+    if (setLayout2_) vkDestroyDescriptorSetLayout(device_, setLayout2_, nullptr);
 
     for (VkSemaphore s : imageAvailable_) vkDestroySemaphore(device_, s, nullptr);
     for (VkSemaphore s : renderFinished_) vkDestroySemaphore(device_, s, nullptr);

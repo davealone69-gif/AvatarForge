@@ -46,9 +46,11 @@ REQUIRED = {
     ("line", "vert"), ("line", "frag"),
     ("fullscreen", "vert"),
     ("bloom_down", "frag"), ("bloom_up", "frag"), ("composite", "frag"),
+    ("forward_plus", "comp"),
 }
 
-GLSL_STAGE = {"vert": "vert", "frag": "frag"}
+GLSL_STAGE = {"vert": "vert", "frag": "frag", "comp": "comp"}
+STAGE_ENUM = {"vert": "AF_STAGE_VERT", "frag": "AF_STAGE_FRAG", "comp": "AF_STAGE_COMP"}
 
 
 def find_glslc():
@@ -171,7 +173,7 @@ def emit_vk(entries, path):
     L.append("static const AfShaderVk kTable[] = {\n")
     for (name, stage), words in entries:
         L.append('    {"%s", %s, kSpv_%s_%s, %du},\n'
-                 % (name, "AF_STAGE_VERT" if stage == "vert" else "AF_STAGE_FRAG", name, stage, len(words)))
+                 % (name, STAGE_ENUM[stage], name, stage, len(words)))
     L.append("};\n\n")
     L.append("} /* namespace shaders_vk */\n} /* namespace af */\n\n#endif\n")
     open(path, "w", encoding="utf-8").write("".join(L))
@@ -205,7 +207,7 @@ def emit_gl(entries, path):
     L.append("static const AfShaderGl kTable[] = {\n")
     for (name, stage), _ in entries:
         L.append('    {"%s", %s, kSrc_%s_%s},\n'
-                 % (name, "AF_STAGE_VERT" if stage == "vert" else "AF_STAGE_FRAG", name, stage))
+                 % (name, STAGE_ENUM[stage], name, stage))
     L.append("};\n\n")
     L.append("} /* namespace shaders_gl */\n} /* namespace af */\n\n#endif\n")
     open(path, "w", encoding="utf-8").write("".join(L))
@@ -218,7 +220,7 @@ def main():
     stages = []
     for fn in sorted(os.listdir(SHADER_DIR)):
         base, ext = os.path.splitext(fn)
-        if ext in (".vert", ".frag"):
+        if ext in (".vert", ".frag", ".comp"):
             stages.append((base, ext[1:], os.path.join(SHADER_DIR, fn)))
 
     missing = REQUIRED - {(n, s) for n, s, _ in stages}

@@ -114,6 +114,21 @@ AF_TEX(1, 3) uniform sampler2D uMetalRoughTex;
 AF_TEX(1, 4) uniform sampler2D uOcclusionTex;
 AF_TEX(1, 5) uniform sampler2D uSubsurfaceTex;
 
+#ifdef AF_VULKAN
+struct AfForwardLight {
+    vec4 positionRange;
+    vec4 colorIntensity;
+    vec4 reserved;
+};
+layout(std430, set = 2, binding = 0) readonly buffer ForwardLightBuffer {
+    vec4 header;
+    AfForwardLight lights[16];
+} fpLights;
+layout(std430, set = 2, binding = 1) readonly buffer ForwardTileBuffer {
+    uvec4 tileLists[16 * 9];
+} fpTiles;
+#endif
+
 /* ------------------------------------------------------------------ stage interface -------- */
 /*
  * The vertex->fragment interface, declared once so the two stages cannot drift. The stage kind is
@@ -517,6 +532,34 @@ float afAshikhminV(float ndv, float ndl) {
     return 1.0 / max(4.0 * (ndl + ndv - ndl * ndv), 1e-4);
 }
 
+vec3 afForwardPlus(vec3 p, vec3 n, vec3 v, vec3 albedo) {
+#if defined(AF_VULKAN) && !defined(AF_STAGE_VERTEX)
+    if (fpLights.header.w < 0.5) return vec3(0.0);
+    float width = max(fpLights.header.y, 1.0);
+    float height = max(fpLights.header.z, 1.0);
+    uint tileX = min(uint(gl_FragCoord.x / (width / 16.0)), 15u);
+    uint tileY = min(uint(gl_FragCoord.y / (height / 9.0)), 8u);
+    uvec4 tile = fpTiles.tileLists[tileY * 16u + tileX];
+    vec3 result = vec3(0.0);
+    for (uint slot = 0u; slot < min(tile.x, 3u); ++slot) {
+        AfForwardLight light = fpLights.lights[tile[slot + 1u]];
+        vec3 toLight = light.positionRange.xyz - p;
+        float distanceToLight = length(toLight);
+        vec3 direction = toLight / max(distanceToLight, 1e-4);
+        float range = max(light.positionRange.w, 0.01);
+        float falloff = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
+        falloff *= falloff;
+        float diffuse = max(dot(n, direction), 0.0);
+        float specular = pow(max(dot(reflect(-direction, n), v), 0.0), 24.0);
+        result += light.colorIntensity.rgb * light.colorIntensity.w * falloff *
+                  (albedo * diffuse + vec3(specular * 0.08));
+    }
+    return result;
+#else
+    return vec3(0.0);
+#endif
+}
+
 /* ------------------------------------------------------------------ the light loop --------- */
 vec4 afShade(vec3 p, vec3 geometricNormal, vec4 tangent, vec2 uv, vec3 v) {
     af_const AfSurface s = afSampleSurface(uv);
@@ -612,7 +655,8 @@ vec4 afShade(vec3 p, vec3 geometricNormal, vec4 tangent, vec2 uv, vec3 v) {
     }
 
     af_const vec3 specIbl = afSpecularIbl(n, v, f0, s.roughness) * s.occlusion;
-    vec4 result = vec4(ambientDiffuse + diffuse * sun + specular + specIbl, s.alpha);
+    vec3 localLights = afForwardPlus(p, n, v, s.albedo * (1.0 - s.metallic));
+    vec4 result = vec4(ambientDiffuse + diffuse * sun + specular + specIbl + localLights, s.alpha);
     return afApplyHighlight(result, n, p);
 }
 

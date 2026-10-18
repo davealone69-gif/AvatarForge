@@ -8,7 +8,7 @@
 
 namespace af {
 
-enum AfShaderStage { AF_STAGE_VERT = 0, AF_STAGE_FRAG = 1 };
+enum AfShaderStage { AF_STAGE_VERT = 0, AF_STAGE_FRAG = 1, AF_STAGE_COMP = 2 };
 
 /* Vulkan: SPIR-V words. In GLSL, arrays of uint32_t are 4-byte aligned and SPIR-V only requires
    4-byte alignment, so the baked arrays are directly usable in VkShaderModuleCreateInfo. */
