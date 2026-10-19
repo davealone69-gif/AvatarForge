@@ -29,7 +29,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -122,57 +122,57 @@ class MainActivity : ComponentActivity() {
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
 
-        BackHandler(enabled = screen != Screen.INPUT) {
-            Box(Modifier.fillMaxSize()) {
-        when (screen) {
-                Screen.VIEWER -> screen = Screen.INPUT
-                Screen.PROGRESS -> {
-                    job?.cancel()
-                    screen = Screen.INPUT
+        Box(Modifier.fillMaxSize()) {
+            BackHandler(enabled = screen != Screen.INPUT) {
+                when (screen) {
+                    Screen.VIEWER -> screen = Screen.INPUT
+                    Screen.PROGRESS -> {
+                        job?.cancel()
+                        screen = Screen.INPUT
+                    }
+                    Screen.INPUT -> Unit
                 }
-                Screen.INPUT -> Unit
             }
-        }
 
-        val expressionNames = remember { engine.blendshapeNames() }
+            val expressionNames = remember { engine.blendshapeNames() }
 
         /* Storage Access Framework export: registered at composition scope, launched from the
            export panel. The app writes through the returned URI, so it needs no storage
            permission and no manifest entry. */
-        val saveLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.CreateDocument("model/gltf-binary"),
-        ) { uri: Uri? ->
-            val pending = glbToSave
-            if (uri != null && pending != null) {
-                val written = runCatching { AvatarForge.copyToDestination(context, pending.glbFile, uri) }
-                Toast.makeText(
-                    context,
-                    written.fold({ "Saved %.1f MB".format(it / 1048576.0) }, { "Export failed: ${it.message}" }),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-            glbToSave = null
-        }
-
-        fun begin(started: JobHandle) {
-            job = started
-            screen = Screen.PROGRESS
-            scope.launch {
-                val outcome = runCatching { started.await() }
-                outcome.onSuccess {
-                    result = it
-                    surfaceView?.attachEngine(engine.nativeHandle)
-                    screen = Screen.VIEWER
-                }.onFailure { error ->
+            val saveLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.CreateDocument("model/gltf-binary"),
+            ) { uri: Uri? ->
+                val pending = glbToSave
+                if (uri != null && pending != null) {
+                    val written = runCatching { AvatarForge.copyToDestination(context, pending.glbFile, uri) }
                     Toast.makeText(
                         context,
-                        "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
+                        written.fold({ "Saved %.1f MB".format(it / 1048576.0) }, { "Export failed: ${it.message}" }),
                         Toast.LENGTH_LONG,
                     ).show()
-                    screen = Screen.INPUT
+                }
+                glbToSave = null
+            }
+
+            fun begin(started: JobHandle) {
+                job = started
+                screen = Screen.PROGRESS
+                scope.launch {
+                    val outcome = runCatching { started.await() }
+                    outcome.onSuccess {
+                        result = it
+                        surfaceView?.attachEngine(engine.nativeHandle)
+                        screen = Screen.VIEWER
+                    }.onFailure { error ->
+                        Toast.makeText(
+                            context,
+                            "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        screen = Screen.INPUT
+                    }
                 }
             }
-        }
 
         LaunchedEffect(job) { job?.status?.collect { status = it } }
         LaunchedEffect(Unit) {
@@ -344,7 +344,7 @@ class MainActivity : ComponentActivity() {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .statusBarsPadding()
+                    .safeDrawingPadding()
                     .padding(8.dp),
             ) {
                 TextButton(onClick = { menuExpanded = true }) {
