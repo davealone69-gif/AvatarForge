@@ -33,10 +33,10 @@ namespace af {
 struct EnvironmentParams {
     float sunAzimuthDeg = 42.0f;
     float sunElevationDeg = 38.0f;
-    float sunIntensity = 3.4f;
+    float sunIntensity = 1.5f;
     float turbidity = 2.6f;
     float groundAlbedo = 0.28f;
-    float intensity = 1.0f;
+    float intensity = 0.65f;
 
     /* Unit vector pointing *towards* the sun. */
     void sunDirection(float out[3]) const {

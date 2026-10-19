@@ -64,7 +64,7 @@ struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
     bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
     bool  enableShadows        = true;
-    bool  enableBloom          = true;
+    bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
     int   msaaSamples          = 4;      /* 1/2/4/8 accepted; backend clamps to what it supports */
     int   shadowMapSize        = 2048;   /* square; 1024/2048/4096                             */
@@ -74,11 +74,11 @@ struct RendererOptions {
        renders in docs/ were made with. All parameters are live-editable from the viewer. */
     float sunAzimuthDeg        = 42.0f;
     float sunElevationDeg      = 38.0f;
-    float sunIntensity         = 3.4f;   /* irradiance multiplier, pre-tonemap HDR             */
+    float sunIntensity         = 1.5f;   /* irradiance multiplier, pre-tonemap HDR             */
     float turbidity            = 2.6f;   /* atmospheric turbidity, 1.8..6.0                    */
     float groundAlbedo         = 0.28f;
-    float exposure             = 1.0f;
-    float environmentIntensity = 1.0f;
+    float exposure             = 0.65f;
+    float environmentIntensity = 0.65f;
     float shadowSoftness       = 1.0f;   /* PCF radius in texels                               */
     bool  groundPlane          = true;   /* draws the contact-shadow plane under the figure    */
 };
