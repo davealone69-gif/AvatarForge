@@ -327,6 +327,7 @@ class MainActivity : ComponentActivity() {
                                         surfaceView = view
                                         surfaceViewState = view
                                         view.bind(engine)
+                                        view.attachEngine(engine.nativeHandle)
                                         view.applySettings(settings)
                                         view.applyCamera(camera)
                                         view.setFrameLoopEnabled(true)
