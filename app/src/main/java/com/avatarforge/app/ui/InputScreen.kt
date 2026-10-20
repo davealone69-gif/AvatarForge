@@ -89,6 +89,7 @@ fun InputScreen(
     onImageA: (Bitmap?) -> Unit,
     onImageB: (Bitmap?) -> Unit,
     analysisNote: String?,
+    generationError: String?,
     onGeneratePrompt: () -> Unit,
     onGenerateImages: () -> Unit,
     enabled: Boolean,
@@ -168,6 +169,19 @@ fun InputScreen(
                 )
             }
         }
+        if (generationError != null) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text(
+                        generationError,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        }
+
         if (analysisNote != null) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
