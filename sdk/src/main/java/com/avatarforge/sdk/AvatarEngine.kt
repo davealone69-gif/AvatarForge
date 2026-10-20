@@ -920,8 +920,11 @@ class AvatarEngine private constructor(private val appContext: Context) {
                            it so typed attributes win, then report the exact spec that the kernel will
                            build (not a Kotlin-side approximation). */
                         val resultSpec = if (hasImages || request.prompt.isNotBlank()) {
-                            val specInts = IntArray(request.spec.packInts().size)
-                            val specFloats = FloatArray(request.spec.packFloats().size)
+                            // The native prompt analyser treats these arrays as in/out values.
+                            // Seed them with the resolved request spec; zero-filled arrays erase the
+                            // caller's measurements and can make both prompt and image generation fail.
+                            val specInts = request.spec.packInts()
+                            val specFloats = request.spec.packFloats()
                             val outPrompt = arrayOfNulls<String>(1)
                             val matched = NativeBridge.engineAnalyzePrompt(
                                 h, request.prompt, specInts, specFloats, outPrompt,
