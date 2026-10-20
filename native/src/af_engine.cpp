@@ -161,6 +161,7 @@ struct af_engine {
 
     uint64_t budgetBytes = 1536ull * 1024ull * 1024ull;
     uint64_t peakFieldBytes = 0;
+    int atlasResolution = 2048;
     uint32_t dirty = DIRTY_ALL;
     bool geometryReady = false;
     std::string lastError;
@@ -541,6 +542,7 @@ int32_t af_engine_reset(af_engine* engine, const af_spec* spec) {
         engine->dirty = DIRTY_ALL;
         engine->stage = AF_STAGE_IDLE;
         engine->peakFieldBytes = 0;
+        engine->atlasResolution = 2048;
         for (int i = 0; i < AF_TEX_COUNT; ++i) {
             engine->texValid[i] = false;
             engine->texViews[i] = af_texture{};
@@ -555,7 +557,14 @@ int32_t af_engine_reset(af_engine* engine, const af_spec* spec) {
 int32_t af_engine_set_memory_budget(af_engine* engine, uint64_t bytes) {
     if (!engine) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
     if (bytes < 64ull * 1024ull * 1024ull) return static_cast<int32_t>(AF_ERR_INVALID_ARG);   /* below the floor */
-    engine->budgetBytes = bytes;
+    if (engine->budgetBytes != bytes) {
+        engine->budgetBytes = bytes;
+        if (engine->geometryReady) {
+            /* Rebuild from anatomy rather than re-unwrapping an already seam-split mesh. */
+            engine->dirty = DIRTY_ALL;
+            engine->geometryReady = false;
+        }
+    }
     return static_cast<int32_t>(AF_OK);
 }
 
@@ -606,6 +615,9 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
         if (!images || image_count <= 0) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         engine->stage = AF_STAGE_ANALYZE_INPUTS;
         engine->analysisCount = 0;
+        /* Failed images are skipped, so original input indices cannot index the compact analysis
+           array. Retain this map for later role selection. */
+        int32_t analysisIndex[4] = {-1, -1, -1, -1};
         int32_t produced = 0;
         for (int32_t i = 0; i < image_count && i < 4; ++i) {
             if (engine->cancelled()) return static_cast<int32_t>(AF_ERR_CANCELLED);
@@ -616,6 +628,7 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
                 engine->log(AF_LOG_WARN, "reference image could not be analysed (empty or unreadable)");
                 continue;
             }
+            analysisIndex[i] = engine->analysisCount;
             engine->analyses[engine->analysisCount++] = a;
             if (out_analyses && produced < max_analyses) out_analyses[produced] = a;
             ++produced;
@@ -627,8 +640,13 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
         const af_image_analysis* identity = &engine->analyses[0];
         const af_image_analysis* clothing = nullptr;
         for (int32_t i = 0; i < image_count && i < 4; ++i) {
-            if (images[i].role == AF_IMAGE_CLOTHING) clothing = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
-            if (images[i].role == AF_IMAGE_IDENTITY) identity = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
+            if (analysisIndex[i] < 0) continue;
+            if (images[i].role == AF_IMAGE_CLOTHING) {
+                clothing = &engine->analyses[analysisIndex[i]];
+            }
+            if (images[i].role == AF_IMAGE_IDENTITY) {
+                identity = &engine->analyses[analysisIndex[i]];
+            }
         }
         float confidence = 0.0f;
         specFromAnalysis(*identity, clothing, &engine->spec, &confidence);
@@ -742,9 +760,20 @@ int32_t af_engine_unwrap_uv(af_engine* engine) {
         if (!engine->geometryReady) return static_cast<int32_t>(AF_ERR_NOT_READY);
         engine->stage = AF_STAGE_UV_UNWRAP;
         engine->progress(AF_STAGE_UV_UNWRAP, 0.2f, "charting and packing the atlas");
+        /* A previous bake is stale once UVs change. Release it before selecting the next atlas
+           so the budget calculation reflects peak, not additive, texture memory. */
+        engine->textures = TextureSet();
+        engine->layout = UVLayout();
+        refreshTextures(engine);
+        const int resolution = atlasResolutionForBudget(engine->budgetBytes, engine->peakFieldBytes);
+        if (resolution == 0) {
+            engine->lastError = "UV unwrap: memory budget cannot fit even a 256x256 texture atlas";
+            return static_cast<int32_t>(AF_ERR_BUDGET_EXCEEDED);
+        }
+        engine->atlasResolution = resolution;
         const float t0 = nowMs();
         UVLayout layout;
-        if (!unwrapAtlas(&engine->mesh, 2048, 2048, &layout)) {
+        if (!unwrapAtlas(&engine->mesh, resolution, resolution, &layout)) {
             engine->lastError = "UV unwrap failed";
             return static_cast<int32_t>(AF_ERR_INTERNAL);
         }
@@ -753,8 +782,9 @@ int32_t af_engine_unwrap_uv(af_engine* engine) {
         engine->tUv = nowMs() - t0;
         engine->dirty = DIRTY_ALL & ~(DIRTY_METRICS | DIRTY_GEOMETRY | DIRTY_UV);
         char buf[160];
-        std::snprintf(buf, sizeof(buf), "%zu charts, coverage %.2f, %.0f texels/m, %.0f ms",
-                      layout.charts.size(), layout.coverage, layout.texelsPerMeter, engine->tUv);
+        std::snprintf(buf, sizeof(buf), "%zu charts, %dx%d, coverage %.2f, %.0f texels/m, %.0f ms",
+                      layout.charts.size(), layout.texWidth, layout.texHeight, layout.coverage,
+                      layout.texelsPerMeter, engine->tUv);
         engine->log(AF_LOG_INFO, buf);
         rebuildVertexBuffers(engine, false);
         rebuildVertexBuffers(engine, true);
@@ -769,9 +799,9 @@ int32_t af_engine_bake_textures(af_engine* engine) {
         engine->stage = AF_STAGE_BAKE_TEXTURES;
         engine->progress(AF_STAGE_BAKE_TEXTURES, 0.1f, "baking PBR maps");
         BakeOptions bo;
-        bo.width = 2048;
-        bo.height = 2048;
-        const uint64_t need = static_cast<uint64_t>(bo.width) * bo.height * 17ull;
+        bo.width = engine->atlasResolution;
+        bo.height = engine->atlasResolution;
+        const uint64_t need = atlasBakeWorkspaceBytes(bo.width);
         const int32_t budget = ensureBudget(engine, need, "texture bake");
         if (budget != AF_OK) return budget;
         const float t0 = nowMs();

@@ -36,13 +36,42 @@ Device verification requires a real Android device and must be reported separate
 tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
 ```
 
+## Current review state (2026-10-20)
+
+- Native host harness: **464/464**. `[0b]` covers role-to-analysis mapping when an earlier image is
+  rejected; `[10b]` the culler; `[10c]` GPU profiles, ASTC/ETC2 encoding and async polling plus
+  `parallelFor` exception/cancellation; `[10d]` the safe mesh-decimator candidate; `[10e]` renderer-owned
+  index-only LOD data. The native ABI test executes the staged graph before finalization. GL/Vulkan/JNI
+  sources pass host syntax-only checks using downloaded Khronos headers and Android type stubs; this is
+  not NDK validation. Host CMake configuration and scalar ASTC/ETC2 static targets build.
+- Kotlin Phase 1–3 follow-up is in the working tree and **not compiled**: serialized engine jobs,
+  renderer leases, render-thread picking/blendshapes/teardown, native-parity image roles, resource
+  deferral, a topological stage graph with cancellation boundaries, monotone weighted progress,
+  API-29+ thermal quality feedback, and optional Android 12+ ADPF frame-work hints. Graph/progress/
+  thermal JVM tests are present but unrun.
+- Atlas selection adapts among 2048², 1024², 512² and 256² using a conservative 19-byte-per-texel
+  bake-workspace estimate. Vendored ASTC/ETC2 encoders, semantic mip generation, async compression,
+  compressed GL/Vulkan uploads, device-format checks and raw fallback are now implemented. The codec
+  tests pass; GPU uploads and per-device behavior remain unverified on Android hardware.
+- The Rust end-to-end clip check compares against `vertices_rest()`, verifies REST restoration, and
+  checks that walk → REST → walk does not accumulate drift. The Rust cdylib is `libafcore_rust.so` so
+  Cargo cannot substitute it for the C++ reference `libafcore.so`.
+- The environment has no Android SDK/NDK or standalone Kotlin compiler and only Java 11 (JDK 17 is
+  required). Gradle dependency resolution failed before compilation due to Maven TLS handshakes. The
+  checked-in APK/AAR remain the 2026-10-18 build; no Android package or physical-device verification
+  has been performed for these edits.
+- Renderer LOD, adaptive atlas selection, staged jobs and thermal policy are source implementations,
+  not device-verified. Phase 4 is deferred by the current scope.
+
 ## Work order
 
-1. Reproduce the current main-branch state and capture the first failing command, if any.
-2. Fix the Rust end-to-end test/clip assertion mismatch noted in `STATUS.md`; verify against the current implementation rather than weakening the assertion.
-3. Wire the existing scene/culling/LOD layer into the renderer only where the current renderer contracts support it; add host regression coverage first.
-4. Run the host verification suite and Android package workflow.
-5. Install and exercise the resulting APK on a physical ARM64 Android device before marking runtime work VERIFIED.
+1. Reproduce the checked-out branch state and capture the first failing command, if any.
+2. Keep the host regressions green: `tools/build_host.sh test`, Rust workspace tests, and the ignored
+   Rust end-to-end engine test. Do not weaken assertions to hide implementation defects.
+3. Build the Android packages with the pinned JDK/SDK/NDK. Refresh prebuilt libraries/APKs only from
+   that build and keep release signing credentials out of the repository.
+4. Install the resulting APK on a physical ARM64 Android device; capture the renderer, lifecycle,
+   thermal and performance evidence in `DEVICE.md` before marking runtime behavior VERIFIED.
 
 ## Evidence labels
 

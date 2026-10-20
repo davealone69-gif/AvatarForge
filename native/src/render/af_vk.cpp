@@ -31,9 +31,12 @@
  *  straightforward dynamic upload of af_engine_vertices() whenever invalidateMesh() is called.
  */
 #include "af_render.h"
+#include "af_avatar_culler.h"
+#include "af_avatar_lod.h"
 #include "af_render_common.h"
 #include "af_environment.h"
 #include "af_shaders.h"
+#include "af_texture_compression.h"
 
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
@@ -43,6 +46,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -95,6 +99,47 @@ const char* vkDeviceTypeName(VkPhysicalDeviceType t) {
     }
 }
 
+uint32_t maxSampleCount(VkSampleCountFlags flags) {
+    for (VkSampleCountFlagBits candidate : {VK_SAMPLE_COUNT_8_BIT, VK_SAMPLE_COUNT_4_BIT,
+                                             VK_SAMPLE_COUNT_2_BIT, VK_SAMPLE_COUNT_1_BIT})
+        if (flags & candidate) return static_cast<uint32_t>(candidate);
+    return 1;
+}
+
+bool vkFormatSupportsLinearSampling(VkPhysicalDevice phys, VkFormat format) {
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(phys, format, &properties);
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    return (properties.optimalTilingFeatures & need) == need;
+}
+
+VkFormat vkFormatForAtlasEncoding(AtlasTextureEncoding encoding) {
+    switch (encoding) {
+        case AtlasTextureEncoding::ASTC_6X6_UNORM: return VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+        case AtlasTextureEncoding::ASTC_6X6_SRGB: return VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
+        case AtlasTextureEncoding::ETC2_RGBA8_SRGB: return VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK;
+        case AtlasTextureEncoding::ETC2_RGBA8_UNORM: return VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
+        case AtlasTextureEncoding::ETC2_R11_UNORM: return VK_FORMAT_EAC_R11_UNORM_BLOCK;
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
+uint64_t uncompressedAtlasFootprint(int width, int height, int channels) {
+    if (width <= 0 || height <= 0 || channels <= 0) return 0;
+    uint64_t total = 0;
+    int w = width, h = height;
+    for (int level = 0; level < 12; ++level) {
+        const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+        if (pixels > (UINT64_MAX - total) / static_cast<uint64_t>(channels)) return UINT64_MAX;
+        total += pixels * static_cast<uint64_t>(channels);
+        if (w == 1 && h == 1) break;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+    }
+    return total;
+}
+
 /* ============================================================================================
  *  VulkanRenderer
  * ============================================================================================ */
@@ -109,6 +154,7 @@ public:
     void setCamera(const CameraState& camera) override;
     void setOptions(const RendererOptions& options) override;
     RendererOptions options() const override { return options_; }
+    GpuProfile gpuProfile() const override { return gpuProfile_; }
     void renderFrame(float deltaSeconds) override;
     void setSkeletonVisible(bool visible) override { skeletonVisible_ = visible; }
     void setFlatShading(bool flat) override { flatShading_ = flat; }
@@ -136,6 +182,10 @@ private:
     bool createPipelines(std::string* error);
     bool createBuffers(std::string* error);
     bool uploadAtlas(std::string* error);
+    void startAtlasCompression();
+    void pollAtlasCompression();
+    bool uploadCompressedAtlas(const EncodedAtlas& atlas, std::string* error);
+    void waitAtlasCompression();
     void destroySwapchainResources();
     void destroyPipelines();
     void destroyAll();
@@ -179,6 +229,11 @@ private:
     RendererOptions activeTargetOptions_{};  /* last target/pipeline set that built successfully */
     RendererInfo info_{};
     RendererStats stats_{};
+    GpuDeviceCaps gpuCaps_{};
+    GpuProfile gpuProfile_{};
+    AsyncAtlasCompression atlasCompressionJob_;
+    bool atlasCompressionAttempted_ = false;
+    uint64_t atlasGpuBytes_[AF_TEX_COUNT] = {};
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
@@ -333,6 +388,11 @@ private:
     /* scene */
     af_engine* engine_ = nullptr;
     CameraState camera_{};
+    AvatarCuller avatarCuller_;
+    AvatarLodSet avatarLods_;
+    int activeLod_ = 0;
+    bool indexDirty_ = true;
+    bool avatarVisible_ = false;
     FrameScene scene_{};
     EnvironmentParams env_{};
     ShGlobal sh_{};
@@ -361,6 +421,12 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     if (!createSurface(window, error)) return false;
     if (!pickPhysicalDevice(error)) return false;
     if (!createDevice(error)) return false;
+    options_.msaaSamples = std::min(std::max(1, options_.msaaSamples),
+                                    static_cast<int>(gpuProfile_.maxMsaaSamples));
+    options_.shadowMapSize = std::max(512, std::min(options_.shadowMapSize, gpuProfile_.maxShadowMapSize));
+    options_.bloomLevels = std::max(0, std::min(options_.bloomLevels, gpuProfile_.maxBloomLevels));
+    options_.effectiveQualityLevel = std::max(0, std::min(options_.effectiveQualityLevel,
+                                                         gpuProfile_.maxQualityLevel));
 
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(phys_, &props);
@@ -376,7 +442,7 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
         if (want >= uint32_t(s) && (counts & VkSampleCountFlagBits(s))) { chosen = uint32_t(s); break; }
     }
     options_.msaaSamples = int(chosen);
-    info_.supportsMsaa = counts != 0;
+    info_.supportsMsaa = maxSampleCount(counts) > 1;
 
     if (!createSwapchain(error, 0, 0)) return false;
     if (!createShadowTarget(error)) return false;
@@ -400,8 +466,10 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     char drvBuf[96];
     std::snprintf(drvBuf, sizeof(drvBuf), "driver %u (%s)", props.driverVersion, vkDeviceTypeName(props.deviceType));
     info_.driver = drvBuf;
+    info_.gpuProfile = gpuProfile_.name;
+    info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
     info_.supportsShadows = shadowImage_ != VK_NULL_HANDLE;
-    info_.supportsFloatHdr = hdrFormat_ == VK_FORMAT_R16G16B16A16_SFLOAT;
+    info_.supportsFloatHdr = hdrFormat_ != VK_FORMAT_R8G8B8A8_UNORM;
     stats_.msaaSamples = options_.msaaSamples;
     stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
     stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
@@ -493,6 +561,35 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     phys_ = best;
     queueFamily_ = bestFamily;
     vkGetPhysicalDeviceMemoryProperties(phys_, &memProps_);
+
+    VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceProperties(phys_, &properties);
+    vkGetPhysicalDeviceFeatures(phys_, &features);
+    gpuCaps_.backend = "vulkan";
+    gpuCaps_.vendorId = properties.vendorID;
+    gpuCaps_.deviceId = properties.deviceID;
+    gpuCaps_.vendorName = std::to_string(properties.vendorID);
+    gpuCaps_.deviceName = properties.deviceName;
+    gpuCaps_.driver = std::to_string(properties.driverVersion);
+    gpuCaps_.maxTextureDimension2D = properties.limits.maxImageDimension2D;
+    gpuCaps_.maxColorSamples = maxSampleCount(properties.limits.framebufferColorSampleCounts &
+                                               properties.limits.framebufferDepthSampleCounts);
+    gpuCaps_.softwareRenderer = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+    gpuCaps_.supportsAstcLdr = features.textureCompressionASTC_LDR &&
+        vkFormatSupportsLinearSampling(phys_, VK_FORMAT_ASTC_6x6_UNORM_BLOCK) &&
+        vkFormatSupportsLinearSampling(phys_, VK_FORMAT_ASTC_6x6_SRGB_BLOCK);
+    gpuCaps_.supportsEtc2 = features.textureCompressionETC2 &&
+        vkFormatSupportsLinearSampling(phys_, VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK) &&
+        vkFormatSupportsLinearSampling(phys_, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK) &&
+        vkFormatSupportsLinearSampling(phys_, VK_FORMAT_EAC_R11_UNORM_BLOCK);
+    const VkFormatFeatureFlags hdrNeed = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    VkFormatProperties hdr16{}, hdr11{};
+    vkGetPhysicalDeviceFormatProperties(phys_, VK_FORMAT_R16G16B16A16_SFLOAT, &hdr16);
+    vkGetPhysicalDeviceFormatProperties(phys_, VK_FORMAT_B10G11R11_UFLOAT_PACK32, &hdr11);
+    gpuCaps_.supportsFloatHdr = (hdr16.optimalTilingFeatures & hdrNeed) == hdrNeed ||
+                                (hdr11.optimalTilingFeatures & hdrNeed) == hdrNeed;
+    gpuProfile_ = makeGpuProfile(gpuCaps_);
     return true;
 }
 
@@ -509,6 +606,8 @@ bool VulkanRenderer::createDevice(std::string* error) {
     VkPhysicalDeviceFeatures features{};
     features.samplerAnisotropy = supported.samplerAnisotropy;
     features.depthClamp = supported.depthClamp;
+    features.textureCompressionETC2 = supported.textureCompressionETC2;
+    features.textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR;
     /* Wide lines are optional and unreliable on mobile; the skeleton overlay uses 1 px lines and
        the fragment shader keeps them readable, so the feature is never requested. */
 
@@ -1307,48 +1406,51 @@ void VulkanRenderer::imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLay
 /** Builds the mip chain with blit chains - the kernel hands over mip level 0 only. */
 void VulkanRenderer::generateMips(VkCommandBuffer cmd, VkImage image, int32_t width, int32_t height,
                                   uint32_t levels) {
-    if (levels < 2) return;
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
+    if (levels == 0) return;
     int32_t w = width, h = height;
     for (uint32_t i = 1; i < levels; ++i) {
-        const int32_t pw = w, ph = h;
+        const int32_t previousWidth = w, previousHeight = h;
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
 
-        b.subresourceRange.baseMipLevel = i - 1;
-        b.subresourceRange.levelCount = 1;
+        VkImageMemoryBarrier sourceReady{};
+        sourceReady.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        sourceReady.srcQueueFamilyIndex = sourceReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        sourceReady.image = image;
+        sourceReady.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        sourceReady.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        sourceReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        sourceReady.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        sourceReady.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &b);
+                             0, nullptr, 0, nullptr, 1, &sourceReady);
+
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
-        blit.srcOffsets[1] = {pw, ph, 1};
+        blit.srcOffsets[1] = {previousWidth, previousHeight, 1};
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
         blit.dstOffsets[1] = {w, h, 1};
         vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-        b.subresourceRange.baseMipLevel = i;
-        b.subresourceRange.levelCount = 1;
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     }
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         0, nullptr, 0, nullptr, 1, &b);
+
+    /* Earlier levels were transitioned to TRANSFER_SRC for blitting; the last remains a write
+       target. Transition each level from its actual layout to SHADER_READ_ONLY. */
+    for (uint32_t level = 0; level < levels; ++level) {
+        const bool wasBlitSource = level + 1 < levels;
+        VkImageMemoryBarrier toShader{};
+        toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toShader.srcQueueFamilyIndex = toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.image = image;
+        toShader.oldLayout = wasBlitSource ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                           : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toShader.srcAccessMask = wasBlitSource ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
+        toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toShader);
+    }
 }
 
 /* ============================================================================================
@@ -1944,108 +2046,349 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
 
 bool VulkanRenderer::uploadAtlas(std::string* error) {
     if (!engine_) return true;
-
-    const int levels[AF_TEX_COUNT] = {AF_TEX_BASE_COLOR, AF_TEX_NORMAL, AF_TEX_METALLIC_ROUGHNESS,
-                                      AF_TEX_OCCLUSION, AF_TEX_SUBSURFACE};
+    bool uploadSucceeded = true;
     for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
         af_texture tex{};
-        if (af_engine_texture(engine_, levels[slot], &tex) != AF_OK) continue;
-        if (!tex.data || tex.width <= 0 || tex.height <= 0) continue;
+        if (af_engine_texture(engine_, slot, &tex) != AF_OK || !tex.data ||
+            tex.width <= 0 || tex.height <= 0 || (tex.channels != 1 && tex.channels != 4)) continue;
+        const uint64_t pixelCount = static_cast<uint64_t>(tex.width) * static_cast<uint64_t>(tex.height);
+        if (pixelCount > UINT64_MAX / static_cast<uint64_t>(tex.channels)) continue;
+        const uint64_t baseBytes = pixelCount * static_cast<uint64_t>(tex.channels);
+        if (tex.byte_size < baseBytes || baseBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+            continue;
 
-        /* Format selection: base colour is sRGB-encoded in the atlas (it is the only map that
-           carries perceptual colour), everything else is linear data. */
-        VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-        if (tex.channels == 1) format = VK_FORMAT_R8_UNORM;
-        else if (levels[slot] == AF_TEX_BASE_COLOR) format = VK_FORMAT_R8G8B8A8_SRGB;
-
+        /* Base colour is sRGB-encoded; data maps stay linear. */
+        VkFormat format = tex.channels == 1 ? VK_FORMAT_R8_UNORM
+            : slot == AF_TEX_BASE_COLOR ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
         uint32_t mipLevels = 1;
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(phys_, format, &fp);
-        if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) {
-            uint32_t m = 1;
+        const VkFormatFeatureFlags blitFeatures = VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+            VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if ((fp.optimalTilingFeatures & blitFeatures) == blitFeatures) {
             int32_t mw = tex.width, mh = tex.height;
-            while (mw > 1 || mh > 1) { mw = mw > 1 ? mw / 2 : 1; mh = mh > 1 ? mh / 2 : 1; ++m; }
-            mipLevels = std::min(m, 12u);
+            while ((mw > 1 || mh > 1) && mipLevels < 12) {
+                mw = mw > 1 ? mw / 2 : 1;
+                mh = mh > 1 ? mh / 2 : 1;
+                ++mipLevels;
+            }
         }
 
         VkBuffer staging = VK_NULL_HANDLE;
         VkDeviceMemory stagingMem = VK_NULL_HANDLE;
         void* stagingMap = nullptr;
-        if (!createBuffer(tex.byte_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        if (!createBuffer(baseBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &staging, &stagingMem, &stagingMap)) {
-            *error = "atlas staging buffer failed";
-            return false;
+            if (staging) vkDestroyBuffer(device_, staging, nullptr);
+            if (stagingMem) vkFreeMemory(device_, stagingMem, nullptr);
+            uploadSucceeded = false;
+            if (error) *error = "atlas staging buffer failed";
+            continue;
         }
-        std::memcpy(stagingMap, tex.data, size_t(tex.byte_size));
+        std::memcpy(stagingMap, tex.data, static_cast<size_t>(baseBytes));
 
-        if (atlasViews_[slot] != VK_NULL_HANDLE) {
-            vkDestroyImageView(device_, atlasViews_[slot], nullptr);
-            atlasViews_[slot] = VK_NULL_HANDLE;
-        }
-        if (atlasImages_[slot] != VK_NULL_HANDLE) {
-            vkDestroyImage(device_, atlasImages_[slot], nullptr);
-            atlasImages_[slot] = VK_NULL_HANDLE;
-        }
-        if (atlasMemory_[slot] != VK_NULL_HANDLE) {
-            vkFreeMemory(device_, atlasMemory_[slot], nullptr);
-            atlasMemory_[slot] = VK_NULL_HANDLE;
-        }
-        if (!createImage(uint32_t(tex.width), uint32_t(tex.height), format,
-                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                         VK_IMAGE_USAGE_SAMPLED_BIT, &atlasImages_[slot], &atlasMemory_[slot], mipLevels) ||
-            !createView(atlasImages_[slot], format, VK_IMAGE_ASPECT_COLOR_BIT, &atlasViews_[slot], mipLevels)) {
-            *error = "atlas image creation failed";
-            return false;
+        VkImage newImage = VK_NULL_HANDLE;
+        VkDeviceMemory newMemory = VK_NULL_HANDLE;
+        VkImageView newView = VK_NULL_HANDLE;
+        const VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+            (mipLevels > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+        if (!createImage(uint32_t(tex.width), uint32_t(tex.height), format, usage,
+                         &newImage, &newMemory, mipLevels) ||
+            !createView(newImage, format, VK_IMAGE_ASPECT_COLOR_BIT, &newView, mipLevels)) {
+            if (newView) vkDestroyImageView(device_, newView, nullptr);
+            if (newImage) vkDestroyImage(device_, newImage, nullptr);
+            if (newMemory) vkFreeMemory(device_, newMemory, nullptr);
+            vkDestroyBuffer(device_, staging, nullptr);
+            vkFreeMemory(device_, stagingMem, nullptr);
+            uploadSucceeded = false;
+            if (error) *error = "atlas image allocation failed";
+            continue;
         }
 
-        /* One-time upload: transition, copy, build mips, hand over to the fragment shader. */
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        {
-            VkCommandPoolCreateInfo pool{};
-            pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            pool.queueFamilyIndex = queueFamily_;
-            VkCommandPool tmp = VK_NULL_HANDLE;
-            if (commandPool_ == VK_NULL_HANDLE) vkCreateCommandPool(device_, &pool, nullptr, &tmp);
-            VkCommandBufferAllocateInfo ai{};
-            ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            ai.commandPool = tmp ? tmp : commandPool_;
-            ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            ai.commandBufferCount = 1;
-            vkAllocateCommandBuffers(device_, &ai, &cmd);
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = commandPool_;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        bool commandOk = commandPool_ != VK_NULL_HANDLE &&
+                         vkAllocateCommandBuffers(device_, &ai, &cmd) == VK_SUCCESS;
+        if (commandOk) {
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vkBeginCommandBuffer(cmd, &bi);
-
-            imageBarrier(cmd, atlasImages_[slot], VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            commandOk = vkBeginCommandBuffer(cmd, &bi) == VK_SUCCESS;
+        }
+        if (commandOk) {
+            VkImageMemoryBarrier toTransfer{};
+            toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.image = newImage;
+            toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
             VkBufferImageCopy region{};
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.imageExtent = {uint32_t(tex.width), uint32_t(tex.height), 1};
-            vkCmdCopyBufferToImage(cmd, staging, atlasImages_[slot],
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-            generateMips(cmd, atlasImages_[slot], tex.width, tex.height, mipLevels);
-            vkEndCommandBuffer(cmd);
+            vkCmdCopyBufferToImage(cmd, staging, newImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            generateMips(cmd, newImage, tex.width, tex.height, mipLevels);
+            commandOk = vkEndCommandBuffer(cmd) == VK_SUCCESS;
+        }
+        VkResult submitResult = VK_ERROR_INITIALIZATION_FAILED;
+        if (commandOk) {
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
-            vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
-            vkQueueWaitIdle(queue_);
-            vkFreeCommandBuffers(device_, ai.commandPool, 1, &cmd);
-            if (tmp) vkDestroyCommandPool(device_, tmp, nullptr);
+            submitResult = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+            commandOk = submitResult == VK_SUCCESS && vkQueueWaitIdle(queue_) == VK_SUCCESS;
         }
+        if (cmd) vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
         vkDestroyBuffer(device_, staging, nullptr);
         vkFreeMemory(device_, stagingMem, nullptr);
+        if (!commandOk) {
+            if (newView) vkDestroyImageView(device_, newView, nullptr);
+            if (newImage) vkDestroyImage(device_, newImage, nullptr);
+            if (newMemory) vkFreeMemory(device_, newMemory, nullptr);
+            uploadSucceeded = false;
+            if (error) setError(error, "atlas copy/submit", submitResult);
+            continue;
+        }
+
+        if (atlasViews_[slot]) vkDestroyImageView(device_, atlasViews_[slot], nullptr);
+        if (atlasImages_[slot]) vkDestroyImage(device_, atlasImages_[slot], nullptr);
+        if (atlasMemory_[slot]) vkFreeMemory(device_, atlasMemory_[slot], nullptr);
+        atlasViews_[slot] = newView;
+        atlasImages_[slot] = newImage;
+        atlasMemory_[slot] = newMemory;
+        atlasGpuBytes_[slot] = uncompressedAtlasFootprint(tex.width, tex.height, tex.channels);
         atlasWidth_ = tex.width;
         atlasHeight_ = tex.height;
     }
     atlasUploaded_ = true;
-    /* The descriptor sets hold the image views, so they must be rewritten after an upload. */
+    stats_.textureBytes = 0;
+    for (uint64_t bytes : atlasGpuBytes_)
+        stats_.textureBytes = stats_.textureBytes > UINT64_MAX - bytes ? UINT64_MAX
+                                                                      : stats_.textureBytes + bytes;
+    if (!writeDescriptorSets(error)) return false;
+    startAtlasCompression();
+    return uploadSucceeded;
+}
+
+void VulkanRenderer::startAtlasCompression() {
+    if (!engine_ || atlasCompressionAttempted_ || gpuProfile_.atlasCompression == AtlasCompression::NONE)
+        return;
+    atlasCompressionAttempted_ = true;
+    std::array<af_texture, AF_TEX_COUNT> sources{};
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot)
+        (void)af_engine_texture(engine_, slot, &sources[static_cast<size_t>(slot)]);
+    const bool started = atlasCompressionJob_.start(sources, gpuProfile_);
+    info_.textureCompression = started
+        ? std::string(atlasCompressionName(gpuProfile_.atlasCompression)) + " (pending)"
+        : atlasCompressionName(AtlasCompression::NONE);
+}
+
+void VulkanRenderer::pollAtlasCompression() {
+    EncodedAtlas atlas;
+    if (!atlasCompressionJob_.poll(&atlas)) return;
+    if (!atlas.anyValid()) {
+        info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
+        return;
+    }
+    std::string error;
+    if (uploadCompressedAtlas(atlas, &error))
+        info_.textureCompression = atlasCompressionName(gpuProfile_.atlasCompression);
+    else
+        info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
+}
+
+bool VulkanRenderer::uploadCompressedAtlas(const EncodedAtlas& atlas, std::string* error) {
+    if (!device_ || !atlas.anyValid()) return false;
+    if (vkDeviceWaitIdle(device_) != VK_SUCCESS) {
+        if (error) *error = "device idle wait failed before compressed atlas replacement";
+        return false;
+    }
+
+    struct PendingTexture {
+        int slot = -1;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkBuffer staging = VK_NULL_HANDLE;
+        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+        uint64_t byteSize = 0;
+        std::vector<VkBufferImageCopy> regions;
+    } pending[AF_TEX_COUNT];
+    size_t pendingCount = 0;
+    auto destroyPending = [&](PendingTexture& item) {
+        if (item.view) vkDestroyImageView(device_, item.view, nullptr);
+        if (item.image) vkDestroyImage(device_, item.image, nullptr);
+        if (item.memory) vkFreeMemory(device_, item.memory, nullptr);
+        if (item.staging) vkDestroyBuffer(device_, item.staging, nullptr);
+        if (item.stagingMemory) vkFreeMemory(device_, item.stagingMemory, nullptr);
+        item = PendingTexture{};
+    };
+    auto cleanupAll = [&]() {
+        for (size_t i = 0; i < AF_TEX_COUNT; ++i) destroyPending(pending[i]);
+    };
+
+    try {
+        for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+            const EncodedTexture& encoded = atlas.textures[static_cast<size_t>(slot)];
+            if (!encoded.valid()) continue;
+            const VkFormat format = vkFormatForAtlasEncoding(encoded.encoding);
+            if (format == VK_FORMAT_UNDEFINED) continue;
+            VkFormatProperties properties{};
+            vkGetPhysicalDeviceFormatProperties(phys_, format, &properties);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+            if ((properties.optimalTilingFeatures & need) != need) continue;
+            const uint64_t bytes = encoded.byteSize();
+            if (!bytes || bytes == UINT64_MAX || bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+                continue;
+
+            PendingTexture& item = pending[pendingCount];
+            item.slot = slot;
+            item.format = format;
+            item.byteSize = bytes;
+            if (!createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              &item.staging, &item.stagingMemory, &item.mapped)) {
+                destroyPending(item);
+                continue;
+            }
+            item.regions.reserve(encoded.levels.size());
+            uint64_t offset = 0;
+            bool validPayload = true;
+            for (size_t level = 0; level < encoded.levels.size(); ++level) {
+                const EncodedMip& mip = encoded.levels[level];
+                if (mip.width <= 0 || mip.height <= 0 || mip.bytes.empty() || offset % 4u != 0u ||
+                    offset > bytes || mip.bytes.size() > bytes - offset) {
+                    validPayload = false;
+                    break;
+                }
+                std::memcpy(static_cast<uint8_t*>(item.mapped) + static_cast<size_t>(offset),
+                            mip.bytes.data(), mip.bytes.size());
+                VkBufferImageCopy region{};
+                region.bufferOffset = offset;
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(level), 0, 1};
+                region.imageExtent = {static_cast<uint32_t>(mip.width), static_cast<uint32_t>(mip.height), 1};
+                item.regions.push_back(region);
+                offset += static_cast<uint64_t>(mip.bytes.size());
+            }
+            if (!validPayload || offset != bytes || item.regions.size() != encoded.levels.size() ||
+                !createImage(static_cast<uint32_t>(encoded.width), static_cast<uint32_t>(encoded.height),
+                             format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                             &item.image, &item.memory, static_cast<uint32_t>(encoded.levels.size())) ||
+                !createView(item.image, format, VK_IMAGE_ASPECT_COLOR_BIT, &item.view,
+                            static_cast<uint32_t>(encoded.levels.size()))) {
+                destroyPending(item);
+                continue;
+            }
+            ++pendingCount;
+        }
+    } catch (...) {
+        cleanupAll();
+        if (error) *error = "compressed atlas staging allocation failed";
+        return false;
+    }
+    if (pendingCount == 0) return false;
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = commandPool_;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    bool commandOk = commandPool_ != VK_NULL_HANDLE &&
+                     vkAllocateCommandBuffers(device_, &ai, &cmd) == VK_SUCCESS;
+    if (commandOk) {
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        commandOk = vkBeginCommandBuffer(cmd, &bi) == VK_SUCCESS;
+    }
+    if (commandOk) {
+        for (size_t i = 0; i < pendingCount; ++i) {
+            PendingTexture& item = pending[i];
+            const uint32_t levels = static_cast<uint32_t>(item.regions.size());
+            VkImageMemoryBarrier toTransfer{};
+            toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.image = item.image;
+            toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+            vkCmdCopyBufferToImage(cmd, item.staging, item.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<uint32_t>(item.regions.size()), item.regions.data());
+            VkImageMemoryBarrier toShader{};
+            toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toShader.srcQueueFamilyIndex = toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toShader.image = item.image;
+            toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toShader);
+        }
+        commandOk = vkEndCommandBuffer(cmd) == VK_SUCCESS;
+    }
+    VkResult submitResult = VK_ERROR_INITIALIZATION_FAILED;
+    if (commandOk) {
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        submitResult = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+        commandOk = submitResult == VK_SUCCESS && vkQueueWaitIdle(queue_) == VK_SUCCESS;
+    }
+    if (cmd) vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+    if (!commandOk) {
+        cleanupAll();
+        if (error) setError(error, "compressed atlas upload", submitResult);
+        return false;
+    }
+
+    for (size_t i = 0; i < pendingCount; ++i) {
+        PendingTexture& item = pending[i];
+        const int slot = item.slot;
+        if (atlasViews_[slot]) vkDestroyImageView(device_, atlasViews_[slot], nullptr);
+        if (atlasImages_[slot]) vkDestroyImage(device_, atlasImages_[slot], nullptr);
+        if (atlasMemory_[slot]) vkFreeMemory(device_, atlasMemory_[slot], nullptr);
+        atlasViews_[slot] = item.view;
+        atlasImages_[slot] = item.image;
+        atlasMemory_[slot] = item.memory;
+        item.view = VK_NULL_HANDLE;
+        item.image = VK_NULL_HANDLE;
+        item.memory = VK_NULL_HANDLE;
+        atlasGpuBytes_[slot] = item.byteSize;
+        if (item.staging) vkDestroyBuffer(device_, item.staging, nullptr);
+        if (item.stagingMemory) vkFreeMemory(device_, item.stagingMemory, nullptr);
+        item.staging = VK_NULL_HANDLE;
+        item.stagingMemory = VK_NULL_HANDLE;
+    }
+    cleanupAll();
+    stats_.textureBytes = 0;
+    for (uint64_t bytes : atlasGpuBytes_)
+        stats_.textureBytes = stats_.textureBytes > UINT64_MAX - bytes ? UINT64_MAX
+                                                                      : stats_.textureBytes + bytes;
+    atlasUploaded_ = true;
     if (!writeDescriptorSets(error)) return false;
     return true;
 }
+
+void VulkanRenderer::waitAtlasCompression() { atlasCompressionJob_.waitDiscard(); }
 
 /* ============================================================================================
  *  Per-frame state
@@ -2065,6 +2408,23 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
 
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
     buildCameraUbo(&scene_, camera_, options_, env_, sh_, int(swapExtent_.width), int(swapExtent_.height), true);
+    int lodIndexCounts[kAvatarLodLevels] = {};
+    int lodCount = avatarLods_.levelCount();
+    if (lodCount > 0) {
+        for (int level = 0; level < lodCount; ++level)
+            lodIndexCounts[level] = static_cast<int>(avatarLods_.level(level).indexCount);
+    } else {
+        lodCount = 1;
+        lodIndexCounts[0] = engine_ ? std::max(0, af_engine_index_count(engine_)) : 0;
+    }
+    const float quality = static_cast<float>(std::max(0, std::min(3, options_.effectiveQualityLevel))) / 3.0f;
+    const AvatarCullResult cull = avatarCuller_.update(scene_.modelMin, scene_.modelMax, scene_.hasModel,
+                                                         lodIndexCounts, lodCount, camera_,
+                                                         int(swapExtent_.width), int(swapExtent_.height), quality,
+                                                         gpuProfile_.lodDistanceScale);
+    avatarVisible_ = cull.visible;
+    activeLod_ = std::max(0, cull.lod);
+    trianglesThisFrame_ = cull.triangleCount;
 
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
@@ -2266,9 +2626,12 @@ void VulkanRenderer::setClip(int clip, float speed, bool loop) {
 void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
     if (!engine_) return;
     const int32_t vcount = af_engine_vertex_count(engine_);
-    const int32_t icount = af_engine_index_count(engine_);
+    const int32_t sourceIndexCount = af_engine_index_count(engine_);
     const af_vertex* verts = af_engine_vertices(engine_);
-    const uint32_t* indices = af_engine_indices(engine_);
+    const uint32_t* sourceIndices = af_engine_indices(engine_);
+    const std::vector<uint32_t>& lodIndices = avatarLods_.indices();
+    const int32_t icount = lodIndices.empty() ? sourceIndexCount : static_cast<int32_t>(lodIndices.size());
+    const uint32_t* indices = lodIndices.empty() ? sourceIndices : lodIndices.data();
     if (vcount <= 0 || !verts) return;
 
     /* ---- vertex buffer (host visible, re-created only when the mesh grows) ---- */
@@ -2296,7 +2659,7 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
     /* ---- index buffer: only re-uploaded when the topology itself changed ---- */
     if (icount > 0 && indices) {
         const uint64_t ineed = uint64_t(icount) * sizeof(uint32_t);
-        if (ineed > indexCapacity_ || indexCount_ != icount) {
+        if (ineed > indexCapacity_ || indexDirty_ || indexCount_ != icount) {
             if (indexBuffer_ != VK_NULL_HANDLE && ineed > indexCapacity_) {
                 vkDestroyBuffer(device_, indexBuffer_, nullptr);
                 vkFreeMemory(device_, indexMem_, nullptr);
@@ -2315,6 +2678,7 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
             }
             if (indexMapped_) std::memcpy(indexMapped_, indices, size_t(ineed));
             indexCount_ = icount;
+            indexDirty_ = false;
         }
 
         const int submeshCount = af_engine_submesh_count(engine_);
@@ -2342,10 +2706,19 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
             }
             if (indirectMapped_ && indirectBuffer_ != VK_NULL_HANDLE) {
                 auto* commands = static_cast<VkDrawIndexedIndirectCommand*>(indirectMapped_);
+                const bool haveLods = avatarLods_.levelCount() > 0;
+                const AvatarLodLevel& lod = avatarLods_.level(activeLod_);
                 for (int i = 0; i < submeshCount; ++i) {
-                    commands[i].indexCount = uint32_t(std::max(0, submeshes[i].index_count));
+                    const bool haveRange = haveLods && static_cast<size_t>(i) < lod.submeshes.size();
+                    const uint32_t indexCount = haveRange
+                        ? lod.submeshes[static_cast<size_t>(i)].indexCount
+                        : static_cast<uint32_t>(std::max(0, submeshes[i].index_count));
+                    const uint32_t firstIndex = haveRange
+                        ? lod.submeshes[static_cast<size_t>(i)].firstIndex
+                        : static_cast<uint32_t>(std::max(0, submeshes[i].index_offset));
+                    commands[i].indexCount = indexCount;
                     commands[i].instanceCount = 1;
-                    commands[i].firstIndex = uint32_t(std::max(0, submeshes[i].index_offset));
+                    commands[i].firstIndex = firstIndex;
                     commands[i].vertexOffset = 0;
                     commands[i].firstInstance = 0;
                 }
@@ -2407,9 +2780,16 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
                                          VkDeviceSize(i) * sizeof(VkDrawIndexedIndirectCommand), 1,
                                          sizeof(VkDrawIndexedIndirectCommand));
         } else {
-            for (int i = 0; i < n; ++i)
-                vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1,
-                                 uint32_t(submeshes[i].index_offset), 0, 0);
+            const bool haveLods = avatarLods_.levelCount() > 0;
+            const AvatarLodLevel& lod = avatarLods_.level(activeLod_);
+            for (int i = 0; i < n; ++i) {
+                const bool haveRange = haveLods && static_cast<size_t>(i) < lod.submeshes.size();
+                const uint32_t count = haveRange ? lod.submeshes[static_cast<size_t>(i)].indexCount
+                                                  : uint32_t(std::max(0, submeshes[i].index_count));
+                const uint32_t first = haveRange ? lod.submeshes[static_cast<size_t>(i)].firstIndex
+                                                   : uint32_t(std::max(0, submeshes[i].index_offset));
+                if (count > 0) vkCmdDrawIndexed(cmd, count, 1, first, 0, 0);
+            }
         }
     }
     vkCmdEndRenderPass(cmd);
@@ -2460,7 +2840,8 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     }
 
     /* ---- the avatar --------------------------------------------------------------------------- */
-    if (engine_ && vertexCount_ > 0 && vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
+    if (avatarVisible_ && engine_ && vertexCount_ > 0 &&
+        vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
@@ -2484,12 +2865,21 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
                                          VkDeviceSize(i) * sizeof(VkDrawIndexedIndirectCommand), 1,
                                          sizeof(VkDrawIndexedIndirectCommand));
             } else {
-                vkCmdDrawIndexed(cmd, uint32_t(submeshes[i].index_count), 1,
-                                 uint32_t(submeshes[i].index_offset), 0, 0);
+                const bool haveLods = avatarLods_.levelCount() > 0;
+                const AvatarLodLevel& lod = avatarLods_.level(activeLod_);
+                const bool haveRange = haveLods && static_cast<size_t>(i) < lod.submeshes.size();
+                const uint32_t count = haveRange ? lod.submeshes[static_cast<size_t>(i)].indexCount
+                                                  : uint32_t(std::max(0, submeshes[i].index_count));
+                const uint32_t first = haveRange ? lod.submeshes[static_cast<size_t>(i)].firstIndex
+                                                   : uint32_t(std::max(0, submeshes[i].index_offset));
+                if (count > 0) vkCmdDrawIndexed(cmd, count, 1, first, 0, 0);
             }
             ++drawCallsThisFrame_;
         }
-        trianglesThisFrame_ = indexCount_ / 3;
+        if (avatarLods_.levelCount() > 0)
+            trianglesThisFrame_ = static_cast<int>(avatarLods_.level(activeLod_).indexCount / 3);
+        else
+            trianglesThisFrame_ = std::max(0, af_engine_index_count(engine_)) / 3;
     }
 
     /* ---- skeleton overlay --------------------------------------------------------------------- */
@@ -2620,8 +3010,9 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
  *  Frame loop
  * ============================================================================================ */
 void VulkanRenderer::renderFrame(float deltaSeconds) {
-    if (targetsDirty_) applyOptionChanges();
     if (!device_ || swapchain_ == VK_NULL_HANDLE) return;
+    pollAtlasCompression();
+    if (targetsDirty_) applyOptionChanges();
 
     stats_.frames++;
     if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
@@ -2736,6 +3127,14 @@ void VulkanRenderer::setOptions(const RendererOptions& options) {
         }
         normalized.msaaSamples = chosen;
     }
+    normalized.msaaSamples = std::min(std::max(1, normalized.msaaSamples),
+                                      static_cast<int>(gpuProfile_.maxMsaaSamples));
+    normalized.shadowMapSize = std::max(512, std::min(normalized.shadowMapSize,
+                                                       gpuProfile_.maxShadowMapSize));
+    normalized.bloomLevels = std::max(0, std::min(normalized.bloomLevels,
+                                                  gpuProfile_.maxBloomLevels));
+    normalized.effectiveQualityLevel = std::max(0, std::min(normalized.effectiveQualityLevel,
+                                                            gpuProfile_.maxQualityLevel));
     const bool needsRebuild =
         normalized.msaaSamples != options_.msaaSamples ||
         (normalized.enableShadows != options_.enableShadows) ||
@@ -2749,10 +3148,29 @@ void VulkanRenderer::setOptions(const RendererOptions& options) {
 }
 
 void VulkanRenderer::attachEngine(af_engine* engine) {
+    waitAtlasCompression();
     engine_ = engine;
+    atlasCompressionAttempted_ = false;
+    for (uint64_t& bytes : atlasGpuBytes_) bytes = 0;
+    stats_.textureBytes = 0;
+    info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
     meshDirty_ = true;
+    indexDirty_ = true;
+    activeLod_ = 0;
+    indirectCommandCount_ = 0;
     atlasUploaded_ = false;
     materialUboSize_ = 0;
+    avatarLods_.clear();
+    if (engine_) {
+        const int32_t vertices = af_engine_vertex_count(engine_);
+        const int32_t indices = af_engine_index_count(engine_);
+        const af_vertex* rest = af_engine_vertices_rest(engine_);
+        if (!rest) rest = af_engine_vertices(engine_);
+        avatarLods_.build(rest, static_cast<size_t>(std::max(0, vertices)),
+                          af_engine_indices(engine_), static_cast<size_t>(std::max(0, indices)),
+                          af_engine_submeshes(engine_),
+                          static_cast<size_t>(std::max(0, af_engine_submesh_count(engine_))));
+    }
     if (engine_ && device_) {
         std::string error;
         uploadAtlas(&error);
@@ -2839,6 +3257,7 @@ void VulkanRenderer::destroyPipelines() {
 }
 
 void VulkanRenderer::destroyAll() {
+    waitAtlasCompression();
     if (!device_) {
         if (instance_) vkDestroyInstance(instance_, nullptr);
         return;

@@ -1,21 +1,24 @@
 # AvatarForge — on-device verification sheet
 
-Everything in this repository has been verified on the host: the kernel harness runs **386 checks with
-0 failures**, the arm64 native libraries link against NDK r26, and both the debug APK and the SDK AAR
-are built and inspected (manifest, permissions, FileProvider, stripped natives, dex contents).
-`tools/abi_conformance.py` passes for the C++ kernel (47/47) and reports the Rust core's progress
-against the same ABI.
+Host-verifiable checks currently pass: the native harness reports **464/464**, including GPU-profile
+policy, ASTC/ETC2 encoding, mip generation and asynchronous compression tests; the C++ kernel implements
+**47/47** ABI symbols, and the Rust alternative currently implements **15/47**. The quick verification
+also passes shader, GLB and C++ ABI checks; Rust and APK-permission audits were skipped because `cargo`
+and `aapt2` are unavailable. The checked-in arm64 APK/AAR were built and statically inspected on
+2026-10-18; they predate the renderer, codec and Kotlin follow-up, and current source has not been
+Android-package-built. Compressed GL/Vulkan uploads pass syntax checks but have not been run on a GPU.
+No physical-device evidence exists.
 
-**Nothing in this file has been executed yet.** There is no Android device and no emulator in the
+**No on-device step in this file has been executed.** There is no Android device or emulator in the
 build environment — the emulator would need an x86_64 build plus a GPU-capable host, and the container
-has neither. So this is the ordered pass a human runs on a phone, with the exact commands and the
-numbers to write down. Until it is filled in, the app is *built and statically verified*, not
-*device-proven*, and the project's status says so.
+has neither. This is the ordered pass a human runs on a phone, with the exact commands and numbers to
+record. The checked-in APK/AAR are statically verified only for the 2026-10-18 build; the current
+renderer, lifecycle and resource-governance source has not been Android-built. Nothing is device-proven.
 
-The one thing to watch is the **posed-geometry path**: the kernel evaluates skinning from the bind
-pose, so composing poses is stateless (verified in host test `[12]`, which is the only part of the
-pipeline that cannot be checked without a GPU). Rendering, frame timing and thermals are the areas
-the host cannot judge at all.
+The **posed-geometry path** has host regressions (`[12]` and the Rust end-to-end test) proving that
+clips are evaluated from bind vertices and REST restores the baseline. On-device, confirm the
+renderer displays those poses correctly; actual GPU rendering, frame timing and thermals remain
+outside what the host can judge.
 
 ---
 
@@ -94,8 +97,9 @@ that is a finding — record it.
    ```bash
    adb shell dumpsys meminfo com.avatarforge | grep -E "TOTAL|Native Heap"
    ```
-   Expected total RSS < 1.5 GB (the engine's own budget is 1.5 GiB by default,
-   `af_engine_set_memory_budget`).
+   Target total RSS < 1.5 GB, measured rather than assumed. The SDK's default requested native
+   generation budget is 1.5 GiB, not a guaranteed fixed allocation; it may lower the request to
+   measured available RAM minus 512 MiB of headroom (with a 64 MiB floor) before starting a build.
 
 ## 5. The viewer
 
@@ -161,8 +165,9 @@ python3 tools/validate_glb.py /tmp/avatar.glb
 python3 tools/glb_census.py /tmp/avatar.glb      # vertices, joints, 52 morph targets, textures
 ```
 
-Expected: valid glTF 2.0 binary, ~34 MB, ~270 k vertices, 71 joints, 52 blendshape channels, 5
-textures at 1024².
+Expected: valid glTF 2.0 binary, ~34 MB, ~270 k vertices, 71 joints, 52 blendshape channels, and 5
+textures. Atlas resolution is budget-selected (typically 2048² at the requested default budget; it may
+fall to 1024², 512² or 256² on tighter budgets).
 
 ## 9. Lifecycle, memory and thermals
 
@@ -178,8 +183,13 @@ textures at 1024².
    adb shell dumpsys battery | grep -E "level|temperature"
    adb shell dumpsys thermalservice | head -20
    ```
-   The budget controller is the app's own defence: quality steps down when the frame time exceeds
-   33.3 ms for ~0.6 s. Record whether the renderer held ≥30 FPS on the last run.
+   The native budget controller steps quality down when frame time exceeds 33.3 ms for ~0.6 s.
+   The current Kotlin source also refuses to start a heavy build under low-memory, low-storage or
+   severe-thermal snapshots; on API 29+ it lowers the effective render tier on moderate/severe thermal
+   status and restores the requested preset on recovery. It caps the requested native generation
+   budget to live RAM headroom and (on Android 12+) reports render-thread work duration through ADPF.
+   These Kotlin paths are not yet Android-built and need on-device confirmation; record whether the
+   renderer held ≥30 FPS on the last run and whether a deferred build recovers after resources normalize.
 
 ## 9a. Phase 1 report — collect it with one command
 
@@ -200,7 +210,7 @@ It writes `artifacts/device-report.txt` and prints the same report. It installs 
 | `declared gfx` | the `vulkan.*` / `opengl.*` feature flags, so a GLES-only device is identified as such instead of looking like a Vulkan failure |
 | `thermal status` before/after | a soak that throttles is not a rendering bug; without this column it looks like one |
 | `janky`, `p50`–`p99` | frame pacing over real frames, which is the only honest source for "30 FPS minimum" |
-| `memory now` | the PSS of the running process against the < 2 GB budget |
+| `memory now` | measured process PSS; target <1.5 GiB, with 2 GB as the broader app-process ceiling |
 | `crash entries` | any native crash during the run, counted from the crash buffer rather than assumed absent |
 
 Any row the device will not report is printed as `UNAVAILABLE (reason)`. It never prints a zero in
@@ -214,14 +224,18 @@ status that did not reach `SEVERE` or `CRITICAL` during the soak.
 
 | Phase 1 item | Host evidence | Device evidence |
 |---|---|---|
-| rendering runs | shader tables compile (12 stages), draw path exercised through the API surface | **none yet** — cannot be claimed |
+| rendering runs | embedded shader table validates 13 stages; single-avatar culler is host-tested | **none yet** — renderer has not been package-built or run on a GPU in this review |
 | GLB loading | harness `[14]`: the exporter's own 34 MB file imports back with all 10 primitives sharing one vertex pool, 71 joints, inverse bind matrices, 52 morph targets, 5 decoded PNGs, and 45 hostile inputs rejected cleanly | **none yet** |
-| crash-free lifecycle | harness `[14]` hostile-input sweep (truncation, bit flips, cyclic graphs, bad accessor ranges) under ASan/UBSan; cancel/rotate paths are §9 below | **none yet** |
+| crash-free lifecycle | harness `[14]` hostile-input sweep under ASan/UBSan; Kotlin job/renderer lease and teardown changes are source-only, not compiled | **none yet** |
 | profiling | harness `[15]`: CPU stage timings exact against a synthetic clock, GPU timings reported as −1 when the device cannot measure them | **none yet** |
-| scene, culling, LOD | harness `[15]`: parent-to-child composition, conservative sphere culling, monotone LOD, deterministic light order | **none yet** |
+| scene, culling, LOD | harness `[15]` tests transforms/LOD/lights; `[10b]` culler; `[10e]` index-only LOD data; GL/Vulkan sources pass host syntax-only compilation | **none yet** — Android NDK build, rendered LOD appearance, deformation safety and performance need a device/GPU pass |
 
-The honest summary: Phase 1 is *implemented and host-verified*, and not one row of it is
-device-verified. The report above is how that changes.
+The honest summary: importer, profiler, culler, adaptive atlas chooser, index-only LOD, GPU-profile
+policy and ASTC/ETC2 CPU encoding have host coverage; GL/Vulkan sources, including compressed upload
+paths, received syntax-only checking with host headers/stubs. The Android NDK build has not run, and
+actual compressed GPU uploads remain untested. Kotlin lifecycle, generation deferral, image-spec,
+dependency-graph and thermal/ADPF changes are **not Android-built**. No row is device-verified yet.
+This report is how that changes.
 
 ## 10. Record sheet
 

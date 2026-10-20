@@ -322,31 +322,47 @@ struct Mesh {
     }
 
     /**
-     * Vertex-clustering decimation for LOD generation. Deterministic, manifold-preserving in
-     * practice, and O(n). Not a QEM decimator: it is chosen because it never creates
-     * self-intersections or flipped windings, which matters more here than silhouette purity.
+     * Deterministic vertex-clustering decimation used to prepare candidate LOD meshes.
+     *
+     * This is an approximate simplifier, not QEM: it averages positions within spatial cells and
+     * drops collapsed triangles. It can alter silhouettes and topology, so callers must validate
+     * the result for their asset before using it. The cell count is derived from the requested
+     * triangle budget (surface triangle count scales approximately with cells squared), capped to
+     * keep the packed cluster key bounded. Material regions are kept in separate clusters.
      */
     void clusterDecimate(int targetTriangles) {
-        if (targetTriangles <= 0 || triangleCount() <= static_cast<size_t>(targetTriangles)) return;
+        const size_t sourceTriangles = triangleCount();
+        if (targetTriangles <= 0 || sourceTriangles <= static_cast<size_t>(targetTriangles) ||
+            positions.empty() || sourceTriangles == 0) return;
+        /* A malformed mesh should remain untouched rather than indexing outside the source pool. */
+        for (uint32_t index : indices) if (index >= positions.size()) return;
+
         Vec3 mn, mx;
         computeBounds(&mn, &mx);
         const Vec3 ext = mx - mn;
-        const float ratio = std::sqrt(static_cast<float>(triangleCount()) / static_cast<float>(targetTriangles));
-        const int cells = maxi(2, static_cast<int>(32.0f * ratio));
+        const int cells = std::max(2, std::min(1024,
+            static_cast<int>(std::sqrt(static_cast<double>(targetTriangles) * 0.5))));
         const Vec3 invCell(std::fabs(ext.x) < kEps ? 0.0f : cells / ext.x,
                            std::fabs(ext.y) < kEps ? 0.0f : cells / ext.y,
                            std::fabs(ext.z) < kEps ? 0.0f : cells / ext.z);
         std::unordered_map<uint64_t, uint32_t> table;
+        table.reserve(positions.size());
         std::vector<uint32_t> remap(positions.size());
         std::vector<Vec3> acc;
         std::vector<int32_t> count;
+        acc.reserve(positions.size());
+        count.reserve(positions.size());
         for (size_t i = 0; i < positions.size(); ++i) {
             const Vec3 rel = positions[i] - mn;
-            const int gx = mini(cells, static_cast<int>(rel.x * invCell.x));
-            const int gy = mini(cells, static_cast<int>(rel.y * invCell.y));
-            const int gz = mini(cells, static_cast<int>(rel.z * invCell.z));
-            const uint64_t key = (static_cast<uint64_t>(gx) << 42) ^ (static_cast<uint64_t>(gy) << 21) ^
-                                 static_cast<uint64_t>(gz);
+            const int gx = maxi(0, mini(cells, static_cast<int>(rel.x * invCell.x)));
+            const int gy = maxi(0, mini(cells, static_cast<int>(rel.y * invCell.y)));
+            const int gz = maxi(0, mini(cells, static_cast<int>(rel.z * invCell.z)));
+            const int32_t region = i < regions.size() ? regions[i] : REGION_SKIN;
+            /* `cells` is capped at 1024, so each coordinate fits in 11 bits. */
+            const uint64_t key = ((static_cast<uint64_t>(static_cast<uint32_t>(region) & 0xFFu)) << 33) |
+                                 (static_cast<uint64_t>(gx) << 22) |
+                                 (static_cast<uint64_t>(gy) << 11) |
+                                  static_cast<uint64_t>(gz);
             auto it = table.find(key);
             if (it == table.end()) {
                 const uint32_t ni = static_cast<uint32_t>(acc.size());
@@ -361,6 +377,7 @@ struct Mesh {
             }
         }
         for (size_t i = 0; i < acc.size(); ++i) acc[i] /= static_cast<float>(maxi(1, count[i]));
+
         std::vector<uint32_t> ni;
         ni.reserve(indices.size());
         for (size_t t = 0; t + 2 < indices.size(); t += 3) {
@@ -368,27 +385,33 @@ struct Mesh {
             if (a == b || b == c || a == c) continue;
             ni.push_back(a); ni.push_back(b); ni.push_back(c);
         }
-        /* Carry per-vertex attributes across by picking the attribute of the first source
-           vertex that landed in each cluster. */
+        /* If this resolution collapsed the whole surface, leave the original usable mesh intact. */
+        if (ni.empty()) return;
+
+        /* Carry per-vertex attributes from the first source vertex in each region-local cluster. */
         std::vector<int32_t> newRegion(acc.size(), REGION_SKIN);
-        std::vector<float> newU(-acc.size() * 2, 0.0f);
+        std::vector<float> newU(acc.size() * 2, 0.0f);
         std::vector<float> newCurv(acc.size(), 1.0f);
-        std::vector<Vec3> firstPos(acc.size(), Vec3(1e30f, 1e30f, 1e30f));
+        std::vector<uint8_t> copied(acc.size(), 0);
         for (size_t i = 0; i < positions.size(); ++i) {
             const uint32_t dst = remap[i];
-            if (firstPos[dst].x > 1e29f) {
-                firstPos[dst] = positions[i];
-                if (i < regions.size()) newRegion[dst] = regions[i];
-                if (i < curvature.size()) newCurv[dst] = curvature[i];
-                if (i * 2 + 1 < uvs.size()) { newU[dst * 2] = uvs[i * 2]; newU[dst * 2 + 1] = uvs[i * 2 + 1]; }
+            if (copied[dst]) continue;
+            copied[dst] = 1;
+            if (i < regions.size()) newRegion[dst] = regions[i];
+            if (i < curvature.size()) newCurv[dst] = curvature[i];
+            if (i * 2 + 1 < uvs.size()) {
+                newU[dst * 2] = uvs[i * 2];
+                newU[dst * 2 + 1] = uvs[i * 2 + 1];
             }
         }
+
         positions.swap(acc);
         indices.swap(ni);
         regions.swap(newRegion);
         uvs.swap(newU);
         curvature.swap(newCurv);
-        normals.clear(); tangents.clear();
+        normals.clear();
+        tangents.clear();
         computeNormals();
         computeTangents();
     }

@@ -4,16 +4,15 @@
  * The SurfaceView that hosts AvatarRenderer, plus the render thread that owns it.
  *
  * Why a hand-written thread instead of a loop inside a Compose effect: the renderer must be
- * created, used and destroyed on one thread, and it must survive configuration changes without
- * losing its GPU resources. A dedicated thread with a message loop gives both, and it keeps the
- * frame loop off the main thread entirely - a 60 Hz viewer on the main thread would drop frames
- * during recomposition, which is exactly when the user is dragging the camera.
+ * created, used and destroyed on one thread. A configuration change may recreate the Surface and
+ * GPU renderer, while an explicit engine lease keeps the native mesh alive for safe reattachment.
+ * The message loop also keeps frame work off the main thread during recomposition and camera drags.
  *
  * The thread's protocol is deliberately small:
  *
  *     CMD_CREATE(surface)   -> build the renderer, attach the engine if one is pending
  *     CMD_ATTACH(engine)    -> hand a freshly generated avatar to the GPU
- *     CMD_FRAME             -> draw one frame (posted by the choreographer while visible)
+ *     CMD_FRAME             -> draw one frame (self-scheduled against a 60 Hz work budget while visible)
  *     CMD_CONFIG(closure)   -> run renderer calls that must happen on the render thread
  *     CMD_QUIT              -> destroy the renderer and exit
  *
@@ -26,14 +25,24 @@ import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.os.Build
+import android.os.PerformanceHintManager
+import android.os.Process
 import android.util.AttributeSet
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.NativeEngineLease
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
 
 class RenderSurfaceView @JvmOverloads constructor(
     context: Context,
@@ -42,6 +51,12 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private val thread = HandlerThread("avatarforge-render").apply { start() }
     private val handler = Handler(thread.looper)
+    private val lifecycleLock = Any()
+    @Volatile private var released = false
+    private var leasedEngine: AvatarEngine? = null
+    private var engineLease: NativeEngineLease? = null
+    /** Monotone token prevents a stale attach failure from clearing a newer request. */
+    private var attachmentVersion = 0L
 
     private val _rendererInfo = MutableStateFlow<RendererInfo?>(null)
     val rendererInfo: StateFlow<RendererInfo?> = _rendererInfo.asStateFlow()
@@ -63,14 +78,42 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile var attachedEngineHandle: Long = 0L
         private set
 
+    /** Accessed only on the render thread. */
     private var renderer: AvatarRenderer? = null
-    private var visible = false
+    @Volatile private var activeSurface: Surface? = null
+    @Volatile private var surfaceWidth = 0
+    @Volatile private var surfaceHeight = 0
+    private var performanceHintSession: PerformanceHintManager.Session? = null
+    private var thermalRegistration: AutoCloseable? = null
+    @Volatile private var thermalStatus: Int? = null
+    private val thermalExecutor = Executor { command -> handler.post(command) }
+    @Volatile private var visible = false
 
     init {
+        registerThermalListener()
         holder.addCallback(this)
         /* The renderer wants every pixel the view has, and it will letterbox nothing: the camera
            aspect is recomputed on resize so the avatar never stretches. */
         holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+    }
+
+    private fun settingsForThermal(requested: RenderSettings): RenderSettings = requested.copy(
+        quality = RenderThermalPolicy.effectiveQuality(requested.quality, thermalStatus),
+    )
+
+    private fun registerThermalListener() {
+        thermalStatus = AndroidThermalMonitor.currentStatus(context)
+        thermalRegistration = AndroidThermalMonitor.register(context, thermalExecutor) { status ->
+            if (!released) {
+                thermalStatus = status
+                renderer?.applyOptions(settingsForThermal(settings))
+            }
+        }
+    }
+
+    private fun unregisterThermalListener() {
+        runCatching { thermalRegistration?.close() }
+        thermalRegistration = null
     }
 
     /* ------------------------------------------------------------------ public API ------------ */
@@ -78,7 +121,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Applies render settings (quality, environment, overlays). Safe from the UI thread. */
     fun applySettings(newSettings: RenderSettings) {
         settings = newSettings
-        onRenderThread { it.renderer?.applyOptions(newSettings) }
+        onRenderThread { it.renderer?.applyOptions(it.settingsForThermal(newSettings)) }
     }
 
     /** Applies camera state (orbit). Safe from the UI thread; called on every drag frame. */
@@ -87,15 +130,109 @@ class RenderSurfaceView @JvmOverloads constructor(
         onRenderThread { it.renderer?.setCamera(newCamera) }
     }
 
-    /** Attaches a freshly generated engine so the viewer shows it. */
+    /**
+     * Attaches an engine with a lifetime lease. The handle cannot be destroyed until this view's
+     * renderer has been torn down or detached.
+     */
+    fun attachEngine(engine: AvatarEngine) {
+        synchronized(lifecycleLock) {
+            check(!released) { "RenderSurfaceView has been released" }
+            val oldLease: NativeEngineLease?
+            val activeLease: NativeEngineLease
+            if (leasedEngine === engine && engineLease != null) {
+                activeLease = engineLease!!
+                oldLease = null
+            } else {
+                activeLease = engine.acquireRendererLease()
+                oldLease = engineLease
+                leasedEngine = engine
+                engineLease = activeLease
+            }
+            pendingEngineHandle = activeLease.handle
+            attachedEngineHandle = activeLease.handle
+            enqueueEngineAttach(activeLease.handle, activeLease, oldLease, ++attachmentVersion)
+        }
+    }
+
+    /** Low-level overload. The caller owns the handle lifetime and must serialize native access. */
     fun attachEngine(engineHandle: Long) {
-        attachedEngineHandle = engineHandle
-        pendingEngineHandle = engineHandle
-        onRenderThread { it.renderer?.attachEngine(engineHandle) }
+        synchronized(lifecycleLock) {
+            if (released) return
+            val oldLease = engineLease
+            leasedEngine = null
+            engineLease = null
+            pendingEngineHandle = engineHandle
+            attachedEngineHandle = engineHandle
+            enqueueEngineAttach(engineHandle, null, oldLease, ++attachmentVersion)
+        }
+    }
+
+    /** Detaches the mesh; a previous SDK-managed engine lease is dropped after the render thread detaches. */
+    fun detachEngine() = attachEngine(0L)
+
+    private fun enqueueEngineAttach(
+        engineHandle: Long,
+        activeLease: NativeEngineLease?,
+        oldLease: NativeEngineLease?,
+        version: Long,
+    ) {
+        val task = Runnable {
+            try {
+                if (renderer == null) {
+                    val surface = activeSurface
+                    if (surface?.isValid == true) createRendererOnRenderThread(surface)
+                }
+                renderer?.attachEngine(engineHandle)
+                oldLease?.release()
+            } catch (t: Throwable) {
+                /* A failed rebind may leave the renderer holding its old raw engine pointer. Destroy
+                   it before dropping either lease, then let a later surface-created event retry. */
+                runCatching { renderer?.destroy() }
+                renderer = null
+                _rendererInfo.value = null
+                _error.value = t.message ?: t.javaClass.simpleName
+                val releaseActiveLease = synchronized(lifecycleLock) {
+                    val latest = attachmentVersion == version
+                    if (latest) {
+                        attachedEngineHandle = 0L
+                        pendingEngineHandle = 0L
+                        if (engineLease === activeLease) {
+                            engineLease = null
+                            leasedEngine = null
+                        }
+                    }
+                    latest || engineLease !== activeLease
+                }
+                if (releaseActiveLease) activeLease?.release()
+                oldLease?.release()
+            }
+        }
+        if (Looper.myLooper() == thread.looper) {
+            task.run()
+        } else if (!handler.post(task)) {
+            activeLease?.release()
+            oldLease?.release()
+            if (engineLease === activeLease) {
+                engineLease = null
+                leasedEngine = null
+            }
+            attachedEngineHandle = 0L
+            pendingEngineHandle = 0L
+        }
     }
 
     /** Tells the renderer the engine's geometry changed (new pose, blendshapes, clip frame). */
     fun invalidateMesh() = onRenderThread { it.renderer?.invalidateMesh() }
+
+    /** Applies morph weights on the render thread, between clip updates and GPU buffer reads. */
+    fun applyBlendshapes(weights: FloatArray) = onRenderThread {
+        if (it.attachedEngineHandle != 0L && ::engine.isInitialized) {
+            val applied = runCatching { engine.applyBlendshapesFromRenderer(weights) }
+                .onFailure { error -> _error.value = error.message ?: error.javaClass.simpleName }
+                .getOrDefault(false)
+            if (applied) it.renderer?.invalidateMesh()
+        }
+    }
 
     fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =
         onRenderThread { it.renderer?.setClip(clip, speed, loop) }
@@ -103,22 +240,44 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) =
         onRenderThread { it.renderer?.setOverlays(skeleton, flatShading, highlightRegion) }
 
-    /** Picks the region under a tap; null when the ray misses the avatar. */
-    fun pick(viewX: Float, viewY: Float): RegionPick? {
+    /** Synchronous picker for non-UI callers; use [pickAsync] from the main thread. */
+    fun pick(viewX: Float, viewY: Float): RegionPick? =
+        runOnRenderThreadAndWait<RegionPick?>(null) { pickOnRenderThread(viewX, viewY) }
+
+    /** Picks without blocking the UI while the render thread tests the mesh. */
+    suspend fun pickAsync(viewX: Float, viewY: Float): RegionPick? = suspendCancellableCoroutine { continuation ->
+        val posted = synchronized(lifecycleLock) {
+            !released && handler.post {
+                if (continuation.isActive) {
+                    val result = runCatching { pickOnRenderThread(viewX, viewY) }
+                        .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
+                        .getOrNull()
+                    if (continuation.isActive) continuation.resume(result)
+                }
+            }
+        }
+        if (!posted && continuation.isActive) continuation.resume(null)
+    }
+
+    /** Accessed only on the render thread. */
+    private fun pickOnRenderThread(viewX: Float, viewY: Float): RegionPick? {
         val handle = attachedEngineHandle
-        if (handle == 0L) return null
-        /* Picking is pure CPU maths against the mesh (af_render_capi.cpp), so it does not need the
-           render thread - it needs the engine's current vertices, which it reads directly. */
-        val current = renderer ?: return null
-        return current.pickRegion(handle, viewX, viewY, width, height, camera)
+        val current = renderer
+        val viewWidth = surfaceWidth
+        val viewHeight = surfaceHeight
+        if (handle == 0L || current == null || viewWidth <= 0 || viewHeight <= 0) return null
+        return current.pickRegion(handle, viewX, viewY, viewWidth, viewHeight, camera)
     }
 
     /** Starts/stops the frame loop. Called from the host lifecycle. */
     fun setFrameLoopEnabled(enabled: Boolean) {
-        visible = enabled
-        handler.removeCallbacks(frameLoop)
-        frameLoop.resetClock()
-        if (enabled) handler.post(frameLoop)
+        synchronized(lifecycleLock) {
+            if (released) return
+            visible = enabled
+            handler.removeCallbacks(frameLoop)
+            frameLoop.resetClock()
+            if (enabled) handler.post(frameLoop)
+        }
     }
 
     /* ------------------------------------------------------------------ render thread --------- */
@@ -143,7 +302,9 @@ class RenderSurfaceView @JvmOverloads constructor(
                 r.setCamera(camera)
                 r.frame(delta.coerceIn(0f, 0.1f))
                 _stats.value = r.stats()
+                reportFrameWorkDuration(System.nanoTime() - frameStartNs)
             } catch (t: Throwable) {
+                closePerformanceHints()
                 _error.value = t.message ?: t.javaClass.simpleName
                 return
             }
@@ -159,41 +320,132 @@ class RenderSurfaceView @JvmOverloads constructor(
         }
     }
 
+    /** Optional Android Dynamic Performance Framework session, created on the render thread. */
+    private fun openPerformanceHints() {
+        closePerformanceHints()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        performanceHintSession = runCatching {
+            context.getSystemService(PerformanceHintManager::class.java)
+                ?.createHintSession(intArrayOf(Process.myTid()), FRAME_INTERVAL_NS)
+        }.getOrNull()
+    }
+
+    private fun reportFrameWorkDuration(durationNs: Long) {
+        val session = performanceHintSession ?: return
+        if (durationNs <= 0L) return
+        runCatching { session.reportActualWorkDuration(durationNs) }
+            .onFailure { closePerformanceHints() }
+    }
+
+    private fun closePerformanceHints() {
+        runCatching { performanceHintSession?.close() }
+        performanceHintSession = null
+    }
+
     private inline fun onRenderThread(crossinline block: (RenderSurfaceView) -> Unit) {
-        if (Looper.myLooper() == thread.looper) block(this)
-        else handler.post { block(this) }
+        synchronized(lifecycleLock) {
+            if (released) return
+            if (Looper.myLooper() == thread.looper) block(this)
+            else handler.post { block(this) }
+        }
+    }
+
+    /** Runs a result-producing operation on the renderer owner thread and waits for completion. */
+    private fun <T> runOnRenderThreadAndWait(
+        defaultValue: T,
+        allowAfterRelease: Boolean = false,
+        block: () -> T,
+    ): T {
+        if (Looper.myLooper() == thread.looper) {
+            if (released && !allowAfterRelease) return defaultValue
+            return block()
+        }
+
+        val result = AtomicReference(defaultValue)
+        val failure = AtomicReference<Throwable?>(null)
+        val latch = CountDownLatch(1)
+        val posted = synchronized(lifecycleLock) {
+            if (released && !allowAfterRelease) false
+            else handler.post {
+                try {
+                    result.set(block())
+                } catch (t: Throwable) {
+                    failure.set(t)
+                } finally {
+                    latch.countDown()
+                }
+            }
+        }
+        if (!posted) return defaultValue
+        awaitUninterruptibly(latch)
+        failure.get()?.let { throw it }
+        return result.get()
+    }
+
+    private fun awaitUninterruptibly(latch: CountDownLatch) {
+        var interrupted = false
+        while (true) {
+            try {
+                latch.await()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+    }
+
+    private fun joinUninterruptibly(target: Thread) {
+        var interrupted = false
+        while (true) {
+            try {
+                target.join()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         val surface: Surface = holder.surface
-        handler.post {
+        activeSurface = surface
+        onRenderThread {
             try {
-                renderer?.destroy()
-                renderer = AvatarRenderer.create(surface, settings)
-                _rendererInfo.value = renderer?.info()
-                _error.value = null
-                renderer?.setCamera(camera)
-                renderer?.applyOptions(settings)
+                createRendererOnRenderThread(surface)
                 if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
-                /*
-                 * The view can become visible before Android creates its Surface. In that order,
-                 * frameLoop exits because renderer is null and never schedules itself again.
-                 * Restart it only after the renderer and Surface are both ready.
-                 */
-                handler.removeCallbacks(frameLoop)
-                if (visible) handler.post(frameLoop)
             } catch (t: Throwable) {
+                runCatching { renderer?.destroy() }
                 renderer = null
+                closePerformanceHints()
                 _rendererInfo.value = null
                 _error.value = t.message ?: t.javaClass.simpleName
             }
         }
     }
 
+    /** Creates the GPU renderer on its owner thread for a new or recovered Surface. */
+    private fun createRendererOnRenderThread(surface: Surface) {
+        closePerformanceHints()
+        renderer?.destroy()
+        val effectiveSettings = settingsForThermal(settings)
+        renderer = AvatarRenderer.create(surface, effectiveSettings)
+        _rendererInfo.value = renderer?.info()
+        _error.value = null
+        renderer?.setCamera(camera)
+        renderer?.applyOptions(effectiveSettings)
+        openPerformanceHints()
+        handler.removeCallbacks(frameLoop)
+        if (visible) handler.post(frameLoop)
+    }
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        handler.post {
+        surfaceWidth = width
+        surfaceHeight = height
+        onRenderThread {
             renderer?.resize(width, height)
             if (visible && renderer != null) {
                 handler.removeCallbacks(frameLoop)
@@ -203,41 +455,58 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        /* Synchronous: the renderer must be gone before the Surface is invalidated, otherwise the
-           next frame draws into a dead native window. */
-        val latch = java.util.concurrent.CountDownLatch(1)
-        handler.post {
-            renderer?.destroy()
+        activeSurface = null
+        surfaceWidth = 0
+        surfaceHeight = 0
+        /* The renderer must be gone before Android invalidates the Surface. No timeout is safe:
+           returning early would let a queued frame use a dead ANativeWindow. */
+        runOnRenderThreadAndWait(Unit) {
+            handler.removeCallbacks(frameLoop)
+            closePerformanceHints()
+            runCatching { renderer?.destroy() }
+                .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
             renderer = null
-            rendererInfoValueReset()
-            latch.countDown()
+            _rendererInfo.value = null
         }
-        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
-    }
-
-    private fun rendererInfoValueReset() {
-        _rendererInfo.value = null
     }
 
     /* ------------------------------------------------------------------ teardown -------------- */
 
-    /** Call from the host's onDestroy: stops the thread and frees the GPU objects. */
+    /** Call from the host's onDestroy: stop drawing, destroy GPU objects, then release the handle lease. */
     fun release() {
-        setFrameLoopEnabled(false)
-        val latch = java.util.concurrent.CountDownLatch(1)
-        handler.post {
-            renderer?.destroy()
-            renderer = null
-            latch.countDown()
+        val leaseToRelease: NativeEngineLease?
+        synchronized(lifecycleLock) {
+            if (released) return
+            released = true
+            attachmentVersion++
+            visible = false
+            handler.removeCallbacks(frameLoop)
+            leaseToRelease = engineLease
+            engineLease = null
+            leasedEngine = null
+            pendingEngineHandle = 0L
+            attachedEngineHandle = 0L
+            activeSurface = null
+            surfaceWidth = 0
+            surfaceHeight = 0
         }
-        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        unregisterThermalListener()
+        runOnRenderThreadAndWait(Unit, allowAfterRelease = true) {
+            closePerformanceHints()
+            runCatching { renderer?.destroy() }
+                .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
+            renderer = null
+            _rendererInfo.value = null
+        }
+        leaseToRelease?.release()
         thread.quitSafely()
+        if (Looper.myLooper() != thread.looper) joinUninterruptibly(thread)
     }
 
-    /** The engine this view renders; kept for the render-thread closures. */
-    private lateinit var engine: com.avatarforge.sdk.AvatarEngine
+    /** The engine this view renders; kept for render-thread closures. */
+    private lateinit var engine: AvatarEngine
 
-    fun bind(engine: com.avatarforge.sdk.AvatarEngine) {
+    fun bind(engine: AvatarEngine) {
         this.engine = engine
     }
 

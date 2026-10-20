@@ -11,7 +11,7 @@
 //  would show up as a false mismatch.
 // ==============================================================================================
 
-use afcore::{parse_prompt, AfSpec, PromptParse};
+use afcore_rust::{parse_prompt, AfSpec, PromptParse};
 use std::fs;
 
 /// Both sides print integers scaled by 1e5: C's %g and Rust's float formatting do not agree on

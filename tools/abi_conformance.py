@@ -10,8 +10,8 @@ the C++ kernel (`libafcore.so`) and the Rust core (`rust/af-core`) are two imple
 contract, and both have to pass the same checks before the app or the Kotlin SDK can use either.
 
     python3 tools/abi_conformance.py build-host/libafcore.so
-    python3 tools/abi_conformance.py target/release/libafcore.so --reference build-host/libafcore.so
-    python3 tools/abi_conformance.py lib.so --require-complete      # exit 1 unless 45/45 symbols
+    python3 tools/abi_conformance.py target/release/libafcore_rust.so --reference build-host/libafcore.so
+    python3 tools/abi_conformance.py lib.so --require-complete      # exit 1 unless 47/47 symbols
 
 Three levels, each optional:
 

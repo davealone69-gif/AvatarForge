@@ -1,8 +1,9 @@
 # ==============================================================================================
 #  AvatarForge :: af-core  --  the Rust native core
 # ==============================================================================================
-#  `crate-type` is both cdylib (the drop-in `libafcore.so` the ABI describes) and rlib (so the
-#  tests and the `af` wrapper can use the implementation directly, without going through FFI).
+#  `crate-type` is both a uniquely named cdylib (`libafcore_rust.so`) and rlib. The distinct
+#  filename keeps Cargo's workspace test loader from shadowing the C++ reference `libafcore.so`;
+#  the exported C symbols still implement the same ABI.
 #
 #  No dependencies, by design: `cargo build --offline` works on a machine with no registry access,
 #  which is the same constraint the phone runs under.
@@ -17,7 +18,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "afcore"
+name = "afcore_rust"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 

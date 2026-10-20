@@ -20,14 +20,18 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The host test harness passes **386 checks
-with 0 failures**; the C++ kernel implements **47/47** ABI symbols, and the Rust core implements
-15/47 against the same ABI with byte-identical results on everything it covers. **Nothing in this
-repository has been run on a physical Android device yet** — there is no phone and no GPU in the
-build environment — so the honest claim is *implemented and host-verified*, not *device-proven*.
-`DEVICE.md` is the ordered sheet a human runs on hardware, and `tools/device_check.sh` collects the
-evidence in one command. `STATUS.md` keeps the per-phase state and the list of what is deliberately
-still missing.
+The current native source passes **464 host checks with 0 failures**; the C++ kernel implements **47/47**
+ABI symbols, while the Rust alternative implements **15/47** and matches the C++ reference on the
+functions it covers. Host coverage includes culling, index-only renderer LOD data, adaptive atlas
+budget selection, GPU-profile policy, ASTC/ETC2 encoding and mip generation, an ASTC decode round-trip,
+asynchronous compression polling, a staged native pipeline, and image-role mapping after a rejected
+image. GL/Vulkan sources pass host syntax-only compilation with downloaded Khronos headers and an
+Android-window stub; CMake host configuration and the scalar ASTC/ETC2 static codec targets also build.
+This is **not** an Android NDK build or a GPU upload/runtime test. Kotlin lifecycle, dependency-graph,
+thermal and resource changes remain **uncompiled**. The compressed GL/Vulkan upload paths are integrated
+but have not been exercised on hardware. The checked-in 0.10.1 APK/AAR predate this follow-up.
+**Nothing has been run on a physical Android device**; `DEVICE.md` is the hardware checklist and
+`tools/device_check.sh` collects evidence when a device is available.
 
 ## Repository layout
 
@@ -35,7 +39,8 @@ still missing.
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, written from scratch |
+| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, GPU profiles and compressed atlas uploads |
+| `native/third_party/` | Vendored Apache-2.0 ASTC Encoder and Etc2Comp codecs |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
 | `rust/af-sys/`, `rust/af/` | Raw FFI bindings and the safe Rust wrapper |
@@ -51,7 +56,7 @@ still missing.
 ```bash
 tools/bootstrap_toolchain.sh          # SDK + NDK + CMake + Gradle + JDK 17 + Rust (once)
 
-tools/build_host.sh test              # kernel + 386-check host harness (no device, no Android SDK)
+tools/build_host.sh test              # kernel + 464-check host harness (no device, no Android SDK)
 tools/build_android.sh                # arm64 native libraries into prebuilt/
 tools/build_gradle.sh :app:assembleDebug :sdk:assembleRelease
 ```
@@ -64,10 +69,10 @@ Every one of these is a gate that fails loudly; none of them needs a device.
 
 ```bash
 tools/verify.sh                       # everything below, in one run
-tools/build_host.sh test              # 386 checks: geometry, rig, bake, ABI, GLB round trip, scene
+tools/build_host.sh test              # 464 checks: geometry, render profiles/compression, ABI, GLB, LOD + stages
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
-python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so
+python3 tools/abi_conformance.py rust/target/release/libafcore_rust.so --reference build-host/libafcore.so
 tools/prompt_parity.sh                # C++ and Rust prompt grammars, diffed over a 72-prompt corpus
 python3 tools/validate_glb.py <file>  # exported GLB structure + accessor bounds
 ```
