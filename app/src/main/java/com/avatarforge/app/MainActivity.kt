@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
         var imageA by remember { mutableStateOf<Bitmap?>(null) }
         var imageB by remember { mutableStateOf<Bitmap?>(null) }
         var analysisNote by remember { mutableStateOf<String?>(null) }
+        var generationError by remember { mutableStateOf<String?>(null) }
         var preparingInput by remember { mutableStateOf(false) }
         var job by remember { mutableStateOf<JobHandle?>(null) }
         var status by remember { mutableStateOf(JobStatus()) }
@@ -175,11 +176,10 @@ class MainActivity : ComponentActivity() {
                         surfaceView?.attachEngine(engine)
                         screen = Screen.VIEWER
                     }.onFailure { error ->
-                        Toast.makeText(
-                            context,
-                            "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                        generationError = buildString {
+                            append(error.javaClass.simpleName)
+                            error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                        }
                         screen = Screen.INPUT
                     }
                 }
@@ -201,12 +201,14 @@ class MainActivity : ComponentActivity() {
                 onImageA = { imageA = it },
                 onImageB = { imageB = it },
                 analysisNote = analysisNote,
+                generationError = generationError,
                 enabled = health.usable && !preparingInput,
                 onGeneratePrompt = {
                     /* Prompt parsing touches the native handle; keep even this short operation off
                        the UI thread and build the exact spec the user saw. */
                     val requestedPrompt = prompt
                     val requestedSpec = spec
+                    generationError = null
                     preparingInput = true
                     scope.launch {
                         try {
@@ -218,11 +220,10 @@ class MainActivity : ComponentActivity() {
                         } catch (cancelled: kotlinx.coroutines.CancellationException) {
                             throw cancelled
                         } catch (error: Throwable) {
-                            Toast.makeText(
-                                context,
-                                "Prompt analysis failed: ${error.message ?: error.javaClass.simpleName}",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                            generationError = buildString {
+                                append("Prompt analysis failed · ").append(error.javaClass.simpleName)
+                                error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                            }
                         } finally {
                             preparingInput = false
                         }
@@ -233,6 +234,7 @@ class MainActivity : ComponentActivity() {
                     val b = imageB
                     val requestedSpec = spec
                     val requestedPrompt = prompt
+                    generationError = null
                     preparingInput = true
                     scope.launch {
                         try {
@@ -273,11 +275,10 @@ class MainActivity : ComponentActivity() {
                         } catch (cancelled: kotlinx.coroutines.CancellationException) {
                             throw cancelled
                         } catch (error: Throwable) {
-                            Toast.makeText(
-                                context,
-                                "Image analysis failed: ${error.message ?: error.javaClass.simpleName}",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                            generationError = buildString {
+                                append("Image analysis failed · ").append(error.javaClass.simpleName)
+                                error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                            }
                         } finally {
                             preparingInput = false
                         }
