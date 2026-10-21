@@ -165,7 +165,7 @@ fun ViewerScreen(
                 FilterChip(
                     selected = panel == entry,
                     onClick = { onPanel(entry) },
-                    label = { Text(entry.name.lowercase()) },
+                    label = { Text(entry.name.lowercase().replace("_", " ")) },
                 )
             }
         }
@@ -180,7 +180,7 @@ fun ViewerScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     TextButton(onClick = { onPanel(ViewerPanel.CAMERA) }) { Text("← Back to 3D viewer") }
-                    SystemCheckPanel(rendererError, rendererInfo, stats, thermalStatus, settings)
+                    SystemCheckPanel(result, rendererError, rendererInfo, stats, thermalStatus, settings)
                 }
             }
         } else if (panel != ViewerPanel.CAMERA) {
@@ -429,6 +429,7 @@ private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs:
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
 private fun SystemCheckPanel(
+    result: EngineResult,
     rendererError: String?,
     info: RendererInfo?,
     stats: RendererStats,
@@ -452,7 +453,10 @@ private fun SystemCheckPanel(
     }
     Text("System check + adaptive proof", style = MaterialTheme.typography.titleSmall)
     Text("Live measurements from this renderer session. A green check means the value was observed, not that an unrun test passed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    DiagnosticLine("Native engine", if (AvatarEngine.health().usable) "available" else "unavailable: ${AvatarEngine.health().problem ?: "unknown reason"}")
+    val engineHealth = remember { AvatarEngine.health() }
+    DiagnosticLine("Native engine", if (engineHealth.usable) "available" else "unavailable: ${engineHealth.problem ?: "unknown reason"}")
+    DiagnosticLine("Generated avatar", "${result.spec.heightM} m requested stature · ${result.blendshapeCount} blendshape channels")
+    DiagnosticLine("GLB export", if (result.glbFile.isFile && result.glbFile.length() > 0L) "present · %.1f MiB".format(result.glbFile.length() / 1048576.0) else "MISSING OR EMPTY · export file check failed")
     DiagnosticLine("GPU backend", info?.let { "${it.backend} · ${it.deviceName}" } ?: "not initialised")
     DiagnosticLine("Graphics API / driver", info?.let { "${it.apiVersion} · ${it.driver}" } ?: "not available")
     DiagnosticLine("Render surface", if (rendererError == null && info != null) "render loop active; no current reported error" else rendererError ?: "waiting for renderer")
