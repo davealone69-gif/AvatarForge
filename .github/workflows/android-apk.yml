@@ -109,11 +109,14 @@ jobs:
         run: |
           set -euo pipefail
           AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt | sort -V | tail -1)"
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
           shopt -s nullglob
           APKS=(dist/*.apk)
           test "${#APKS[@]}" -gt 0
           for apk in "${APKS[@]}"; do
             echo "=== $apk ==="
+            "$APKSIGNER" verify --verbose "$apk"
+            "$AAPT" dump badging "$apk" | grep "package: name='com.avatarforge'"
             "$AAPT" dump permissions "$apk"
             if "$AAPT" dump permissions "$apk" | grep -q 'android.permission.INTERNET'; then
               echo "::error::AvatarForge must remain offline-only; INTERNET permission found."
