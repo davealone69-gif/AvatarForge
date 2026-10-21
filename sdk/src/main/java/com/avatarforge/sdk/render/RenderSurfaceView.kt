@@ -110,7 +110,8 @@ class RenderSurfaceView @JvmOverloads constructor(
             if (!released) {
                 thermalStatus = status
                 _thermalStatusFlow.value = status
-                renderer?.applyOptions(settingsForThermal(settings))
+                runCatching { renderer?.applyOptions(settingsForThermal(settings)) }
+                    .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
             }
         }
     }
@@ -354,8 +355,21 @@ class RenderSurfaceView @JvmOverloads constructor(
     private inline fun onRenderThread(crossinline block: (RenderSurfaceView) -> Unit) {
         synchronized(lifecycleLock) {
             if (released) return
-            if (Looper.myLooper() == thread.looper) block(this)
-            else handler.post { block(this) }
+            if (Looper.myLooper() == thread.looper) {
+                try {
+                    block(this)
+                } catch (t: Throwable) {
+                    _error.value = t.message ?: t.javaClass.simpleName
+                }
+            } else {
+                handler.post {
+                    try {
+                        block(this)
+                    } catch (t: Throwable) {
+                        _error.value = t.message ?: t.javaClass.simpleName
+                    }
+                }
+            }
         }
     }
 
