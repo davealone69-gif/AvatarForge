@@ -96,8 +96,8 @@ struct CameraState {
 
 /* Per-frame timing the UI shows in the stats drawer, and the budget controller reads. */
 struct RendererStats {
-    float frameMs        = 0.0f;   /* GPU-side frame time, 16-frame rolling mean              */
-    float cpuMs          = 0.0f;   /* CPU submit cost for the same window                     */
+    float frameMs        = 0.0f;   /* smoothed frame-start interval; FPS/cadence, not GPU timer */
+    float cpuMs          = 0.0f;   /* CPU-side renderer call duration; may include driver waits */
     float fps            = 0.0f;
     int   drawCalls      = 0;
     int   triangles      = 0;
