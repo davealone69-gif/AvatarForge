@@ -515,8 +515,8 @@ private fun SystemCheckPanel(
     DiagnosticLine("Requested quality", settings.quality.name)
     DiagnosticLine("Effective quality tier", "${stats.qualityLevel} · MSAA ${stats.msaaSamples}x · shadow map ${stats.shadowMapSize} · bloom ${stats.bloomLevels}")
     rendererError?.let { Text("Renderer error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-    Text("Proof-of-learning loop", style = MaterialTheme.typography.titleSmall)
-    Text("Run a 15-second observation. AUTO should move down only after sustained slow frames and move up only after sustained headroom. The test records real FPS, frame interval, tier and thermal samples; it does not claim AI training.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("Proof-of-adaptation loop", style = MaterialTheme.typography.titleSmall)
+    Text("Run a 15-second observation. AUTO should move down only after sustained slow frames and move up only after sustained headroom. This is deterministic feedback control, not machine-learning training; samples are session-only, while render settings persist separately.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         AssistChip(onClick = { if (!running) running = true }, label = { Text(if (running) "Sampling… ${samples.size}/15" else "Run 15-second check") }, enabled = !running)
         AssistChip(onClick = { samples.clear() }, label = { Text("Clear evidence") }, enabled = !running && samples.isNotEmpty())
