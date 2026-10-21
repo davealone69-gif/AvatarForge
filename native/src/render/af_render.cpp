@@ -26,6 +26,7 @@
 #include "af_environment.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <string>
 
@@ -101,8 +102,13 @@ public:
     }
 
     void renderFrame(float deltaSeconds) override {
+        const auto callStart = std::chrono::steady_clock::now();
         backend_->renderFrame(deltaSeconds);
+        const auto callEnd = std::chrono::steady_clock::now();
         stats_ = backend_->stats();
+        /* CPU-side wall time for the renderer call. This can include driver/GPU fence waits; it is
+           deliberately not presented as a GPU timestamp. Frame cadence remains the adaptive signal. */
+        stats_.cpuMs = std::chrono::duration<float, std::milli>(callEnd - callStart).count();
         stats_.qualityLevel = tier_;
         updateBudget(deltaSeconds);
     }
