@@ -353,7 +353,7 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
         }
     }
     Text(
-        "Effective tier ${stats.qualityLevel} · ${stats.drawCalls} draw calls · ${stats.triangles} visible triangles",
+        "Effective tier ${stats.qualityLevel} · ${stats.drawCalls} draw calls · ${stats.triangles} visible triangles · renderer call %.1f ms".format(stats.cpuMs),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
