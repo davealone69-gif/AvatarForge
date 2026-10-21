@@ -469,10 +469,21 @@ class RenderSurfaceView @JvmOverloads constructor(
         surfaceWidth = width
         surfaceHeight = height
         onRenderThread {
-            renderer?.resize(width, height)
-            if (visible && renderer != null) {
-                handler.removeCallbacks(frameLoop)
-                handler.post(frameLoop)
+            val activeRenderer = renderer
+            if (activeRenderer != null) {
+                val resized = runCatching { activeRenderer.resize(width, height) }
+                    .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
+                    .getOrDefault(false)
+                if (!resized) {
+                    _error.value = _error.value ?: "Renderer resize failed for ${width}×${height}; GPU targets could not be recreated"
+                    handler.removeCallbacks(frameLoop)
+                } else {
+                    _error.value = null
+                    if (visible) {
+                        handler.removeCallbacks(frameLoop)
+                        handler.post(frameLoop)
+                    }
+                }
             }
         }
     }
