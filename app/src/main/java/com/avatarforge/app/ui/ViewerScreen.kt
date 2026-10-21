@@ -57,6 +57,7 @@ import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.Quality
 import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 
@@ -338,6 +339,24 @@ private fun ExportPanel(onExport: () -> Unit, onShare: () -> Unit, onExportTo: (
 @Composable
 private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -> Unit, stats: RendererStats, info: RendererInfo?, thermalStatus: Int?) {
     Text("Renderer", style = MaterialTheme.typography.titleSmall)
+    Text("Quality presets change MSAA and post-processing costs, not the source mesh.", style = MaterialTheme.typography.bodySmall)
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        listOf(Quality.AUTO, Quality.LOW, Quality.MEDIUM, Quality.HIGH).forEach { quality ->
+            FilterChip(
+                selected = settings.quality == quality,
+                onClick = { onSettings(settings.copy(quality = quality)) },
+                label = { Text(quality.name) },
+            )
+        }
+    }
+    Text(
+        "Effective tier ${stats.qualityLevel} · ${stats.drawCalls} draw calls · ${stats.triangles} visible triangles",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     info?.let {
         Text(
             "%s · %s · %s · %s".format(it.backend, it.deviceName, it.apiVersion, it.driver),
