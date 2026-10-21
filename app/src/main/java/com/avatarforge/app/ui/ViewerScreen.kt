@@ -435,6 +435,24 @@ private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs:
 
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
+fun RenderSettingsScreen(
+    settings: RenderSettings,
+    onSettings: (RenderSettings) -> Unit,
+    stats: RendererStats,
+    rendererInfo: RendererInfo?,
+    thermalStatus: Int?,
+    onBack: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        TextButton(onClick = onBack) { Text("← Back") }
+        RenderPanel(settings, onSettings, stats, rendererInfo, thermalStatus)
+    }
+}
+@Composable
 fun SystemCheckScreen(
     result: EngineResult?,
     rendererError: String?,
