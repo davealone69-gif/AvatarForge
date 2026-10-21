@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AvatarForge character preset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "sex": { "enum": ["UNSPECIFIED", "MALE", "FEMALE"] },
+    "build": { "enum": ["AVERAGE", "SLIM", "ATHLETIC", "MUSCULAR", "HEAVY"] },
+    "hairStyle": { "enum": ["NONE", "BUZZ", "SHORT", "MEDIUM", "LONG", "PONYTAIL", "BUN", "BRAIDS", "AFRO", "MOHAWK"] },
+    "outfit": { "enum": ["NONE", "TSHIRT", "DRESS", "SUIT", "JEANS_JACKET", "ARMOR_PLATE", "ARMOR_LEATHER", "SPACESUIT", "ATHLETIC", "COAT"] },
+    "footwear": { "enum": ["NONE", "SNEAKER", "BOOT", "SABATON", "HEEL"] },
+    "seed": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+    "heightM": { "oneOf": [{ "const": 0 }, { "type": "number", "minimum": 1.4, "maximum": 2.2 }] },
+    "ageYears": { "type": "number", "minimum": 16, "maximum": 70 },
+    "muscle": { "type": "number", "minimum": 0, "maximum": 1 },
+    "bodyFat": { "type": "number", "minimum": 0, "maximum": 1 },
+    "bust": { "type": "number", "minimum": 0, "maximum": 1 },
+    "neckCm": { "type": "number", "minimum": 0, "maximum": 100 },
+    "chestCm": { "type": "number", "minimum": 0, "maximum": 250 },
+    "underbustCm": { "type": "number", "minimum": 0, "maximum": 250 },
+    "waistCm": { "type": "number", "minimum": 0, "maximum": 250 },
+    "hipCm": { "type": "number", "minimum": 0, "maximum": 300 },
+    "thighCm": { "type": "number", "minimum": 0, "maximum": 150 },
+    "calfCm": { "type": "number", "minimum": 0, "maximum": 100 },
+    "bicepCm": { "type": "number", "minimum": 0, "maximum": 100 },
+    "forearmCm": { "type": "number", "minimum": 0, "maximum": 100 },
+    "wristCm": { "type": "number", "minimum": 0, "maximum": 60 },
+    "shoulderWidthCm": { "type": "number", "minimum": 0, "maximum": 120 },
+    "inseamCm": { "type": "number", "minimum": 0, "maximum": 150 },
+    "headCircumferenceCm": { "type": "number", "minimum": 0, "maximum": 100 },
+    "skinTone": { "$ref": "#/$defs/colour" },
+    "skinMelanin": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hairTone": { "$ref": "#/$defs/colour" },
+    "clothTone": { "$ref": "#/$defs/colour" },
+    "gearTone": { "$ref": "#/$defs/colour" },
+    "clothRoughness": { "type": "number", "minimum": -1, "maximum": 1 },
+    "gearMetalness": { "type": "number", "minimum": -1, "maximum": 1 },
+    "prompt": { "type": "string", "maxLength": 20000 }
+  },
+  "$defs": {
+    "colour": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  }
+}
