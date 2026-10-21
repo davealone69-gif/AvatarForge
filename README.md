@@ -106,3 +106,8 @@ For a versioned, easy-to-find download, open [GitHub Releases](https://github.co
 The release APK currently uses the repository's fallback debug signing certificate unless `keystore.properties` is supplied to a local build. It is suitable for testing, not a production signing identity. Never commit a release keystore or its passwords.
 
 Install from the phone: download the APK, open it in Downloads, and allow installation from that source if Android asks. The APK is ARM64 and targets Android 8.0 (API 26) or newer. AvatarForge is intended to work offline and its APK must not request the `INTERNET` permission.
+
+
+## Renderer recovery retest (2026-10-21)
+
+A separate recovery build is available for retesting the reported black-viewer / 0 FPS failure. Its physical-device result is still **UNVERIFIED**. See [renderer recovery notes and checksums](docs/RENDERER_RECOVERY_2026-10-21.md) for the bundle identity, exact checksums, download source, and device acceptance checklist. The APK/AAR binaries are not GitHub release assets yet; the notes link to the original Dropbox bundle.
