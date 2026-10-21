@@ -13,6 +13,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val keystoreProps = rootProject.file("keystore.properties")
+val hasReleaseKeystore = keystoreProps.isFile
+
 android {
     namespace = "com.avatarforge.app"
     compileSdk = 34
@@ -35,31 +38,24 @@ android {
     }
 
     /*
-     * Signing. A release build has to be signed to install. If keystore.properties exists at the
-     * repository root (see local.properties.example for the four keys) it is used; otherwise the
-     * build falls back to the debug keystore, which produces an installable, self-signed APK that
-     * is fine for a device pass and clearly not a store upload. Point it at a real keystore before
-     * publishing anything.
+     * Release signing is fail-closed. A real keystore.properties at the repository root is required
+     * to package a release APK/AAB. Debug signing is for the debug variant only; it is never silently
+     * reused for a release artifact. CI skips release packaging until release signing secrets exist.
      */
-    val keystoreProps = rootProject.file("keystore.properties")
-    val hasReleaseKeystore = keystoreProps.exists()
     if (hasReleaseKeystore) {
-        /* `Properties` is imported at the top of the file: inside an Android module `java` is the
-           JavaPluginExtension, so a fully qualified java.util.Properties would not resolve. */
         val props = Properties().apply { keystoreProps.inputStream().use { load(it) } }
+        val requiredKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        val missingKeys = requiredKeys.filter { props.getProperty(it).isNullOrBlank() }
+        check(missingKeys.isEmpty()) {
+            "keystore.properties is incomplete; missing: ${missingKeys.joinToString()}"
+        }
+        val signingFile = file(props.getProperty("storeFile"))
+        check(signingFile.isFile) { "Release keystore does not exist: $signingFile" }
         signingConfigs.create("release") {
-            storeFile = file(props.getProperty("storeFile"))
+            storeFile = signingFile
             storePassword = props.getProperty("storePassword")
             keyAlias = props.getProperty("keyAlias")
             keyPassword = props.getProperty("keyPassword")
-        }
-    } else {
-        val debugKeystore = File(System.getProperty("user.home"), ".android/debug.keystore")
-        signingConfigs.create("release") {
-            storeFile = debugKeystore
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
         }
     }
 
@@ -68,7 +64,7 @@ android {
             isMinifyEnabled = false
         }
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
             /* R8 is off deliberately: the SDK is reached through JNI by name, and a shrinking pass
                that renamed the bridge class would fail at runtime rather than at build time. If
                shrinking is wanted later, the keep rules in consumer-rules.pro are already the
@@ -102,6 +98,23 @@ android {
     }
 }
 
+/*
+ * AGP can configure an unsigned release when no signing config exists. Fail before any release
+ * package is produced; debug APKs remain available without release credentials.
+ */
+if (!hasReleaseKeystore) {
+    tasks.configureEach {
+        if (name == "assembleRelease" || name == "packageRelease" ||
+            name == "bundleRelease" || name == "packageReleaseBundle" || name == "signReleaseBundle") {
+            doFirst {
+                throw GradleException(
+                    "Release signing blocked: add a valid keystore.properties at the repository root. " +
+                        "No debug-key fallback is permitted for release artifacts."
+                )
+            }
+        }
+    }
+}
 dependencies {
     implementation(project(":sdk"))
 

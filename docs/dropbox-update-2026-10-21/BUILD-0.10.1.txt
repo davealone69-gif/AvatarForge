@@ -1,0 +1,77 @@
+AvatarForge 0.10.1 — Phase 1–3 Android build evidence
+Date: 2026-10-21 UTC
+Branch: work/android-engine-dev
+Target ABI: arm64-v8a (Galaxy S24 SM-S921B acceptance target; hardware remains unverified)
+
+Pinned toolchain
+- JDK: Eclipse Temurin 17.0.20.1
+- Gradle: 8.9
+- Android platform / build-tools: API 34 / 34.0.0
+- Minimum Android API: 26
+- Android NDK: 26.1.10909125 (r26b), CMake 3.22.1
+- Kotlin compiler: 1.9.24
+- Rust stable: cargo 1.99.1
+
+Builds and tests
+- Native full host harness: most recent full native-source run passed 464/464; this Kotlin-only follow-up leaves native sources unchanged. Focused codec tests: 16/16
+- Kotlin SDK JVM tests: 20 tests, 0 failures, 0 errors, 0 skipped; the test task was forced to rerun
+- Rust workspace: 37 regular tests passed; 2 ignored end-to-end tests also passed when explicitly run
+- C++/Rust prompt parity: 72/72 prompts identical
+- Customization contracts: 2/2 validated
+- Shaders: 13 stages checked/compiled with installed NDK glslc; --check wrote nothing
+- tools/verify.sh --quick: PASS on this follow-up, including shader check, sample GLB validation,
+  C++ ABI, Rust partial ABI/parity, APK no-INTERNET/package audit and device-check package regression
+- Extracted actual Android workflow step “Audit APK permissions, ABI, symbols, alignment, and signatures”
+  was run locally against these latest APKs and passed: package/API/launcher metadata, no INTERNET,
+  ARM64 libraries, zip alignment, v2 signatures, 47/47 C ABI exports and 51/51 JNI exports
+- Android native source build: tools/build_android.sh arm64-v8a android-26 passed with NDK r26b
+  in the preceding native build; this thermal-report follow-up changes Kotlin/UI only
+- Gradle CMake integration for native code passed in the preceding build; current package build used
+  the current checked-in prebuilt ARM64 libraries
+- Latest Gradle build succeeded for :sdk:testDebugUnitTest, :app:assembleDebug,
+  :app:assembleRelease and :sdk:assembleRelease
+- No remote GitHub Actions run is recorded; the workflow audit above is local only
+
+Thermal follow-up (compiled and JVM-tested, not hardware-verified)
+- App menu → “Live device report” refreshes every second and reports thermal status, available/total
+  RAM, free storage, low-memory state and CPU cores without USB/ADB or network
+- API 29+: generation is permitted through Severe (3), blocked at Critical (4)+, and an active job is
+  cooperatively cancelled when Critical+ is detected; the monitor polls once per second
+- Renderer quality policy drops to LOW at Severe+; API 26–28 explicitly reports thermal telemetry
+  as unavailable
+- Android thermal telemetry is a device heat-pressure signal, not battery temperature; no physical
+  thermal behavior has been observed
+
+Current native libraries in prebuilt/arm64-v8a (unstripped, static STL)
+- libafcore.so       13,356,600 bytes  SHA-256 c8db3268f22ddf6dc6eea82b58eeb941cdb01064fae32a545bc01931c1e57b95
+- libafrender.so      5,480,152 bytes  SHA-256 b71463b65df625083de269b820f38ede287d97e0b5e476ce16d63b70cdd2c16c
+- libavatarforge.so     636,568 bytes  SHA-256 190f0eb84325bc628c7ece700070af75d7142d3c522efec723421056e674682b
+
+Packaged artifacts
+- artifacts/avatarforge-debug-arm64.apk   10,163,456 bytes  SHA-256 fc4e57dd483dd6b5b8e4ed280dcc90a5eb88fa98882029d5bd08cd0c183603f0
+- artifacts/avatarforge-release-arm64.apk  7,190,802 bytes  SHA-256 981ca221e4b62b61a3730f8b5d2c9df9dc0c3e3e26897086afd4156700d2ce58
+- artifacts/avatarforge-sdk-arm64.aar      1,324,508 bytes  SHA-256 7f7082c1f42f3837e50fe73a0646a4c7e25a02fd4adcda4f0018784dd6226b49
+- App package: com.avatarforge, version 0.10.1 / versionCode 2, minSdk 26, targetSdk 34
+- Both APKs contain arm64-v8a libafcore.so, libafrender.so and libavatarforge.so, plus both normalized
+  offline customization contracts; the AAR contains all three libraries and the contracts
+- Both APKs request only com.avatarforge.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION; INTERNET is absent
+- Both APKs pass zipalign and apksigner verification; APK Signature Scheme v2 is valid
+- Current debug/release signer certificate SHA-256: 960c75a9648a74dc189f3510a6c7f80e7029a63680b5dbdea0a2d87b244e5514
+- This local debug certificate is not a store signing key. Previous artifacts used a different
+  certificate (SHA-256 9d24f3af8779167ae7c22eeac8d172fc9214e24d3ae6a0e6b54d0964c266382a); Android may
+  reject an in-place update. Export avatars before uninstalling the older app, which can erase data.
+- Release manifest includes a non-exported FileProvider with grantUriPermissions=true and authority
+  com.avatarforge.avatarforge.fileprovider; launcher is com.avatarforge.app.MainActivity
+- C++ ARM64 library exports 47/47 functions in abi/afcore.abi.json; JNI library exports 51/51
+  NativeBridge methods. Static STL is used; no libc++_shared.so dependency is required.
+- APK packaging uses Gradle jniLibs.useLegacyPackaging=true; source manifest does not hard-code
+  android:extractNativeLibs
+
+Not completed / explicit limits
+- No physical Android device is connected; the user's USB plug does not work. No Galaxy S24
+  SM-S921B acceptance run, installation, airplane-mode generation, GPU rendering/upload, visual
+  inspection, FPS, memory, thermal, battery, lifecycle or soak evidence is claimed
+- x86_64 native build and emulator package were not part of this ARM64 target build
+- GitHub Actions has not been run remotely; push is blocked until GitHub authentication is available
+- artifacts/avatarforge-sample.glb is a previous valid export, not a generation performed on-device
+

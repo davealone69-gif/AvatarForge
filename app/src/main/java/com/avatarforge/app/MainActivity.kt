@@ -55,8 +55,11 @@ import com.avatarforge.app.ui.ProgressScreen
 import com.avatarforge.app.ui.ViewerPanel
 import com.avatarforge.app.ui.POSE_CLIP
 import com.avatarforge.app.ui.ViewerScreen
+import com.avatarforge.app.ui.SystemCheckScreen
+import com.avatarforge.app.ui.RenderSettingsScreen
 import com.avatarforge.app.ui.poseClipName
 import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.DeviceResourceGovernor
 import com.avatarforge.sdk.AvatarForge
 import com.avatarforge.sdk.AvatarSpec
 import com.avatarforge.sdk.EngineResult
@@ -68,15 +71,19 @@ import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.RenderProfileStore
 import com.avatarforge.sdk.render.RendererStats
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-private enum class Screen { INPUT, PROGRESS, VIEWER }
+private enum class Screen { INPUT, PROGRESS, VIEWER, RENDER_SETTINGS, SYSTEM_CHECK }
 
 class MainActivity : ComponentActivity() {
 
     /** The render surface, owned by the activity so it survives recomposition. */
     private var surfaceView: RenderSurfaceView? = null
+    private var engineForRelease: AvatarEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,13 +99,19 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         surfaceView?.release()
         surfaceView = null
+        if (isFinishing && !isChangingConfigurations) {
+            engineForRelease?.release()
+            engineForRelease = null
+        }
         super.onDestroy()
     }
 
     @Composable
     private fun App() {
         val context = LocalContext.current
-        val engine = remember { AvatarEngine.get(context) }
+        val engine = remember {
+            AvatarEngine.get(context).also { this@MainActivity.engineForRelease = it }
+        }
         val scope = rememberCoroutineScope()
         val health = remember { AvatarEngine.health() }
 
@@ -109,12 +122,14 @@ class MainActivity : ComponentActivity() {
         var imageA by remember { mutableStateOf<Bitmap?>(null) }
         var imageB by remember { mutableStateOf<Bitmap?>(null) }
         var analysisNote by remember { mutableStateOf<String?>(null) }
+        var generationError by remember { mutableStateOf<String?>(null) }
+        var preparingInput by remember { mutableStateOf(false) }
         var job by remember { mutableStateOf<JobHandle?>(null) }
         var status by remember { mutableStateOf(JobStatus()) }
         var result by remember { mutableStateOf<EngineResult?>(null) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
-        var settings by remember { mutableStateOf(AvatarForge.recommendedSettings(context)) }
+        var settings by remember { mutableStateOf(RenderProfileStore.load(context, AvatarForge.recommendedSettings(context))) }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
@@ -130,6 +145,7 @@ class MainActivity : ComponentActivity() {
                         job?.cancel()
                         screen = Screen.INPUT
                     }
+                    Screen.RENDER_SETTINGS, Screen.SYSTEM_CHECK -> screen = Screen.INPUT
                     Screen.INPUT -> Unit
                 }
             }
@@ -161,14 +177,14 @@ class MainActivity : ComponentActivity() {
                     val outcome = runCatching { started.await() }
                     outcome.onSuccess {
                         result = it
-                        surfaceView?.attachEngine(engine.nativeHandle)
+                        spec = it.spec
+                        surfaceView?.attachEngine(engine)
                         screen = Screen.VIEWER
                     }.onFailure { error ->
-                        Toast.makeText(
-                            context,
-                            "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                        generationError = buildString {
+                            append(error.javaClass.simpleName)
+                            error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                        }
                         screen = Screen.INPUT
                     }
                 }
@@ -190,43 +206,88 @@ class MainActivity : ComponentActivity() {
                 onImageA = { imageA = it },
                 onImageB = { imageB = it },
                 analysisNote = analysisNote,
-                enabled = health.usable,
+                generationError = generationError,
+                enabled = health.usable && !preparingInput,
                 onGeneratePrompt = {
-                    /* The prompt parser is run first so the spec the user sees is the spec that gets
-                       built - including the measurements the prompt implied. */
-                    val parsed = runCatching { engine.parsePrompt(prompt, spec) }.getOrDefault(spec)
-                    spec = parsed
-                    begin(engine.generate(GenerationRequest(parsed, prompt)))
+                    /* Prompt parsing touches the native handle; keep even this short operation off
+                       the UI thread and build the exact spec the user saw. */
+                    val requestedPrompt = prompt
+                    val requestedSpec = spec
+                    generationError = null
+                    preparingInput = true
+                    scope.launch {
+                        try {
+                            val parsed = withContext(Dispatchers.IO) {
+                                engine.parsePrompt(requestedPrompt, requestedSpec)
+                            }
+                            spec = parsed
+                            begin(engine.generate(GenerationRequest(parsed, requestedPrompt)))
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            generationError = buildString {
+                                append("Prompt analysis failed · ").append(error.javaClass.simpleName)
+                                error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                            }
+                        } finally {
+                            preparingInput = false
+                        }
+                    }
                 },
                 onGenerateImages = {
                     val a = imageA ?: return@InputScreen
-                    val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
-                    val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                    val analysed = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
-                    analysisNote = analysed?.joinToString("\n") { ref ->
-                        val an = ref.analysis
-                        if (an == null) "no analysis available" else buildString {
-                            append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
-                            append(" · ")
-                            append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
-                            append(" · skin L* %.0f".format(an.skinLab[0]))
-                            append(" · hair L* %.0f".format(an.hairLab[0]))
-                            append(" · garment metalness %.2f".format(an.metalConfidence))
-                            append(" · key light %.2f".format(an.keyLightIntensity))
+                    val b = imageB
+                    val requestedSpec = spec
+                    val requestedPrompt = prompt
+                    generationError = null
+                    preparingInput = true
+                    scope.launch {
+                        try {
+                            val (refA, refB) = withContext(Dispatchers.IO) {
+                                ImageReference.fromBitmap(a, ImageRole.IDENTITY) to
+                                    b?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
+                            }
+                            val analysed = withContext(Dispatchers.IO) {
+                                runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
+                            }
+                            analysisNote = analysed?.joinToString("\n") { ref ->
+                                val an = ref.analysis
+                                if (an == null) "no analysis available" else buildString {
+                                    append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
+                                    append(" · ")
+                                    append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
+                                    append(" · skin L* %.0f".format(an.skinLab[0]))
+                                    append(" · hair L* %.0f".format(an.hairLab[0]))
+                                    append(" · garment metalness %.2f".format(an.metalConfidence))
+                                    append(" · key light %.2f".format(an.keyLightIntensity))
+                                }
+                            }
+                            val resolved = withContext(Dispatchers.IO) {
+                                val fromImages = analysed?.let { engine.specFromImages(it, requestedSpec) } ?: requestedSpec
+                                if (requestedPrompt.isBlank()) fromImages else engine.parsePrompt(requestedPrompt, fromImages)
+                            }
+                            spec = resolved
+                            begin(
+                                engine.generate(
+                                    GenerationRequest(
+                                        spec = resolved,
+                                        prompt = requestedPrompt,
+                                        imageA = analysed?.firstOrNull() ?: refA,
+                                        imageB = analysed?.getOrNull(1) ?: refB,
+                                    ),
+                                ),
+                            )
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            generationError = buildString {
+                                append("Image analysis failed · ").append(error.javaClass.simpleName)
+                                error.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                            }
+                        } finally {
+                            preparingInput = false
                         }
                     }
-                    val resolved = analysed?.let { engine.specFromImages(it, spec) } ?: spec
-                    spec = resolved
-                    begin(
-                        engine.generate(
-                            GenerationRequest(
-                                spec = resolved,
-                                prompt = prompt,
-                                imageA = analysed?.firstOrNull() ?: refA,
-                                imageB = analysed?.getOrNull(1) ?: refB,
-                            ),
-                        ),
-                    )
                 },
             )
 
@@ -238,6 +299,25 @@ class MainActivity : ComponentActivity() {
                 },
             )
 
+            Screen.RENDER_SETTINGS -> RenderSettingsScreen(
+                settings = settings,
+                onSettings = { settings = it; RenderProfileStore.save(context, it) },
+                stats = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0),
+                rendererInfo = null,
+                thermalStatus = DeviceResourceGovernor(context).snapshot().thermalStatus,
+                onBack = { screen = Screen.INPUT },
+            )
+
+            Screen.SYSTEM_CHECK -> SystemCheckScreen(
+                result = null,
+                rendererError = null,
+                rendererInfo = null,
+                stats = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0),
+                thermalStatus = DeviceResourceGovernor(context).snapshot().thermalStatus,
+                settings = settings,
+                onBack = { screen = Screen.INPUT },
+            )
+
             Screen.VIEWER -> {
                 val finished = result
                 if (finished == null) {
@@ -247,6 +327,8 @@ class MainActivity : ComponentActivity() {
                     val stats by surfaceViewState?.stats?.collectAsState()
                         ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
                     val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
+                    val thermalStatus by surfaceViewState?.thermalStatusFlow?.collectAsState()
+                        ?: remember { mutableStateOf<Int?>(null) }
                     ViewerScreen(
                         result = finished,
                         engine = engine,
@@ -254,10 +336,11 @@ class MainActivity : ComponentActivity() {
                         onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,
+                        thermalStatus = thermalStatus,
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
-                        onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onSettings = { settings = it; RenderProfileStore.save(context, it); surfaceView?.applySettings(it) },
                         panel = panel,
                         onPanel = { panel = it },
                         clipIndex = clipIndex,
@@ -282,8 +365,7 @@ class MainActivity : ComponentActivity() {
                         onExpression = { index, value ->
                             val weights = FloatArray(expressionNames.size)
                             weights[index] = value
-                            engine.applyBlendshapes(weights)
-                            surfaceView?.invalidateMesh()
+                            surfaceView?.applyBlendshapes(weights)
                         },
                         onExport = {
                             Toast.makeText(
@@ -311,15 +393,17 @@ class MainActivity : ComponentActivity() {
                         pickedRegion = pickedRegion,
                         onPickRegion = { pickedRegion = it; surfaceView?.setOverlays(false, false, it) },
                         onTapModel = { x, y ->
-                            val pick = surfaceView?.pick(x, y)
-                            pickedRegion = pick?.region ?: -1
-                            surfaceView?.setOverlays(false, false, pickedRegion)
-                            panel = ViewerPanel.INSPECT
+                            scope.launch {
+                                val pick = surfaceView?.pickAsync(x, y)
+                                pickedRegion = pick?.region ?: -1
+                                surfaceView?.setOverlays(false, false, pickedRegion)
+                                panel = ViewerPanel.INSPECT
+                            }
                         },
                         surface = {
                             /* The generated avatar exists before the surface does, so the attach
                                happens here, once per result - not on every recomposition. */
-                            LaunchedEffect(finished) { surfaceView?.attachEngine(engine.nativeHandle) }
+                            LaunchedEffect(finished) { surfaceView?.attachEngine(engine) }
                             AndroidView(
                                 modifier = Modifier.fillMaxSize(),
                                 factory = { ctx ->
@@ -327,11 +411,16 @@ class MainActivity : ComponentActivity() {
                                         surfaceView = view
                                         surfaceViewState = view
                                         view.bind(engine)
-                                        view.attachEngine(engine.nativeHandle)
+                                        view.attachEngine(engine)
                                         view.applySettings(settings)
                                         view.applyCamera(camera)
                                         view.setFrameLoopEnabled(true)
                                     }
+                                },
+                                onRelease = { view ->
+                                    if (surfaceView === view) surfaceView = null
+                                    if (surfaceViewState === view) surfaceViewState = null
+                                    view.release()
                                 },
                             )
                         },
@@ -341,7 +430,7 @@ class MainActivity : ComponentActivity() {
         }
         // Grok-Girls Compose navigation pattern, adapted to destinations that actually exist
         // in AvatarForge. No placeholder routes are exposed.
-        if (screen != Screen.PROGRESS) {
+        if (screen != Screen.PROGRESS && screen != Screen.SYSTEM_CHECK && screen != Screen.RENDER_SETTINGS && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -372,12 +461,25 @@ class MainActivity : ComponentActivity() {
                     )
                     DropdownMenuItem(
                         text = { Text("Render settings") },
-                        enabled = result != null,
                         onClick = {
                             menuExpanded = false
                             if (result != null) {
                                 panel = ViewerPanel.RENDER
                                 screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.RENDER_SETTINGS
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("System check") },
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) {
+                                panel = ViewerPanel.SYSTEM_CHECK
+                                screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.SYSTEM_CHECK
                             }
                         },
                     )

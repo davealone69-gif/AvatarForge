@@ -1,0 +1,4 @@
+fc4e57dd483dd6b5b8e4ed280dcc90a5eb88fa98882029d5bd08cd0c183603f0  artifacts/avatarforge-debug-arm64.apk
+981ca221e4b62b61a3730f8b5d2c9df9dc0c3e3e26897086afd4156700d2ce58  artifacts/avatarforge-release-arm64.apk
+7f7082c1f42f3837e50fe73a0646a4c7e25a02fd4adcda4f0018784dd6226b49  artifacts/avatarforge-sdk-arm64.aar
+

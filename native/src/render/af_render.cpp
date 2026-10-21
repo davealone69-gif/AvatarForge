@@ -25,6 +25,8 @@
 #include "af_render_common.h"
 #include "af_environment.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <string>
 
@@ -68,7 +70,8 @@ int tierForPreset(QualityPreset preset) {
 class BudgetRenderer final : public Renderer {
 public:
     BudgetRenderer(Renderer* backend, const RendererOptions& requested)
-        : backend_(backend), requested_(requested), tier_(tierForPreset(requested.quality)) {
+        : backend_(backend), requested_(requested), profile_(backend->gpuProfile()),
+          tier_(std::min(tierForPreset(requested.quality), profile_.maxQualityLevel)) {
         applyTier();
     }
 
@@ -88,17 +91,24 @@ public:
     RendererInfo info() const override { return backend_->info(); }
 
     RendererOptions options() const override { return requested_; }
+    GpuProfile gpuProfile() const override { return profile_; }
 
     void setOptions(const RendererOptions& options) override {
         const bool presetChanged = options.quality != requested_.quality;
         requested_ = options;
-        if (presetChanged) tier_ = tierForPreset(options.quality);
+        if (presetChanged)
+            tier_ = std::min(tierForPreset(options.quality), profile_.maxQualityLevel);
         applyTier();
     }
 
     void renderFrame(float deltaSeconds) override {
+        const auto callStart = std::chrono::steady_clock::now();
         backend_->renderFrame(deltaSeconds);
+        const auto callEnd = std::chrono::steady_clock::now();
         stats_ = backend_->stats();
+        /* CPU-side wall time for the renderer call. This can include driver/GPU fence waits; it is
+           deliberately not presented as a GPU timestamp. Frame cadence remains the adaptive signal. */
+        stats_.cpuMs = std::chrono::duration<float, std::milli>(callEnd - callStart).count();
         stats_.qualityLevel = tier_;
         updateBudget(deltaSeconds);
     }
@@ -109,9 +119,10 @@ private:
     /* Sends the current tier's three fields into the backend, leaving every other setting alone. */
     void applyTier() {
         RendererOptions effective = requested_;
-        effective.msaaSamples = kTiers[tier_].msaa;
-        effective.shadowMapSize = kTiers[tier_].shadowSize;
-        effective.bloomLevels = kTiers[tier_].bloomLevels;
+        effective.effectiveQualityLevel = std::min(tier_, profile_.maxQualityLevel);
+        effective.msaaSamples = std::min(kTiers[tier_].msaa, static_cast<int>(profile_.maxMsaaSamples));
+        effective.shadowMapSize = std::min(kTiers[tier_].shadowSize, profile_.maxShadowMapSize);
+        effective.bloomLevels = std::min(kTiers[tier_].bloomLevels, profile_.maxBloomLevels);
         backend_->setOptions(effective);
     }
 
@@ -126,8 +137,8 @@ private:
 
         smoothed_ = smoothed_ <= 0.0f ? deltaSeconds : smoothed_ * 0.9f + deltaSeconds * 0.1f;
 
-        if (smoothed_ > 0.0333f) {          /* slower than 30 FPS */
-            if (++slowFrames_ > 30 && tier_ > 0) {
+        if (smoothed_ > profile_.slowFrameSeconds) {
+            if (++slowFrames_ > static_cast<int>(profile_.slowFramesBeforeDownshift) && tier_ > 0) {
                 --tier_;
                 applyTier();
                 slowFrames_ = 0;
@@ -136,8 +147,9 @@ private:
         } else {
             slowFrames_ = 0;
         }
-        if (smoothed_ < 0.0166f && requested_.quality == QualityPreset::AUTO) {
-            if (++fastFrames_ > 240 && tier_ < 3) {
+        if (smoothed_ < profile_.fastFrameSeconds && requested_.quality == QualityPreset::AUTO) {
+            if (++fastFrames_ > static_cast<int>(profile_.fastFramesBeforeUpshift) &&
+                tier_ < profile_.maxQualityLevel) {
                 ++tier_;
                 applyTier();
                 fastFrames_ = 0;
@@ -149,6 +161,7 @@ private:
 
     Renderer* backend_ = nullptr;
     RendererOptions requested_{};
+    GpuProfile profile_{};
     RendererStats stats_{};
     int tier_ = 1;
     int slowFrames_ = 0;

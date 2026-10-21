@@ -29,15 +29,15 @@
 //  silently does nothing): image analysis, geometry, UV unwrap, texture bake, rig,
 //  blendshape and animation bake, pose/blendshape application, geometry accessors, GLB export.
 //
-//  `tools/abi_conformance.py` measures exactly that: it prints how many of the 45 ABI symbols this
+//  `tools/abi_conformance.py` measures exactly that: it prints how many of the 47 ABI symbols this
 //  library resolves, checks the invariants both implementations must satisfy, and with
 //  `--reference` diffs behaviour against the C++ kernel. The Rust core is ready to be packaged
-//  into the APK when that report is 45/45 with no differences - not before.
+//  into the APK when that report is 47/47 with no differences - not before.
 //
 //  Build and check:
 //      cargo build --release --offline -p af-core
 //      cargo test  --offline -p af-core
-//      python3 tools/abi_conformance.py target/release/libafcore.so \
+//      python3 tools/abi_conformance.py target/release/libafcore_rust.so \
 //              --reference build-host/libafcore.so
 // ==============================================================================================
 

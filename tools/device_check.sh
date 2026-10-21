@@ -17,9 +17,10 @@
 #      identity      model, SoC, Android version, ABI - so a result is attributable to a device
 #      GPU           renderer/vendor strings: Vulkan support, GLES version, and the extensions
 #                    that decide whether GPU timing (EXT_disjoint_timer_query) is even possible
-#      thermal       thermal status and headroom before and after the run. ADPF is Phase 3, but a
-#                    soak that throttles without this column looks like a rendering bug
-#      memory        PSS high-water mark of the app process during the run (the < 2 GB budget)
+#      thermal       thermal status before and after the run. The render thread reports work
+#                    durations to ADPF on Android 12+; the thermal column still matters because a
+#                    soak that throttles without this context looks like a rendering bug
+#      memory        PSS high-water mark during the run (1.5 GiB target; 2 GB broader process ceiling)
 #      frames        gfxinfo frame statistics: janky %, p50/p90/p95/p99 frame times
 #      logcat        our own tag, filtered, so a native crash or a JNI error cannot hide
 #
@@ -32,7 +33,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ADB="${ADB:-${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb}"
 # Fall back to a bare "adb" when that path does not exist, so a phone-tools-only machine works.
 [ -x "$ADB" ] || ADB="adb"
-PKG="${PKG:-com.avatarforge.app}"
+PKG="${PKG:-com.avatarforge}"
 APK=""
 SOAK=0
 OUT="$ROOT/artifacts/device-report.txt"

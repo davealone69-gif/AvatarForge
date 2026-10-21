@@ -79,21 +79,69 @@ set_target_properties(afcore PROPERTIES VERSION "" SOVERSION "" PREFIX "lib")
 # ----------------------------------------------------------------------------------------------
 #  Renderer
 # ----------------------------------------------------------------------------------------------
+# Texture encoders are renderer-private: the public af_texture C ABI and exported GLB images stay
+# raw. Build the ASTC core for the selected Android ABI without `native` ISA flags (those would
+# target the build host when cross-compiling); ETC2 is the GLES 3.x / Vulkan fallback.
+set(ASTCENC_CLI OFF CACHE BOOL "" FORCE)
+set(ASTCENC_UNITTEST OFF CACHE BOOL "" FORCE)
+set(ASTCENC_SHAREDLIB OFF CACHE BOOL "" FORCE)
+set(ASTCENC_DECOMPRESSOR OFF CACHE BOOL "" FORCE)
+set(ASTCENC_DIAGNOSTICS OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ASAN OFF CACHE BOOL "" FORCE)
+set(ASTCENC_UBSAN OFF CACHE BOOL "" FORCE)
+set(ASTCENC_WERROR OFF CACHE BOOL "" FORCE)
+set(ASTCENC_UNIVERSAL_BUILD OFF CACHE BOOL "" FORCE)
+set(ASTCENC_INVARIANCE ON CACHE BOOL "" FORCE)
+set(ASTCENC_BIG_ENDIAN OFF CACHE BOOL "" FORCE)
+set(ASTCENC_BLOCK_MAX_TEXELS 216 CACHE STRING "" FORCE)
+set(ASTCENC_ISA_NATIVE OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_NONE OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_NEON OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_SSE2 OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_SSE41 OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_AVX2 OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_SVE_128 OFF CACHE BOOL "" FORCE)
+set(ASTCENC_ISA_SVE_256 OFF CACHE BOOL "" FORCE)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(ASTCENC_ISA_NEON ON CACHE BOOL "" FORCE)
+    set(AF_ASTCENC_TARGET astcenc-neon-static)
+elseif(ANDROID_ABI STREQUAL "x86_64")
+    set(ASTCENC_ISA_SSE2 ON CACHE BOOL "" FORCE)
+    set(AF_ASTCENC_TARGET astcenc-sse2-static)
+else()
+    # A generic scalar build is safe for older/less common NDK ABIs.
+    set(ASTCENC_ISA_NONE ON CACHE BOOL "" FORCE)
+    set(AF_ASTCENC_TARGET astcenc-none-static)
+endif()
+add_subdirectory(third_party/astcenc/Source)
+set_target_properties(${AF_ASTCENC_TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_subdirectory(third_party/etc2comp/EtcLib)
+target_compile_features(EtcLib PRIVATE cxx_std_11)
+set_target_properties(EtcLib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 set(AF_RENDER_SOURCES
     src/render/af_render.cpp
     src/render/af_render_capi.cpp
     src/render/af_vk.cpp
     src/render/af_gl.cpp
-    src/render/af_shaders.cpp)
+    src/render/af_shaders.cpp
+    src/render/af_avatar_culler.cpp
+    src/render/af_avatar_lod.cpp
+    src/render/af_gpu_profile.cpp
+    src/render/af_texture_compression.cpp)
 
 add_library(afrender SHARED ${AF_RENDER_SOURCES})
 target_include_directories(afrender
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astcenc/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/etc2comp/EtcLib/Etc
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/etc2comp/EtcLib/EtcCodec)
 target_compile_options(afrender PRIVATE ${AF_OPT_FLAGS} -Wall -Wextra)
 target_link_libraries(afrender
     PUBLIC afcore
-    PRIVATE vulkan EGL GLESv3 android log)
+    PRIVATE vulkan EGL GLESv3 android log ${AF_ASTCENC_TARGET} EtcLib)
 
 # ----------------------------------------------------------------------------------------------
 #  JNI bridge

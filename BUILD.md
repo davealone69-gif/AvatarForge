@@ -44,7 +44,7 @@ accordingly (`gradle.properties` already does: no daemon, no parallel module bui
 ## 1. Kernel + host test harness (no device, no Android toolchain)
 
 ```bash
-tools/build_host.sh test     # builds build-host/libafcore.so and runs the 386-check harness
+tools/build_host.sh test     # builds build-host/libafcore.so and runs the 464-check harness
 tools/build_host.sh kernel   # library only
 tools/build_host.sh all      # library + harness binary, do not run
 ```
@@ -52,15 +52,18 @@ tools/build_host.sh all      # library + harness binary, do not run
 Expected output ends with:
 
 ```
-All 386 checks complete: 0 failure(s)
+All 464 checks complete: 0 failure(s)
 ```
 
 The harness covers anthropometry (waist/hip/crotch exactness against tape measurements), signed
 distance field sanity, isosurface integrity (closed shell, no boundary loops, plausible volume for
 four body variants), determinism (identical spec ⇒ identical mesh), the rig (bind-pose exactness,
 fingertip/toe skinning, all 52 ARKit channels carrying real displacement), UV/PBR bake statistics,
-apparel, the embedded shader tables, a full end-to-end pass through the public C ABI, and pose
-composition (`[12]`: `AF_CLIP_REST` restores the bind pose *exactly*, and playing a clip, returning to
+apparel, all 13 embedded shader stages (including Forward+ compute), the host-tested renderer culler
+(`[10b]`), per-device GPU profile selection, ASTC/ETC2 block encoding, semantic mip chains and async
+compression polling (`[10c]`), index-only LOD range construction (`[10e]`), atlas budget selection and
+a full staged end-to-end pass through the public C ABI, scene/LOD/profiler checks, and pose composition (`[12]`:
+`AF_CLIP_REST` restores the bind pose *exactly*, and playing a clip, returning to
 rest and playing it again is bit-identical to playing it once - the skinning path is stateless with
 respect to whatever was displayed last).
 
@@ -93,6 +96,16 @@ GLES — validates the SPIR-V with `spirv-val`, type-checks the GLES dialect wit
 and fails loudly if a stage is missing or the two dialects disagree. The kernel harness ([10]) then
 verifies the baked tables at runtime cost zero: every pipeline stage present, valid SPIR-V magic,
 GLES text well-formed, unknown names returning null (no silent unlit fallback).
+
+### Renderer texture codecs and profiles
+
+The renderer vendors Apache-2.0 ASTC Encoder 5.4.0 and Google Etc2Comp under `native/third_party/`.
+CMake selects ASTC NEON for `arm64-v8a`, SSE2 for `x86_64`, and the portable scalar implementation
+for other ABIs; Etc2Comp supplies the ETC2/EAC fallback. The host harness exercises ASTC/ETC2 encoding,
+semantic mip generation and asynchronous job polling. The GL/Vulkan source uploads these formats only
+after checking the device's advertised format support, and retains a raw RGBA8/R8 upload fallback.
+Host tests do not exercise actual GPU uploads; an NDK build and physical-device render check are still
+required.
 
 ---
 
@@ -146,10 +159,12 @@ Build properties, all optional:
 | `-Paf.prebuiltJni=$PWD/prebuilt` | package the `.so` files from `prebuilt/` and skip CMake entirely - the way to build the APK on a small machine |
 | `-Paf.lowRam=true` | `-O1` for the natives plus a single-threaded CMake build |
 
-Release signing: put a `keystore.properties` (storeFile / storePassword / keyAlias / keyPassword) at
-the repository root to sign with your own key, otherwise the release build is signed with the debug
-keystore so it can still be installed on a test device. R8 is deliberately off; see the comment in
-`app/build.gradle.kts`.
+Release signing is fail-closed: put a valid `keystore.properties` (storeFile / storePassword /
+keyAlias / keyPassword) at the repository root before invoking `:app:assembleRelease` or
+`:app:bundleRelease`. Without a real signing key those tasks fail. CI always provides the debug APK
+for device testing and builds a signed release APK plus AAB only when all four `AF_RELEASE_*` GitHub
+secrets are configured. R8/resource shrinking remain disabled pending a dedicated shrink + JNI runtime
+verification pass; see `app/build.gradle.kts`.
 
 ### Artifacts built in this repository
 
@@ -177,14 +192,16 @@ adb shell am start -n com.avatarforge/.MainActivity
 | Prompt/photo analysis | < 1 s | 256 px working grid, classic segmentation, no neural net |
 | Geometry (0.008 m lattice) | 30–70 s | ~70 % of the total; the memory budget is enforced here |
 | UV unwrap | 1–3 s | 14k charts, 65 % atlas coverage |
-| Texture bake | 2–5 s | five 2048² maps, procedural in UV space |
+| Texture bake | 2–5 s | five maps, resolution selected from 2048² down to 256² by the budget |
 | Rig + blendshapes | 8–20 s | 71 joints, 52 channels |
 | Clips | < 1 s | 15 authored clips sampled and cached |
 | GLB export | 1–2 s | 33–39 MB, validated structurally |
 
-Peak RSS stays under 1.5 GB by default (`AvatarEngine` sets the kernel's budget explicitly); 30 FPS
-is the floor, 60 the target, and the renderer's budget controller steps quality down if frames run
-long rather than dropping them.
+The SDK requests a 1.5 GiB native generation budget by default; it is not a guaranteed fixed RSS
+ceiling. Before a build, the SDK may lower the request to measured available RAM minus a 512 MiB
+headroom reserve (minimum effective request 64 MiB), and Android can reclaim memory at any time. The
+on-device RSS target remains <1.5 GiB and must be measured. 30 FPS is the floor, 60 the target, and
+the renderer's budget controller steps quality down if frames run long rather than dropping them.
 
 ---
 
@@ -197,6 +214,11 @@ cargo test --offline                       # unit tests
 AF_CORE_LIB_DIR=/home/user/AvatarForge/build-host \
   cargo test --offline --release -p af --test engine -- --ignored --nocapture --test-threads=1
 ```
+
+`af-core` emits `libafcore_rust.so` (not `libafcore.so`): the unique filename prevents Cargo's
+workspace-test loader from shadowing the C++ reference library of the same ABI. Use
+`python3 tools/abi_conformance.py rust/target/release/libafcore_rust.so --reference build-host/libafcore.so`
+to check the Rust implementation.
 
 `af-sys` binds the C ABI, `af` wraps it safely (`Engine`, `JobHandle`, `Spec`, `export_glb`, and an
 optional `renderer` feature that drives the same renderer through its flat C ABI). The end-to-end
@@ -224,7 +246,7 @@ installed but Python.
 tools/verify.sh
 ```
 
-Five sections, non-zero exit on the first failure: the kernel harness (386 checks), the shader tables
+Five sections, non-zero exit on the first failure: the kernel harness (464 checks), the shader tables
 against their sources, the structural validation of an exported `.glb`, and an audit of the built
 artifacts - including the one claim that must never regress, **no `INTERNET` permission in any APK**.
 

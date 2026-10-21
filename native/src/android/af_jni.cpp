@@ -978,9 +978,15 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererIn
     af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
     if (!renderer) return AF_ERR_INVALID_ARG;
     const af::RendererInfo info = renderer->info();
+    std::string driverSummary = info.driver;
+    if (!info.gpuProfile.empty()) {
+        if (!driverSummary.empty()) driverSummary += " | ";
+        driverSummary += info.gpuProfile;
+        if (!info.textureCompression.empty()) driverSummary += " | " + info.textureCompression;
+    }
     if (outStrings && env->GetArrayLength(outStrings) >= 4) {
         const char* texts[4] = {info.backend.c_str(), info.deviceName.c_str(), info.apiVersion.c_str(),
-                                info.driver.c_str()};
+                                driverSummary.c_str()};
         for (int i = 0; i < 4; ++i) {
             jstring text = env->NewStringUTF(texts[i]);
             env->SetObjectArrayElement(outStrings, i, text);

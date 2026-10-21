@@ -5,6 +5,7 @@
 #include "af_threads.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace af {
 
@@ -38,6 +39,25 @@ const MaterialDef& materialForRegion(int region) {
 uint64_t textureSetBytes(const TextureSet& set) {
     return static_cast<uint64_t>(set.baseColor.size()) + set.normal.size() + set.metallicRoughness.size() +
            set.occlusion.size() + set.subsurface.size();
+}
+
+uint64_t atlasBakeWorkspaceBytes(int resolution) {
+    if (resolution <= 0) return 0;
+    const uint64_t side = static_cast<uint64_t>(resolution);
+    if (side > std::numeric_limits<uint64_t>::max() / side / 19ull)
+        return std::numeric_limits<uint64_t>::max();
+    /* Base/normal/MR/subsurface are RGBA8 (16 B/texel), AO is R8 (1 B), and the raster mask plus
+       its dilation copy add two more bytes at peak. */
+    return side * side * 19ull;
+}
+
+int atlasResolutionForBudget(uint64_t budgetBytes, uint64_t retainedBytes) {
+    if (retainedBytes >= budgetBytes) return 0;
+    const uint64_t available = budgetBytes - retainedBytes;
+    for (int resolution : {2048, 1024, 512, 256}) {
+        if (atlasBakeWorkspaceBytes(resolution) <= available) return resolution;
+    }
+    return 0;
 }
 
 /* ==============================================================================================

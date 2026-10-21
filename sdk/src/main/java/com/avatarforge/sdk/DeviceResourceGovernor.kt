@@ -58,7 +58,7 @@ class DeviceResourceGovernor(private val context: Context) {
                 DeviceResourceState.LOW_MEMORY
             storage < MIN_AVAILABLE_STORAGE_BYTES ->
                 DeviceResourceState.LOW_STORAGE
-            thermal != null && thermal >= PowerManager.THERMAL_STATUS_SEVERE ->
+            thermal != null && thermal >= PowerManager.THERMAL_STATUS_EMERGENCY ->
                 DeviceResourceState.THERMAL_LIMIT
             else -> DeviceResourceState.NORMAL
         }

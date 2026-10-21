@@ -37,7 +37,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include "af_avatar_culler.h" /* renderer-to-scene visibility adapter; host-testable without a GPU */
+#include "af_avatar_lod.h" /* deformation-safe index LOD data; host-testable without a GPU */
 #include "af_shaders.h"   /* the baked shader tables, checked by [10] */
+#include "af_gpu_profile.h"
+#include "af_texture_compression.h"
+#include "astcenc.h"
 #include "../src/af_glb_read.h"
 #include "../src/af_json.h"
 #include "../src/af_png.h"
@@ -45,8 +50,10 @@
 #include "../src/af_scene.h"
 #include "../src/af_profiler.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <iterator>
+#include <stdexcept>
 
 using namespace af;
 
@@ -136,6 +143,63 @@ static void testImageAnalysisPacking() {
           "null analysis destinations are rejected");
     std::printf("  %s  stride=%d, all Lab triplets retained, guards intact\n", PASS,
                 AF_IMAGE_ANALYSIS_FLOAT_COUNT);
+}
+
+/* A skipped image must not shift later role indexes into a different successful analysis. */
+static void testSkippedImageRoleMapping() {
+    std::printf("[0b] skipped image preserves the role-to-analysis mapping\n");
+    constexpr int width = 96, height = 128, channels = 3;
+    auto subjectImage = [](uint8_t r, uint8_t g, uint8_t b) {
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * channels);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const bool subject = (24 <= x && x < 72 && 20 <= y && y < 75) ||
+                                     (32 <= x && x < 48 && 75 <= y && y < 120) ||
+                                     (48 <= x && x < 64 && 75 <= y && y < 120);
+                const size_t i = (static_cast<size_t>(y) * width + x) * channels;
+                pixels[i + 0] = subject ? r : 235;
+                pixels[i + 1] = subject ? g : 235;
+                pixels[i + 2] = subject ? b : 235;
+            }
+        }
+        return pixels;
+    };
+
+    std::vector<uint8_t> identityPixels = subjectImage(150, 70, 30);
+    std::vector<uint8_t> extraPixels = subjectImage(30, 70, 160);
+    af_image images[3]{};
+    images[0].width = width; images[0].height = height; images[0].channels = channels;
+    images[0].role = AF_IMAGE_FULL_BODY; images[0].pixels = nullptr;  /* deliberately rejected */
+    images[1] = {width, height, channels, AF_IMAGE_IDENTITY, identityPixels.data()};
+    images[2] = {width, height, channels, AF_IMAGE_EXTRA_VIEW, extraPixels.data()};
+
+    af_spec initial;
+    af_spec_init(&initial);
+    af_engine* engine = nullptr;
+    CHECK(af_engine_create(&initial, nullptr, &engine) == AF_OK && engine != nullptr,
+          "engine created for image-role regression");
+    if (!engine) return;
+
+    af_image_analysis analyses[3]{};
+    const int32_t produced = af_engine_analyze_images(engine, images, 3, analyses, 3);
+    CHECK(produced == 2, "two valid images survive one rejected input (%d records)", produced);
+    af_spec resolved{};
+    const int32_t parsed = af_engine_analyze_prompt(engine, "", &resolved);
+    CHECK(parsed >= 0, "resolved image-derived spec can be read (%d)", parsed);
+    if (produced == 2 && parsed >= 0) {
+        const auto melaninFor = [](const af_image_analysis& a) {
+            const float ref = std::max(22.0f, a.background_lab[0]);
+            const float ratio = std::max(0.15f, std::min(1.9f, a.skin_lab[0] / ref));
+            return std::max(0.03f, std::min(0.95f, 0.62f - 0.52f * ratio));
+        };
+        const float expected = melaninFor(analyses[0]);
+        const float wrongShifted = melaninFor(analyses[1]);
+        CHECK(std::fabs(expected - wrongShifted) > 0.03f,
+              "fixture distinguishes the identity analysis from the following extra view");
+        CHECK_NEAR(resolved.skin_melanin, expected, 1e-5f,
+                   "explicit identity role resolves from its own compacted analysis record");
+    }
+    af_engine_destroy(engine);
 }
 
 /* ------------------------------------------------------------------ 1. anthropometry ----- */
@@ -635,11 +699,24 @@ static void testAbi() {
     CHECK(af_engine_run_all(engine) == AF_ERR_CANCELLED, "cancellation is honoured");
     g_cancelFlag = 0;
 
-    /* --- the full pipeline --- */
+    /* --- the dependency-ordered stage graph and native finalize barrier --- */
     g_progressCalls = 0;
     g_logCalls = 0;
-    CHECK(af_engine_run_all(engine) == AF_OK, "run_all completes");
-    CHECK(af_engine_dirty_mask(engine) == 0, "nothing is left dirty after run_all (%d)", af_engine_dirty_mask(engine));
+    const struct { int stage; int32_t (*run)(af_engine*); const char* label; } stageGraph[] = {
+        {AF_STAGE_FIT_ANATOMY, af_engine_fit_anatomy, "fit anatomy"},
+        {AF_STAGE_GEOMETRY, af_engine_build_geometry, "build geometry"},
+        {AF_STAGE_UV_UNWRAP, af_engine_unwrap_uv, "unwrap UVs"},
+        {AF_STAGE_BAKE_TEXTURES, af_engine_bake_textures, "bake textures"},
+        {AF_STAGE_RIG, af_engine_rig, "build rig"},
+        {AF_STAGE_BLENDSHAPES, af_engine_bake_blendshapes, "bake blendshapes"},
+        {AF_STAGE_ANIMATION, af_engine_bake_animation, "bake animations"},
+    };
+    for (const auto& node : stageGraph) {
+        const int32_t stageRc = node.run(engine);
+        CHECK(stageRc == AF_OK, "dependency graph node %s completes (rc=%d)", node.label, stageRc);
+    }
+    CHECK(af_engine_run_all(engine) == AF_OK, "run_all finalizes an already completed stage graph");
+    CHECK(af_engine_dirty_mask(engine) == 0, "nothing is left dirty after staged run (%d)", af_engine_dirty_mask(engine));
     CHECK(g_progressCalls > 8, "progress was reported through the callback (%d calls)", g_progressCalls);
     CHECK(g_logCalls > 3, "log messages were reported through the callback (%d)", g_logCalls);
     CHECK(std::string(af_engine_last_error(engine)).empty(), "no error recorded on success (\"%s\")",
@@ -666,6 +743,36 @@ static void testAbi() {
     const int icount = af_engine_index_count(engine);
     CHECK(verts != nullptr && idx != nullptr, "vertex and index buffers exposed");
     if (verts && idx) {
+        const af_vertex* restVerts = af_engine_vertices_rest(engine);
+        if (!restVerts) restVerts = verts;
+        AvatarLodSet generatedLods;
+        const bool lodBuildOk = generatedLods.build(
+            restVerts, static_cast<size_t>(vcount), idx, static_cast<size_t>(icount),
+            af_engine_submeshes(engine), static_cast<size_t>(af_engine_submesh_count(engine)));
+        CHECK(lodBuildOk && generatedLods.levelCount() >= 2 && generatedLods.levelCount() <= kAvatarLodLevels,
+              "renderer builds LODs for the generated skinned avatar (%d levels)", generatedLods.levelCount());
+        CHECK(lodBuildOk && generatedLods.level(0).indexCount == static_cast<uint32_t>(icount) &&
+                  std::equal(idx, idx + icount, generatedLods.indices().begin()),
+              "generated avatar LOD 0 is byte-for-byte the original index stream");
+        bool generatedRangesValid = lodBuildOk;
+        bool generatedBoundsValid = lodBuildOk;
+        for (int level = 0; level < generatedLods.levelCount(); ++level) {
+            const AvatarLodLevel& lod = generatedLods.level(level);
+            uint64_t submeshIndexCount = 0;
+            for (const AvatarLodRange& range : lod.submeshes) {
+                submeshIndexCount += range.indexCount;
+                const uint64_t end = uint64_t(range.firstIndex) + range.indexCount;
+                generatedRangesValid = generatedRangesValid && end <= generatedLods.indices().size();
+                for (uint64_t i = range.firstIndex; i < end && i < generatedLods.indices().size(); ++i)
+                    generatedBoundsValid = generatedBoundsValid && generatedLods.indices()[static_cast<size_t>(i)] < static_cast<uint32_t>(vcount);
+            }
+            generatedRangesValid = generatedRangesValid && submeshIndexCount == lod.indexCount;
+        }
+        CHECK(generatedRangesValid && generatedBoundsValid,
+              "generated avatar LOD submesh ranges cover the stream and reference valid source vertices");
+        CHECK(generatedLods.triangleCount(generatedLods.levelCount() - 1) < generatedLods.triangleCount(0),
+              "generated avatar coarse LOD reduces the source triangle count (%d -> %d)",
+              generatedLods.triangleCount(0), generatedLods.triangleCount(generatedLods.levelCount() - 1));
         size_t badNormal = 0, badWeights = 0, badJoint = 0, badUv = 0, nonFinite = 0;
         for (int i = 0; i < vcount; ++i) {
             const af_vertex& v = verts[i];
@@ -894,6 +1001,15 @@ static void testAbi() {
 
 static void testTexturing() {
     std::printf("\n[8] UV atlas and PBR bake\n");
+    constexpr uint64_t MiB = 1024ull * 1024ull;
+    CHECK(atlasResolutionForBudget(1536ull * MiB, 0) == 2048,
+          "the requested default budget retains a 2048 atlas");
+    CHECK(atlasResolutionForBudget(24ull * MiB, 0) == 1024 &&
+              atlasResolutionForBudget(5ull * MiB, 0) == 512 &&
+              atlasResolutionForBudget(1ull * MiB, 0) == 0,
+          "atlas selection steps down to fit 1024/512 or fails below the safe minimum");
+    CHECK(atlasBakeWorkspaceBytes(1024) == 19ull * MiB,
+          "atlas memory estimate includes maps and raster/dilation masks");
     af_spec spec;
     af_spec_init(&spec);
     spec.sex = AF_SEX_FEMALE; spec.build = AF_BUILD_ATHLETIC; spec.height_m = 1.70f;
@@ -1240,6 +1356,7 @@ static void testShaderTables() {
         {"line", AF_STAGE_VERT},    {"line", AF_STAGE_FRAG},
         {"fullscreen", AF_STAGE_VERT},
         {"bloom_down", AF_STAGE_FRAG}, {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
+        {"forward_plus", AF_STAGE_COMP},
     };
     const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
     CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",
@@ -1266,6 +1383,373 @@ static void testShaderTables() {
           "the forward shader is the shared lighting model (AF_KIND_* present in both dialects)");
     std::printf("  %s  %d stages / %d SPIR-V words (%.0f kB) / %.0f kB of GLSL ES\n", PASS, wanted, words,
                 words * 4.0 / 1024.0, glBytes / 1024.0);
+}
+
+/* ------------------------------------------ renderer-to-scene visibility adapter --------------- */
+static void testGpuProfilesAndTextureCompression() {
+    std::printf("[10c] per-device GPU profiles and ASTC/ETC2 atlas encoding\n");
+    GpuDeviceCaps caps;
+    caps.backend = "vulkan";
+    caps.vendorId = 0x5143u;
+    caps.deviceName = "Adreno (TM) 650";
+    caps.maxTextureDimension2D = 16384;
+    caps.maxColorSamples = 4;
+    caps.supportsAstcLdr = true;
+    caps.supportsEtc2 = true;
+    caps.supportsFloatHdr = true;
+    GpuProfile balanced = makeGpuProfile(caps);
+    CHECK(balanced.tier == GpuTier::BALANCED && balanced.maxQualityLevel == 2,
+          "Adreno 6xx selects a balanced profile and caps the quality ladder");
+    CHECK(balanced.atlasCompression == AtlasCompression::ASTC_6X6 &&
+              balanced.maxMsaaSamples == 2 && balanced.maxShadowMapSize == 2048,
+          "ASTC capability wins, while MSAA and shadow resolution are profile-bounded");
+
+    caps.deviceName = "Mali-G57 MC2";
+    caps.vendorId = 0x13B5u;
+    GpuProfile mali = makeGpuProfile(caps);
+    CHECK(mali.tier == GpuTier::BALANCED && mali.lodDistanceScale == 1.0f,
+          "Mali G57 receives the balanced LOD and render profile");
+    caps.deviceName = "Adreno 740";
+    caps.vendorId = 0x5143u;
+    caps.maxColorSamples = 2;
+    GpuProfile high = makeGpuProfile(caps);
+    CHECK(high.tier == GpuTier::HIGH && high.maxMsaaSamples == 2 && high.maxQualityLevel == 3,
+          "Adreno 7xx is high-tier but never exceeds reported sample support");
+    caps.deviceName = "Generic GLES device";
+    caps.vendorId = 0;
+    caps.supportsAstcLdr = false;
+    caps.supportsEtc2 = true;
+    GpuProfile etcFallback = makeGpuProfile(caps);
+    CHECK(etcFallback.atlasCompression == AtlasCompression::ETC2,
+          "ETC2 is selected when ASTC LDR is unavailable");
+    caps.supportsEtc2 = false;
+    GpuProfile rawFallback = makeGpuProfile(caps);
+    CHECK(rawFallback.atlasCompression == AtlasCompression::NONE,
+          "raw texture upload remains the fallback when no compressed format is advertised");
+    caps.softwareRenderer = true;
+    GpuProfile software = makeGpuProfile(caps);
+    CHECK(software.tier == GpuTier::LOW && software.maxMsaaSamples == 1,
+          "software renderers receive conservative limits");
+
+    std::vector<uint8_t> rgba(8u * 8u * 4u);
+    for (size_t i = 0; i < 64; ++i) {
+        rgba[i * 4 + 0] = 160;
+        rgba[i * 4 + 1] = 90;
+        rgba[i * 4 + 2] = 40;
+        rgba[i * 4 + 3] = 255;
+    }
+    af_texture rgbaTexture{8, 8, 4, 1, rgba.size(), rgba.data()};
+    EncodedTexture astcColor;
+    std::string encodeError;
+    CHECK(compressAtlasTexture(rgbaTexture, AF_TEX_BASE_COLOR, balanced, &astcColor, &encodeError),
+          "ASTC sRGB base-colour encoding succeeds (%s)", encodeError.c_str());
+    CHECK(astcColor.encoding == AtlasTextureEncoding::ASTC_6X6_SRGB &&
+              astcColor.levels.size() == 4 && astcColor.levels[0].bytes.size() == 64 &&
+              astcColor.byteSize() == 112,
+          "ASTC stores the expected 6x6 block payload and explicit 8x8-to-1x1 mip chain");
+
+    if (astcColor.valid()) {
+        astcenc_config config{};
+        const astcenc_error configResult = astcenc_config_init(ASTCENC_PRF_LDR_SRGB, 6, 6, 1,
+                                                                ASTCENC_PRE_FASTEST, 0, &config);
+        astcenc_context* context = nullptr;
+        const astcenc_error allocResult = configResult == ASTCENC_SUCCESS
+            ? astcenc_context_alloc(&config, 1, &context, nullptr) : configResult;
+        std::vector<uint8_t> decoded(8u * 8u * 4u);
+        void* outputSlices[1] = {decoded.data()};
+        astcenc_image output{};
+        output.dim_x = 8;
+        output.dim_y = 8;
+        output.dim_z = 1;
+        output.data_type = ASTCENC_TYPE_U8;
+        output.data = outputSlices;
+        const astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+        const astcenc_error decodeResult = allocResult == ASTCENC_SUCCESS && context
+            ? astcenc_decompress_image(context, astcColor.levels[0].bytes.data(),
+                                       astcColor.levels[0].bytes.size(), &output, &swizzle, 0)
+            : allocResult;
+        CHECK(decodeResult == ASTCENC_SUCCESS && std::abs(int(decoded[0]) - 160) < 20 &&
+                  std::abs(int(decoded[1]) - 90) < 20 && std::abs(int(decoded[2]) - 40) < 20,
+              "ASTC block round-trips representative sRGB colour values");
+        if (context) astcenc_context_free(context);
+    } else {
+        CHECK(false, "ASTC output is available for decoder validation");
+    }
+
+    std::vector<uint8_t> ao(7u * 5u);
+    for (size_t i = 0; i < ao.size(); ++i) ao[i] = static_cast<uint8_t>(64u + (i * 7u) % 160u);
+    af_texture aoTexture{7, 5, 1, 1, ao.size(), ao.data()};
+    EncodedTexture astcAo;
+    CHECK(compressAtlasTexture(aoTexture, AF_TEX_OCCLUSION, balanced, &astcAo, &encodeError) &&
+              astcAo.encoding == AtlasTextureEncoding::ASTC_6X6_UNORM &&
+              astcAo.levels.size() == 3 && astcAo.levels[0].bytes.size() == 32 &&
+              astcAo.byteSize() == 64,
+          "single-channel AO is swizzled safely into ASTC with odd-size mip dimensions");
+
+    GpuProfile etc = etcFallback;
+    etc.encoderThreads = 1;
+    etc.etc2Effort = 0.0f;
+    for (size_t i = 0; i < 64; ++i) rgba[i * 4 + 3] = (i % 2u) ? 96u : 224u;
+    EncodedTexture etcAo;
+    CHECK(compressAtlasTexture(aoTexture, AF_TEX_OCCLUSION, etc, &etcAo, &encodeError) &&
+              etcAo.encoding == AtlasTextureEncoding::ETC2_R11_UNORM &&
+              etcAo.levels.size() == 3 && etcAo.levels[0].bytes.size() == 32 &&
+              etcAo.byteSize() == 48,
+          "ETC2 EAC R11 encodes AO blocks and the explicit mip chain");
+    EncodedTexture etcColor;
+    CHECK(compressAtlasTexture(rgbaTexture, AF_TEX_BASE_COLOR, etc, &etcColor, &encodeError) &&
+              etcColor.encoding == AtlasTextureEncoding::ETC2_RGBA8_SRGB &&
+              etcColor.levels[0].bytes.size() == 64,
+          "ETC2 base colour uses the sRGB RGBA8 block format and preserves alpha");
+    EncodedTexture etcNormal;
+    CHECK(compressAtlasTexture(rgbaTexture, AF_TEX_NORMAL, etc, &etcNormal, &encodeError) &&
+              etcNormal.encoding == AtlasTextureEncoding::ETC2_RGBA8_UNORM &&
+              etcNormal.levels[0].bytes.size() == 64,
+          "ETC2 normal data retains all sampled RGBA channels");
+
+    af_texture invalid{8, 8, 4, 1, 1, rgba.data()};
+    EncodedTexture rejected;
+    CHECK(!compressAtlasTexture(invalid, AF_TEX_BASE_COLOR, balanced, &rejected, &encodeError) &&
+              !rejected.valid(),
+          "malformed raw byte counts fail closed without publishing a partial encoding");
+
+    std::array<af_texture, AF_TEX_COUNT> sources{};
+    sources[AF_TEX_BASE_COLOR] = rgbaTexture;
+    AsyncAtlasCompression async;
+    const bool started = async.start(sources, balanced);
+    EncodedAtlas encodedAtlas;
+    bool completed = false;
+    for (int i = 0; i < 10000 && !completed; ++i) {
+        completed = async.poll(&encodedAtlas);
+        if (!completed) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!completed) async.waitDiscard();
+    CHECK(started && completed && encodedAtlas.textures[AF_TEX_BASE_COLOR].valid(),
+          "renderer-owned compression job can be polled and joined off the render thread (started=%d completed=%d valid=%d)",
+          started ? 1 : 0, completed ? 1 : 0,
+          encodedAtlas.textures[AF_TEX_BASE_COLOR].valid() ? 1 : 0);
+}
+
+static void testAvatarCuller() {
+    std::printf("\n[10b] renderer avatar visibility: front, off-screen and fail-open invalid inputs\n");
+    AvatarCuller culler;
+    CameraState camera;
+    const float modelMin[3] = {-0.5f, 0.0f, -0.2f};
+    const float modelMax[3] = { 0.5f, 1.8f,  0.2f};
+
+    AvatarCullResult visible = culler.update(modelMin, modelMax, true, 36, camera, 1080, 1920);
+    CHECK(visible.visible, "renderer culler: avatar inside the camera frustum is retained");
+    CHECK(visible.lod == 0 && visible.triangleCount == 12,
+          "renderer culler: a single-LOD mesh keeps all triangles (%d, LOD %d)",
+          visible.triangleCount, visible.lod);
+
+    const int lodIndices[3] = {300, 120, 30};
+    CameraState farCamera = camera;
+    farCamera.distance = 10.0f;
+    const AvatarCullResult farLod = culler.update(modelMin, modelMax, true, lodIndices, 3,
+                                                   farCamera, 1080, 1920, 1.0f);
+    CHECK(farLod.visible && farLod.lod == 2 && farLod.triangleCount == 10,
+          "renderer culler selects the available coarse LOD at distance (%d, %d triangles)",
+          farLod.lod, farLod.triangleCount);
+    CameraState lowQualityCamera = camera;
+    lowQualityCamera.distance = 3.0f;
+    const AvatarCullResult lowQualityLod = culler.update(modelMin, modelMax, true, lodIndices, 3,
+                                                          lowQualityCamera, 1080, 1920, 0.0f);
+    CHECK(lowQualityLod.visible && lowQualityLod.lod >= 1,
+          "lower adaptive quality moves LOD thresholds closer to the camera (%d)", lowQualityLod.lod);
+
+    const float offscreenMin[3] = {10.0f, 0.0f, -0.2f};
+    const float offscreenMax[3] = {11.0f, 1.8f,  0.2f};
+    const AvatarCullResult culled = culler.update(offscreenMin, offscreenMax, true, 36, camera, 1080, 1920);
+    CHECK(!culled.visible && culled.culledInstances == 1,
+          "renderer culler: an avatar wholly outside the frustum is skipped");
+
+    const AvatarCullResult empty = culler.update(nullptr, nullptr, false, 0, camera, 1080, 1920);
+    CHECK(!empty.visible, "renderer culler: a missing model produces no draw");
+
+    const float invalidMin[3] = {1.0f, 0.0f, 0.0f};
+    const float invalidMax[3] = {-1.0f, 1.0f, 1.0f};
+    const AvatarCullResult failOpen = culler.update(invalidMin, invalidMax, true, 36, camera, 1080, 1920);
+    CHECK(failOpen.visible && failOpen.triangleCount == 12,
+          "renderer culler: malformed bounds fail open instead of hiding the avatar");
+
+    CameraState invalidCamera = camera;
+    invalidCamera.fovDeg = 0.0f;
+    const AvatarCullResult cameraFailOpen = culler.update(modelMin, modelMax, true, 36,
+                                                          invalidCamera, 1080, 1920);
+    CHECK(cameraFailOpen.visible,
+          "renderer culler: degenerate field of view fails open instead of hiding the avatar");
+}
+
+/* ------------------------------------------ deformation-safe renderer LOD data ---------------- */
+static void testAvatarLodSet() {
+    std::printf("\n[10e] renderer LODs keep original vertices and provide monotone index ranges\n");
+    constexpr int side = 24;
+    std::vector<af_vertex> vertices(static_cast<size_t>(side) * side);
+    std::vector<uint32_t> indices;
+    indices.reserve(static_cast<size_t>(side - 1) * (side - 1) * 6);
+    for (int y = 0; y < side; ++y) {
+        for (int x = 0; x < side; ++x) {
+            af_vertex& vertex = vertices[static_cast<size_t>(y) * side + x];
+            vertex.pos[0] = static_cast<float>(x) / (side - 1);
+            vertex.pos[1] = static_cast<float>(y) / (side - 1);
+            vertex.pos[2] = 0.02f * std::sin(vertex.pos[0] * 6.2831853f) *
+                                      std::sin(vertex.pos[1] * 6.2831853f);
+            vertex.normal[2] = 1.0f;
+            vertex.uv[0] = vertex.pos[0];
+            vertex.uv[1] = vertex.pos[1];
+            vertex.weights[0] = 1.0f;
+        }
+    }
+    for (int y = 0; y + 1 < side; ++y) {
+        for (int x = 0; x + 1 < side; ++x) {
+            const uint32_t a = static_cast<uint32_t>(y * side + x);
+            const uint32_t b = a + 1;
+            const uint32_t c = a + static_cast<uint32_t>(side);
+            const uint32_t d = c + 1;
+            indices.insert(indices.end(), {a, c, b, b, c, d});
+        }
+    }
+    af_submesh submesh{};
+    submesh.vertex_count = static_cast<int32_t>(vertices.size());
+    submesh.index_count = static_cast<int32_t>(indices.size());
+    AvatarLodSet lods;
+    const bool built = lods.build(vertices.data(), vertices.size(), indices.data(), indices.size(),
+                                  &submesh, 1);
+    CHECK(built && lods.levelCount() >= 2 && lods.levelCount() <= kAvatarLodLevels,
+          "renderer constructs a full mesh and at least one simplified level (%d levels)", lods.levelCount());
+    CHECK(lods.triangleCount(0) == static_cast<int>(indices.size() / 3),
+          "LOD 0 preserves the exact source triangle count");
+    bool monotone = true, indicesInBounds = true, rangesValid = true;
+    for (int level = 0; level < lods.levelCount(); ++level) {
+        const AvatarLodLevel& item = lods.level(level);
+        monotone = monotone && (level == 0 || item.indexCount <= lods.level(level - 1).indexCount);
+        rangesValid = rangesValid && item.submeshes.size() == 1 &&
+            item.firstIndex <= lods.indices().size() && item.indexCount <= lods.indices().size() - item.firstIndex &&
+            item.submeshes[0].firstIndex <= lods.indices().size() &&
+            item.submeshes[0].indexCount <= lods.indices().size() - item.submeshes[0].firstIndex;
+        for (size_t i = item.firstIndex; i < static_cast<size_t>(item.firstIndex) + item.indexCount; ++i)
+            indicesInBounds = indicesInBounds && lods.indices()[i] < vertices.size();
+    }
+    CHECK(monotone && lods.triangleCount(lods.levelCount() - 1) < lods.triangleCount(0),
+          "lower LODs reduce triangle count monotonically (%d -> %d)",
+          lods.triangleCount(0), lods.triangleCount(lods.levelCount() - 1));
+    CHECK(indicesInBounds && rangesValid,
+          "all LOD ranges stay within the combined index stream and source vertex pool");
+    bool everyIndexIsOriginal = true;
+    for (int level = 1; level < lods.levelCount(); ++level) {
+        const AvatarLodLevel& item = lods.level(level);
+        for (size_t i = item.firstIndex; i < static_cast<size_t>(item.firstIndex) + item.indexCount; ++i)
+            everyIndexIsOriginal = everyIndexIsOriginal &&
+                std::find(indices.begin(), indices.end(), lods.indices()[i]) != indices.end();
+    }
+    CHECK(everyIndexIsOriginal,
+          "simplified levels reference original source vertices (no averaged/skinning data)");
+
+    af_submesh malformed = submesh;
+    malformed.index_offset = -3;
+    AvatarLodSet rejected;
+    CHECK(!rejected.build(vertices.data(), vertices.size(), indices.data(), indices.size(), &malformed, 1) &&
+              rejected.levelCount() == 0,
+          "malformed source ranges are rejected instead of generating unsafe GPU indices");
+}
+
+/* ------------------------------------------ parallel work error propagation -------------------- */
+static void testParallelForExceptions() {
+    std::printf("\n[10c] parallelFor propagates worker exceptions and honours cancellation\n");
+    std::atomic<int> calls{0};
+    bool caughtWorker = false;
+    try {
+        parallelFor(32, 4, [&](int begin, int) {
+            ++calls;
+            if (begin == 8) throw std::runtime_error("worker regression sentinel");
+        });
+    } catch (const std::runtime_error& e) {
+        caughtWorker = std::string(e.what()) == "worker regression sentinel";
+    }
+    CHECK(caughtWorker, "parallelFor rethrows a worker exception on the caller thread");
+    CHECK(calls.load() > 0, "parallelFor actually started at least one worker range");
+
+    std::atomic<int> cancelledBodyCalls{0};
+    parallelFor(64, 4, [&](int, int) { ++cancelledBodyCalls; }, [] { return true; });
+    CHECK(cancelledBodyCalls.load() == 0, "parallelFor does not run work after cancellation is observed");
+
+    bool caughtInline = false;
+    try {
+        parallelFor(1, 1, [](int, int) { throw std::logic_error("inline sentinel"); });
+    } catch (const std::logic_error& e) {
+        caughtInline = std::string(e.what()) == "inline sentinel";
+    }
+    CHECK(caughtInline, "the single-thread path propagates exceptions directly");
+}
+
+/* ------------------------------------------ candidate LOD mesh decimation --------------------- */
+static Mesh makeDecimationGrid(int side) {
+    Mesh mesh;
+    mesh.reserveVertices(static_cast<size_t>(side) * side);
+    for (int y = 0; y < side; ++y) {
+        for (int x = 0; x < side; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(side - 1);
+            const float v = static_cast<float>(y) / static_cast<float>(side - 1);
+            mesh.positions.emplace_back(u, v, 0.02f * std::sin(u * 6.2831853f) * std::sin(v * 6.2831853f));
+            mesh.uvs.push_back(u);
+            mesh.uvs.push_back(v);
+            mesh.regions.push_back((x < side / 2) ? REGION_SKIN : REGION_CLOTH_UPPER);
+            mesh.curvature.push_back(1.0f);
+        }
+    }
+    for (int y = 0; y + 1 < side; ++y) {
+        for (int x = 0; x + 1 < side; ++x) {
+            const uint32_t a = static_cast<uint32_t>(y * side + x);
+            const uint32_t b = a + 1;
+            const uint32_t c = a + static_cast<uint32_t>(side);
+            const uint32_t d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, c, b, b, c, d});
+        }
+    }
+    mesh.computeNormals();
+    mesh.computeTangents();
+    return mesh;
+}
+
+static void testMeshDecimator() {
+    std::printf("\n[10d] candidate LOD decimator reduces triangle budgets safely\n");
+    const Mesh source = makeDecimationGrid(65);
+    Mesh untouched = source;
+    untouched.clusterDecimate(0);
+    CHECK(untouched.positions.size() == source.positions.size() &&
+              untouched.indices.size() == source.indices.size(),
+          "decimator leaves a mesh unchanged for a non-positive target");
+
+    Mesh medium = source;
+    medium.clusterDecimate(2048);
+    Mesh low = source;
+    low.clusterDecimate(512);
+    CHECK(medium.triangleCount() > 0 && medium.triangleCount() < source.triangleCount(),
+          "decimator reduces the medium LOD candidate (%zu -> %zu triangles)",
+          source.triangleCount(), medium.triangleCount());
+    CHECK(low.triangleCount() > 0 && low.triangleCount() < medium.triangleCount(),
+          "a smaller target produces a coarser candidate (%zu -> %zu triangles)",
+          medium.triangleCount(), low.triangleCount());
+
+    bool valid = !low.positions.empty() && low.normals.size() == low.positions.size() &&
+                 low.tangents.size() == low.positions.size() && low.uvs.size() == low.positions.size() * 2 &&
+                 low.regions.size() == low.positions.size() && low.curvature.size() == low.positions.size();
+    for (uint32_t index : low.indices) valid = valid && index < low.positions.size();
+    CHECK(valid, "decimator rebuilds aligned attributes and valid triangle indices");
+
+    bool preservesRegions = false;
+    for (int32_t region : low.regions) {
+        if (region == REGION_CLOTH_UPPER) { preservesRegions = true; break; }
+    }
+    CHECK(preservesRegions, "decimator keeps material regions in separate clusters");
+
+    Mesh malformed = source;
+    malformed.indices[0] = static_cast<uint32_t>(malformed.positions.size() + 10);
+    const size_t malformedIndices = malformed.indices.size();
+    malformed.clusterDecimate(512);
+    CHECK(malformed.indices.size() == malformedIndices,
+          "decimator refuses malformed source indices without mutating the mesh");
 }
 
 /* ---------------------------------------------------- 12. pose composition and the bind pose ----- */
@@ -2179,15 +2663,25 @@ int main(int argc, char** argv) {
     std::printf("\n\x1b[1mAvatarForge kernel host tests\x1b[0m  (ABI %d, %d threads)\n\n", AF_ABI_VERSION, defaultThreadCount());
     const bool quick = (argc > 1 && std::strcmp(argv[1], "--quick") == 0);
     const bool abiOnly = (argc > 1 && std::strcmp(argv[1], "--abi-only") == 0);
+    const bool compressionOnly = (argc > 1 && std::strcmp(argv[1], "--compression-only") == 0);
+
+    if (compressionOnly) {
+        testGpuProfilesAndTextureCompression();
+        std::printf("\n\x1b[1mCompression-only %d checks complete: %d failure(s)\x1b[0m\n\n",
+                    g_checks, g_failures);
+        return g_failures == 0 ? 0 : 1;
+    }
 
     if (abiOnly) {
         testImageAnalysisPacking();
+        testSkippedImageRoleMapping();
         testAbi();
         std::printf("\n\x1b[1mABI-only %d checks complete: %d failure(s)\x1b[0m\n\n", g_checks, g_failures);
         return g_failures == 0 ? 0 : 1;
     }
 
     testImageAnalysisPacking();
+    testSkippedImageRoleMapping();
     testAnthropometry();
     testField();
     testIsosurface();
@@ -2197,6 +2691,11 @@ int main(int argc, char** argv) {
     testTexturing();
     testApparel();
     testShaderTables();
+    testAvatarCuller();
+    testGpuProfilesAndTextureCompression();
+    testParallelForExceptions();
+    testMeshDecimator();
+    testAvatarLodSet();
     testAbi();
     if (!quick) testPoseComposition();
     if (!quick) testBlendshapeExport();

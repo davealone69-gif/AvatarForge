@@ -14,6 +14,8 @@
 #include <atomic>
 #include <functional>
 #include <algorithm>
+#include <exception>
+#include <mutex>
 
 namespace af {
 
@@ -37,22 +39,50 @@ inline void parallelFor(int count, int threads, const std::function<void(int, in
         body(0, count);
         return;
     }
+
     const int n = std::min(threads, count);
-    const int chunk = (count + n - 1) / n;
+    const int chunk = (count - 1) / n + 1;  // avoids overflow in count + n - 1
     std::vector<std::thread> pool;
     pool.reserve(static_cast<size_t>(n));
-    std::atomic<bool> cancelled{false};
-    for (int t = 0; t < n; ++t) {
-        const int i0 = t * chunk;
-        const int i1 = std::min(count, i0 + chunk);
-        if (i0 >= i1) break;
-        pool.emplace_back([&, i0, i1]() {
-            if (cancelled.load(std::memory_order_relaxed)) return;
-            if (cancel && cancel()) { cancelled.store(true, std::memory_order_relaxed); return; }
-            body(i0, i1);
-        });
+    std::atomic<bool> stopped{false};
+    std::mutex exceptionMutex;
+    std::exception_ptr workerException;
+
+    auto run = [&](int i0, int i1) {
+        if (stopped.load(std::memory_order_acquire)) return;
+        try {
+            if (cancel && cancel()) {
+                stopped.store(true, std::memory_order_release);
+                return;
+            }
+            if (!stopped.load(std::memory_order_acquire)) body(i0, i1);
+        } catch (...) {
+            {
+                std::lock_guard<std::mutex> lock(exceptionMutex);
+                if (!workerException) workerException = std::current_exception();
+            }
+            stopped.store(true, std::memory_order_release);
+        }
+    };
+
+    try {
+        for (int t = 0; t < n; ++t) {
+            if (stopped.load(std::memory_order_acquire)) break;
+            const int i0 = t * chunk;
+            const int i1 = std::min(count, i0 + chunk);
+            if (i0 >= i1) break;
+            pool.emplace_back(run, i0, i1);
+        }
+    } catch (...) {
+        /* std::thread's destructor terminates the process if it is still joinable. If worker
+           creation fails part-way through, stop and join the workers already started first. */
+        stopped.store(true, std::memory_order_release);
+        for (std::thread& th : pool) if (th.joinable()) th.join();
+        throw;
     }
+
     for (std::thread& th : pool) if (th.joinable()) th.join();
+    if (workerException) std::rethrow_exception(workerException);
 }
 
 } // namespace af

@@ -58,17 +58,16 @@ object AvatarForge {
     }
 
     /**
-     * Chooses a render preset from the device's RAM.
+     * Chooses a render preset from measured RAM, free storage, low-memory and thermal state.
      *
-     * 6 GB and up: HIGH (2048 shadow map, 4x MSAA, 5 bloom levels).
-     * 4 GB:        MEDIUM (2048/2x/4).
-     * below 4 GB:  LOW (1024/no MSAA/3) - the kernel also gets a smaller texture atlas in that case
-     *              (see AvatarEngine's memory budget).
+     * 6 GB and up: HIGH (2048 shadow map, 4x MSAA, 4 bloom levels).
+     * 4 GB:        MEDIUM (1024/2x/3).
+     * below 4 GB:  LOW (1024/1x/2).
      *
-     * The thresholds are where they are because the *engine* peaks near 1.5 GB during a build and
-     * the renderer holds a 2048^2 RGBA8 atlas set (~68 MB) plus MSAA targets; a device with 4 GB
-     * has ~1.8-2.2 GB available to a foreground app, so that is the tier where 2048 maps stop being
-     * safe alongside the build.
+     * The engine requests a 1.5 GiB generation budget by default, but the SDK lowers that ceiling
+     * to measured available RAM minus 512 MiB of live-process headroom. The renderer holds a
+     * 2048² RGBA8 atlas set (~68 MiB) plus MSAA targets. The native texture bake is still fixed at
+     * 2048² for every tier; lowering that atlas by quality is a known Phase 2 gap.
      */
     fun recommendedSettings(context: Context): RenderSettings {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -78,12 +77,12 @@ object AvatarForge {
         val gb = info.totalMem / (1024.0 * 1024.0 * 1024.0)
         val lowRam = activityManager.isLowRamDevice
         val thermal = resources.thermalStatus
-        val severeThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_SEVERE
+        val criticalThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_CRITICAL
         val moderateThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_MODERATE
         val preset = when {
             lowRam || gb < 4.0 || info.lowMemory ||
                 resources.availableRamBytes < 1536L * 1024 * 1024 ||
-                resources.state == DeviceResourceState.LOW_STORAGE || severeThermal -> Quality.LOW
+                resources.state == DeviceResourceState.LOW_STORAGE || criticalThermal -> Quality.LOW
             gb < 6.0 || resources.availableRamBytes < 2L * 1024 * 1024 * 1024 ||
                 moderateThermal -> Quality.MEDIUM
             else -> Quality.HIGH
@@ -91,8 +90,8 @@ object AvatarForge {
         return RenderSettings(
             quality = preset,
             msaa = if (preset == Quality.HIGH) 4 else if (preset == Quality.MEDIUM) 2 else 1,
-            shadowMapSize = if (preset == Quality.HIGH) 2048 else if (preset == Quality.MEDIUM) 2048 else 1024,
-            bloomLevels = if (preset == Quality.HIGH) 5 else if (preset == Quality.MEDIUM) 4 else 3,
+            shadowMapSize = if (preset == Quality.HIGH) 2048 else 1024,
+            bloomLevels = if (preset == Quality.HIGH) 4 else if (preset == Quality.MEDIUM) 3 else 2,
             /* Vulkan first; the renderer falls back to GLES 3.1 by itself if the device's Vulkan
                driver refuses the surface (some older Mali drivers do). */
             preferVulkan = true,
@@ -116,7 +115,7 @@ object AvatarForge {
             appendLine("Device      : ${Build.MANUFACTURER} ${Build.MODEL} (API ${Build.VERSION.SDK_INT}, ${Build.SUPPORTED_ABIS.firstOrNull()})")
             caps?.let {
                 appendLine("RAM         : ${"%.1f".format(it.totalRamBytes / 1073741824.0)} GB${if (it.lowRamDevice) " (low-RAM)" else ""}")
-                appendLine("Engine budget: ${it.memoryBudgetBytes / 1048576} MB")
+                appendLine("Generation budget cap: ${it.memoryBudgetBytes / 1048576} MB")
                 appendLine("Clips       : ${it.clipCount}, blendshapes: ${it.blendshapeCount}, regions: ${it.regionCount}")
             }
             appendLine("Free storage: ${stat.availableBytes / 1048576} MB")

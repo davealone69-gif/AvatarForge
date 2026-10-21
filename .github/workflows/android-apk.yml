@@ -3,16 +3,16 @@ name: Android APK
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, work/android-engine-dev]
   push:
-    branches: [main]
+    branches: [main, work/android-engine-dev]
     tags: ["v*"]
 
 permissions:
   contents: write
 
 concurrency:
-  group: avatarforge-android-${{ github.ref }}
+  group: avatarforge-android-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -42,55 +42,82 @@ jobs:
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
 
-      - name: Prepare CI debug signing key for installable release APK
+      - name: Run full host regression, shader, GLB, and ABI checks
+        run: bash tools/verify.sh
+
+      - name: Configure optional release signing
+        if: github.event_name != 'pull_request'
+        id: release_signing
+        env:
+          AF_RELEASE_KEYSTORE_BASE64: ${{ secrets.AF_RELEASE_KEYSTORE_BASE64 }}
+          AF_RELEASE_STORE_PASSWORD: ${{ secrets.AF_RELEASE_STORE_PASSWORD }}
+          AF_RELEASE_KEY_ALIAS: ${{ secrets.AF_RELEASE_KEY_ALIAS }}
+          AF_RELEASE_KEY_PASSWORD: ${{ secrets.AF_RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.android"
-          if [ ! -s "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -keyalg RSA -keysize 2048 -validity 10000
+          if [[ -n "${AF_RELEASE_KEYSTORE_BASE64:-}" && -n "${AF_RELEASE_STORE_PASSWORD:-}" &&
+                -n "${AF_RELEASE_KEY_ALIAS:-}" && -n "${AF_RELEASE_KEY_PASSWORD:-}" ]]; then
+            mkdir -p "$RUNNER_TEMP/avatarforge-signing"
+            printf '%s' "$AF_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/avatarforge-signing/release.jks"
+            {
+              printf 'storeFile=%s\n' "$RUNNER_TEMP/avatarforge-signing/release.jks"
+              printf 'storePassword=%s\n' "$AF_RELEASE_STORE_PASSWORD"
+              printf 'keyAlias=%s\n' "$AF_RELEASE_KEY_ALIAS"
+              printf 'keyPassword=%s\n' "$AF_RELEASE_KEY_PASSWORD"
+            } > keystore.properties
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f keystore.properties
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release signing secrets are not configured; release APK/AAB packaging is skipped."
           fi
 
-      - name: Verify required ARM64 native libraries exist
+      - name: Require real signing for version tags
+        if: startsWith(github.ref, 'refs/tags/v') && steps.release_signing.outputs.available != 'true'
+        run: |
+          echo "::error::Version tags require all four AF_RELEASE_* signing secrets."
+          exit 1
+
+      - name: Compile native sources, run unit tests, and build APKs/AAR
+        env:
+          RELEASE_SIGNING_AVAILABLE: ${{ steps.release_signing.outputs.available }}
         run: |
           set -euo pipefail
-          for lib in libafcore.so libafrender.so libavatarforge.so; do
-            test -s "prebuilt/arm64-v8a/$lib" || {
-              echo "::error::Missing prebuilt/arm64-v8a/$lib. Build native libraries with tools/build_android.sh and commit the outputs."
-              exit 1
-            }
-          done
-
-      - name: Build debug APK, release APK, and SDK AAR
-        run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace --console=plain \
-            :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
-            -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+          TASKS=( :app:testDebugUnitTest :sdk:testReleaseUnitTest :app:assembleDebug :sdk:assembleRelease )
+          if [[ "$RELEASE_SIGNING_AVAILABLE" == "true" ]]; then
+            TASKS+=( :app:assembleRelease :app:bundleRelease )
+          fi
+          ./gradlew --no-daemon --stacktrace --console=plain "${TASKS[@]}" -Paf.abIs=arm64-v8a
 
       - name: Stage easy-download artifacts
         run: |
           set -euo pipefail
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/AvatarForge-debug-arm64.apk
-          cp app/build/outputs/apk/release/app-release.apk dist/AvatarForge-release-arm64.apk
           find sdk/build/outputs -type f -name '*.aar' -exec cp {} dist/AvatarForge-sdk.aar \;
+          if [[ -s app/build/outputs/apk/release/app-release.apk ]]; then
+            cp app/build/outputs/apk/release/app-release.apk dist/AvatarForge-release-arm64.apk
+          fi
+          if [[ -s app/build/outputs/bundle/release/app-release.aab ]]; then
+            cp app/build/outputs/bundle/release/app-release.aab dist/AvatarForge-release-arm64.aab
+          fi
           test -s dist/AvatarForge-debug-arm64.apk
-          test -s dist/AvatarForge-release-arm64.apk
+          test -s dist/AvatarForge-sdk.aar
           ls -lh dist
 
       - name: Audit APK permissions and native ABI
         run: |
           set -euo pipefail
           AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt | sort -V | tail -1)"
-          for apk in dist/AvatarForge-debug-arm64.apk dist/AvatarForge-release-arm64.apk; do
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          shopt -s nullglob
+          APKS=(dist/*.apk)
+          test "${#APKS[@]}" -gt 0
+          for apk in "${APKS[@]}"; do
             echo "=== $apk ==="
+            "$APKSIGNER" verify --verbose "$apk"
+            "$AAPT" dump badging "$apk" | grep "package: name='com.avatarforge'"
             "$AAPT" dump permissions "$apk"
             if "$AAPT" dump permissions "$apk" | grep -q 'android.permission.INTERNET'; then
               echo "::error::AvatarForge must remain offline-only; INTERNET permission found."
@@ -116,4 +143,5 @@ jobs:
           files: |
             dist/AvatarForge-debug-arm64.apk
             dist/AvatarForge-release-arm64.apk
+            dist/AvatarForge-release-arm64.aab
             dist/AvatarForge-sdk.aar

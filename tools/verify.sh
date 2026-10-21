@@ -20,6 +20,9 @@ QUICK="${1:-}"
 FAILED=0
 SECTION=0
 
+# The shell opens the redirected harness log before build_host.sh can create its output directory.
+mkdir -p build-host
+
 banner() { SECTION=$((SECTION + 1)); printf '\n\033[1m[%d] %s\033[0m\n' "$SECTION" "$1"; }
 ok()     { printf '    \033[32mPASS\033[0m %s\n' "$1"; }
 bad()    { printf '    \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
@@ -93,7 +96,7 @@ fi
 
 # ------------------------------------------------------------------ 4. shared C ABI ------------
 # The ABI is the contract both native implementations answer to. This section proves the manifest
-# still matches the header, that the C++ kernel is a complete 45/45 implementation, and - when a
+# still matches the header, that the C++ kernel is a complete 47/47 implementation, and - when a
 # Rust toolchain is present - that the Rust core agrees with it on every symbol it implements.
 banner "ABI: manifest freshness + conformance for both kernels"
 if python3 tools/abi_manifest.py --check > /tmp/af_abi_manifest.txt 2>&1; then
@@ -113,12 +116,12 @@ if [ -f build-host/libafcore.so ]; then
     fi
 fi
 
-export RUSTUP_HOME="${RUSTUP_HOME:-/usr/local/tc/rustup}"
-export CARGO_HOME="${CARGO_HOME:-/usr/local/tc/cargo-home}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export PATH="$CARGO_HOME/bin:$PATH"
 if command -v cargo >/dev/null 2>&1; then
     if ( cd rust && cargo build --release --offline -q -p af-core ) > /tmp/af_rust_build.txt 2>&1; then
-        if python3 tools/abi_conformance.py rust/target/release/libafcore.so \
+        if python3 tools/abi_conformance.py rust/target/release/libafcore_rust.so \
                 --reference build-host/libafcore.so > /tmp/af_abi_rust.txt 2>&1; then
             ok "Rust core: $(tail -1 /tmp/af_abi_rust.txt | sed 's/CONFORMANCE //')"
         else

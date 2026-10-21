@@ -72,6 +72,12 @@ bool bakeTextures(const Mesh& mesh, const UVLayout& layout, const BodyMetrics& m
 /** Total byte size of a texture set (for the engine's memory accounting). */
 uint64_t textureSetBytes(const TextureSet& set);
 
+/** Chooses the largest power-of-two atlas whose peak bake workspace fits the remaining budget. */
+int atlasResolutionForBudget(uint64_t budgetBytes, uint64_t retainedBytes);
+
+/** Conservative bake working-set estimate: five output maps plus raster/dilation masks. */
+uint64_t atlasBakeWorkspaceBytes(int resolution);
+
 /** Marker colour used where nothing was baked; makes un-baked texels obvious instead of black. */
 extern const uint8_t kUnbakedRGBA[4];
 

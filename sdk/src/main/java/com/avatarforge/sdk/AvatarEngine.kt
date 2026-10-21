@@ -13,11 +13,10 @@
  * Everything runs on-device. There is no network call anywhere in this file, no remote model, no
  * telemetry: the app works with the radio off, and the manifest does not request INTERNET.
  *
- * Threading model. The heavy stages (geometry, UV unwrap, texture bake, rig) take 30-90 s on a
- * mid-range phone and are executed on a single background thread owned by the job, because the
- * kernel handle is thread-affine: one handle, one thread at a time. Progress and log callbacks are
- * delivered on that same thread; the UI is expected to marshal them itself (the Compose layer does
- * that with a StateFlow).
+ * Threading model. The heavy stages (geometry, UV unwrap, texture bake, rig) run on Dispatchers.IO;
+ * the SDK serializes complete native transactions because its kernel handle is a single mutable
+ * pipeline. The kernel fans work out to its internal worker threads within a call. Progress and log
+ * callbacks are published through StateFlow; the Compose layer collects them on the main dispatcher.
  */
 package com.avatarforge.sdk
 
@@ -27,6 +26,7 @@ import android.os.Build as AndroidBuild
 import android.os.Debug
 import android.os.StatFs
 import com.avatarforge.sdk.internal.NativeBridge
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,33 +36,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
-/* CIE L*a*b* -> linear sRGB, used to carry a garment's measured colour into the spec. */
+/* CIE L*a*b* -> linear sRGB, matching native/src/af_image.cpp::labToLinearRgb. */
 private fun labToLinear(lab: FloatArray): FloatArray {
     val fy = (lab[0] + 16f) / 116f
     val fx = fy + lab[1] / 500f
     val fz = fy - lab[2] / 200f
-    fun inv(t: Float): Float {
-        val t3 = t * t * t
-        return if (t3 > 0.008856f) t3 else (t - 16f / 116f) / 7.787f
-    }
+    val d = 6f / 29f
+    fun inv(f: Float) = if (f > d) f * f * f else 3f * d * d * (f - 4f / 29f)
     val x = inv(fx) * 0.95047f
     val y = inv(fy)
     val z = inv(fz) * 1.08883f
-    /* sRGB D65 inverse matrix, then the gamma decode. */
-    val r = 3.2406f * x - 1.5372f * y - 0.4986f * z
-    val g = -0.9689f * x + 1.8758f * y + 0.0415f * z
-    val b = 0.0557f * x - 0.2040f * y + 1.0570f * z
-    fun lin(c: Float): Float {
-        val v = c.coerceIn(0f, 1f)
-        return if (v <= 0.04045f) v / 12.92f else Math.pow(((v + 0.055) / 1.055).toDouble(), 2.4).toFloat()
-    }
-    return floatArrayOf(lin(r), lin(g), lin(b))
+    val r = 3.2404542f * x - 1.5371385f * y - 0.4985314f * z
+    val g = -0.9692660f * x + 1.8760108f * y + 0.0415560f * z
+    val b = 0.0556434f * x - 0.2040259f * y + 1.0572252f * z
+    return floatArrayOf(r.coerceAtLeast(0f), g.coerceAtLeast(0f), b.coerceAtLeast(0f))
 }
 
 
@@ -88,7 +85,7 @@ data class EngineCapabilities(
     val engineVersion: String,
     /** Largest .glb the engine will produce at the current settings, in bytes (measured, not guessed). */
     val estimatedGlbBytes: Long,
-    /** Peak resident memory the kernel will use, bytes (from the engine's own budget, default 1.5 GB). */
+    /** Effective generation memory ceiling for this RAM snapshot, bytes; capped by the requested 1.5 GiB default and live headroom. */
     val memoryBudgetBytes: Long,
     val totalRamBytes: Long,
     val lowRamDevice: Boolean,
@@ -120,6 +117,62 @@ enum class Stage(val value: Int, val label: String) {
     companion object {
         fun of(value: Int) = entries.firstOrNull { it.value == value } ?: IDLE
         val ALL = entries.filter { it != IDLE && it != DONE }
+    }
+}
+
+/**
+ * Process-lifetime generation dependency graph. The ABI stages are explicit graph nodes, not a
+ * monolithic call: geometry gates UV, UV gates the texture/rig inputs, and rig gates facial and
+ * clip baking. The current engine handle is single-threaded, so ready siblings execute in stable
+ * order; the dependency edges are retained for safe scheduling once independent engine contexts
+ * can be used. `runAll` is still called afterward as a cheap native finalize/consistency barrier.
+ */
+internal object GenerationJobGraph {
+    internal data class Node(val stage: Stage, val requires: Set<Stage>)
+
+    val nodes: List<Node> = listOf(
+        Node(Stage.FIT_ANATOMY, emptySet()),
+        Node(Stage.GEOMETRY, setOf(Stage.FIT_ANATOMY)),
+        Node(Stage.UV_UNWRAP, setOf(Stage.GEOMETRY)),
+        Node(Stage.BAKE_TEXTURES, setOf(Stage.UV_UNWRAP)),
+        Node(Stage.RIG, setOf(Stage.UV_UNWRAP)),
+        Node(Stage.BLENDSHAPES, setOf(Stage.RIG)),
+        Node(Stage.ANIMATION, setOf(Stage.RIG)),
+    )
+
+    fun orderedStages(): List<Stage> {
+        val pending = nodes.toMutableList()
+        val completed = linkedSetOf<Stage>()
+        val ordered = ArrayList<Stage>(pending.size)
+        while (pending.isNotEmpty()) {
+            val readyIndex = pending.indexOfFirst { completed.containsAll(it.requires) }
+            check(readyIndex >= 0) { "generation dependency graph contains a cycle or missing prerequisite" }
+            val node = pending.removeAt(readyIndex)
+            check(completed.add(node.stage)) { "generation graph contains duplicate stage ${node.stage}" }
+            ordered += node.stage
+        }
+        return ordered
+    }
+}
+
+/** Converts absolute stage-progress callbacks into monotone weighted whole-job progress. */
+internal class WeightedProgressAccumulator(private val weights: Map<Stage, Float>) {
+    private val completedFraction = mutableMapOf<Stage, Float>()
+    var overall: Float = 0f
+        private set
+
+    fun reset() {
+        completedFraction.clear()
+        overall = 0f
+    }
+
+    fun update(stage: Stage, reportedFraction: Float): Float {
+        val safe = reportedFraction.coerceIn(0f, 1f)
+        val previous = completedFraction[stage] ?: 0f
+        val monotone = maxOf(previous, safe)
+        completedFraction[stage] = monotone
+        overall = (overall + (weights[stage] ?: 0f) * (monotone - previous)).coerceIn(0f, 1f)
+        return overall
     }
 }
 
@@ -176,7 +229,7 @@ data class EngineResult(
 class JobHandle internal constructor(
     private val engine: AvatarEngine,
     private val request: GenerationRequest,
-    private val parentJob: Job,
+    internal val parentJob: Job,
 ) {
     private val _status = MutableStateFlow(JobStatus(running = true, stage = Stage.ANALYZE_INPUTS))
     val status: StateFlow<JobStatus> = _status.asStateFlow()
@@ -185,7 +238,7 @@ class JobHandle internal constructor(
     private val completion = CompletableDeferred<EngineResult>()
 
     /** Stable id for UI history; also names the exported file. */
-    val id: Long = nextJobId++
+    val id: Long = nextJobId.getAndIncrement()
 
     /** Requests cancellation. The kernel polls this at every stage boundary. */
     fun cancel() {
@@ -204,6 +257,8 @@ class JobHandle internal constructor(
 
     internal fun current(): JobStatus = _status.value
 
+    internal val isCompleted: Boolean get() = completion.isCompleted
+
     internal val requestSpec: AvatarSpec get() = request.spec
 
     internal fun deliver(result: Result<EngineResult>) {
@@ -214,7 +269,7 @@ class JobHandle internal constructor(
     internal fun shouldCancel(): Boolean = cancelRequested.get() || parentJob.isCancelled
 
     companion object {
-        private var nextJobId = 1L
+        private val nextJobId = AtomicLong(1L)
     }
 }
 
@@ -237,7 +292,7 @@ data class GenerationRequest(
     val prompt: String = "",
     val imageA: ImageReference? = null,
     val imageB: ImageReference? = null,
-    /** Total kernel memory ceiling. Default 1.5 GB, comfortably inside the app's 2 GB budget. */
+    /** Requested kernel memory ceiling. Default 1.5 GiB; the SDK may lower it to respect live RAM headroom. */
     val memoryBudgetBytes: Long = 1536L * 1024 * 1024,
 )
 
@@ -281,8 +336,8 @@ class ImageReference private constructor(
          * Copies a Bitmap into a direct RGBA buffer.
          *
          * Direct, not heap: a 12 MP photo is 48 MB and the JNI layer passes the address straight to
-         * the kernel. Anything else would double the peak memory for no benefit, and the 2 GB
-         * budget is there to be respected, not approached.
+         * the kernel. Anything else would double the peak memory for no benefit. The SDK requests
+         * 1.5 GiB of native budget by default, then lowers the cap from a live RAM snapshot.
          */
         fun fromBitmap(bitmap: Bitmap, role: ImageRole): ImageReference {
             val w = bitmap.width
@@ -295,6 +350,81 @@ class ImageReference private constructor(
 
         internal fun withAnalysis(base: ImageReference, analysis: Analysis) =
             ImageReference(base.role, base.width, base.height, base.pixels, analysis)
+    }
+}
+
+/** Pure Kotlin mirror of native `af::specFromAnalysis`, kept separate for deterministic JVM tests. */
+internal object ImageSpecResolver {
+    /** Mirrors native role selection: the last explicit identity/clothing role wins. */
+    fun resolveImages(
+        images: List<Pair<ImageRole, ImageReference.Analysis?>>,
+        base: AvatarSpec,
+    ): AvatarSpec {
+        val identity = images.lastOrNull {
+            it.first == ImageRole.IDENTITY && it.second != null
+        }?.second ?: images.firstOrNull { it.second != null }?.second
+        val clothing = images.lastOrNull {
+            it.first == ImageRole.CLOTHING && it.second != null
+        }?.second
+        return resolve(identity, clothing, base)
+    }
+
+    fun resolve(
+        identity: ImageReference.Analysis?,
+        clothing: ImageReference.Analysis?,
+        base: AvatarSpec,
+    ): AvatarSpec {
+        var spec = if (base.heightM.isFinite() && base.heightM > 0f) base
+                   else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
+        val colourSource = clothing ?: identity
+
+        if (identity != null) {
+            val unresolvedHeight = !spec.heightM.isFinite() || spec.heightM <= 0f ||
+                kotlin.math.abs(spec.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f
+            val headHeight = identity.headBox[3].coerceAtLeast(0.01f)
+            val statureInFrame = identity.ankleY - identity.headBox[1]
+            if (unresolvedHeight && identity.isFullBody && statureInFrame > 0.05f) {
+                val measured = (0.235f * (statureInFrame / headHeight))
+                    .coerceIn(AvatarSpec.MIN_HEIGHT_M, AvatarSpec.MAX_HEIGHT_M)
+                val confidence = ((identity.poseConfidence - 0.45f) / 0.5f).coerceIn(0f, 1f)
+                spec = spec.copy(
+                    heightM = confidence * measured +
+                        (1f - confidence) * AvatarSpec.DEFAULT_HEIGHT_M,
+                )
+            }
+
+            val referenceLightness = identity.backgroundLab[0].coerceAtLeast(22f)
+            val exposureRatio = (identity.skinLab[0] / referenceLightness).coerceIn(0.15f, 1.9f)
+            val melanin = (0.62f - 0.52f * exposureRatio).coerceIn(0.03f, 0.95f)
+            val hair = labToLinear(identity.hairLab)
+                .map { (it * 1.15f).coerceIn(0.01f, 1f) }
+                .toFloatArray()
+            spec = spec.copy(skinMelanin = melanin, hairTone = hair)
+        }
+
+        if (colourSource != null) {
+            val colour = labToLinear(colourSource.garmentLab)
+            val cloth = colour.map { it.coerceIn(0.01f, 1f) }.toFloatArray()
+            val gear = colour.map { (it * 1.05f).coerceIn(0.01f, 1f) }.toFloatArray()
+            val metal = (clothing ?: identity)?.metalConfidence ?: 0f
+            var outfit = spec.outfit
+            var footwear = spec.footwear
+            if (outfit == Outfit.NONE || outfit == Outfit.TSHIRT) {
+                when {
+                    metal > 0.62f -> {
+                        outfit = Outfit.ARMOR_PLATE
+                        if (footwear == Footwear.NONE) footwear = Footwear.SABATON
+                    }
+                    metal > 0.45f -> {
+                        outfit = Outfit.ARMOR_LEATHER
+                        if (footwear == Footwear.NONE) footwear = Footwear.BOOT
+                    }
+                    outfit == Outfit.NONE -> outfit = Outfit.TSHIRT
+                }
+            }
+            spec = spec.copy(outfit = outfit, footwear = footwear, clothTone = cloth, gearTone = gear)
+        }
+        return spec
     }
 }
 
@@ -341,61 +471,110 @@ internal object ImageAnalysisPacking {
     }
 }
 
+/** A reference-counted lease that keeps a native engine handle alive for one renderer attachment. */
+internal class NativeEngineLease(
+    val handle: Long,
+    private val releaseAction: () -> Unit,
+) {
+    private val closed = AtomicBoolean(false)
+    fun release() {
+        if (closed.compareAndSet(false, true)) releaseAction()
+    }
+}
+
 /* ============================================================================================ */
 /*  The engine                                                                                   */
 /* ============================================================================================ */
 
 class AvatarEngine private constructor(private val appContext: Context) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lifecycleLock = Any()
+    private val callbackLock = Any()
+    private val nativeMutex = Mutex()
+    private val rootJob = SupervisorJob()
+    private val scope = CoroutineScope(rootJob + Dispatchers.IO)
 
-    /** Every job ever started, so the UI can show history and the engine can cancel everything
-     *  when the process is going away. */
+    /** Every live job, so release can cancel and join before the native handle is destroyed. */
     private val jobs = mutableListOf<JobHandle>()
 
     private var handle: Long = 0L
+    private var released = false
+    private var rendererLeases = 0
+    private var destroyScheduled = false
+
+    init {
+        rootJob.invokeOnCompletion { scheduleDestroyIfReady() }
+    }
 
     /**
-     * The kernel handle, for the renderer.
-     *
-     * The renderer reads the engine's vertex/index/texture buffers directly (zero-copy) through the
-     * C ABI, so it needs the handle rather than the Kotlin wrapper. It is deliberately not a `Long`
-     * the UI can invent: the getter opens the engine on first use, and the handle stays valid until
-     * [release].
+     * Raw native pointer for low-level integrations. Prefer [com.avatarforge.sdk.render.RenderSurfaceView.attachEngine]
+     * so the view can retain the handle until its renderer is destroyed. Calls through this pointer
+     * are not synchronized; the caller must not overlap them with engine jobs or rendering.
      */
     val nativeHandle: Long get() = openHandle()
 
+    /** Internal lifetime lease used by RenderSurfaceView while a GPU renderer references this handle. */
+    internal fun acquireRendererLease(): NativeEngineLease {
+        check(nativeMutex.tryLock()) { "AvatarEngine is busy; attach a renderer after native work finishes" }
+        try {
+            return synchronized(lifecycleLock) {
+                check(!released) { "AvatarEngine has been released" }
+                check(rendererLeases == 0) {
+                    "AvatarEngine supports one attached renderer; detach the current view before sharing it"
+                }
+                val h = openHandleLocked()
+                rendererLeases++
+                NativeEngineLease(h) { releaseRendererHandle() }
+            }
+        } finally {
+            nativeMutex.unlock()
+        }
+    }
+
+    /** Releases the renderer's lifetime lease after its native renderer has stopped using the handle. */
+    internal fun releaseRendererHandle() {
+        synchronized(lifecycleLock) {
+            if (rendererLeases > 0) rendererLeases--
+        }
+        scheduleDestroyIfReady()
+    }
+
     /* ------------------------------------------------------------------ posing ---------------- */
 
-    /** Applies local joint rotations (quaternions XYZW, jointCount * 4). */
-    fun applyPose(quats: FloatArray): Boolean {
-        val h = openHandle()
-        return NativeBridge.engineApplyPose(h, quats) == 0
-    }
+    /**
+     * Applies local joint rotations (quaternions XYZW, jointCount * 4). Requires the renderer to be
+     * detached; a live renderer owns animation and mesh access on its render thread.
+     */
+    fun applyPose(quats: FloatArray): Boolean =
+        withNativeHandle { h -> NativeBridge.engineApplyPose(h, quats) == 0 }
 
     /** Fills [out] with the clip's pose at [time] seconds without applying it. */
-    fun sampleClip(clip: Int, time: Float, out: FloatArray): Boolean {
-        val h = openHandle()
-        return NativeBridge.engineSampleClip(h, clip, time, out) == 0
-    }
+    fun sampleClip(clip: Int, time: Float, out: FloatArray): Boolean =
+        withNativeHandle { h -> NativeBridge.engineSampleClip(h, clip, time, out) == 0 }
 
-    /** Applies a clip pose at [time] to the mesh. AF_CLIP_REST re-derives the bind pose. */
-    fun applyClip(clip: Int, time: Float): Boolean {
-        val h = openHandle()
-        return NativeBridge.engineApplyClip(h, clip, time) == 0
-    }
+    /**
+     * Applies a clip pose at [time] to the mesh. AF_CLIP_REST re-derives the bind pose. Requires
+     * the renderer to be detached; use [com.avatarforge.sdk.render.RenderSurfaceView.setClip] for
+     * playback while rendering.
+     */
+    fun applyClip(clip: Int, time: Float): Boolean =
+        withNativeHandle { h -> NativeBridge.engineApplyClip(h, clip, time) == 0 }
 
-    /** Applies the 52 ARKit blendshape weights (0..1 each), in [blendshapeNames] order. */
-    fun applyBlendshapes(weights: FloatArray): Boolean {
-        val h = openHandle()
-        return NativeBridge.engineApplyBlendshapes(h, weights) == 0
-    }
+    /**
+     * Applies the 52 ARKit blendshape weights (0..1 each), in [blendshapeNames] order.
+     * This direct method requires the renderer to be detached. When a renderer is attached, call
+     * this through [RenderSurfaceView.applyBlendshapes] so mutation runs between frames.
+     */
+    fun applyBlendshapes(weights: FloatArray): Boolean =
+        withNativeHandle { h -> NativeBridge.engineApplyBlendshapes(h, weights) == 0 }
+
+    /** Render-thread variant; the attached renderer is the only permitted concurrent lease. */
+    internal fun applyBlendshapesFromRenderer(weights: FloatArray): Boolean =
+        withNativeHandle(allowRendererLease = true) { h -> NativeBridge.engineApplyBlendshapes(h, weights) == 0 }
 
     /** Mesh counters: [vertices, indices, submeshes, joints, materials]. */
-    fun counts(): IntArray {
-        val out = IntArray(5)
-        NativeBridge.engineCounts(openHandle(), out)
-        return out
+    fun counts(): IntArray = withNativeHandle { h ->
+        IntArray(5).also { NativeBridge.engineCounts(h, it) }
     }
 
     /** Human-readable name of an `af_region` id, straight from the kernel's own table. */
@@ -411,7 +590,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return -1
     }
 
-    fun clipDuration(clip: Int): Float = NativeBridge.engineClipDuration(openHandle(), clip)
+    fun clipDuration(clip: Int): Float =
+        withNativeHandle { h -> NativeBridge.engineClipDuration(h, clip) }
 
     fun blendshapeNames(): List<String> = NativeBridge.engineBlendshapeNames().toList()
 
@@ -419,7 +599,15 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
     /* ------------------------------------------------------------------ lifecycle ------------ */
 
-    private fun openHandle(): Long {
+    private fun openHandle(): Long = synchronized(lifecycleLock) {
+        check(!released) { "AvatarEngine has been released" }
+        openHandleLocked()
+    }
+
+    private fun isReleased(): Boolean = synchronized(lifecycleLock) { released }
+
+    /** lifecycleLock must be held by the caller. */
+    private fun openHandleLocked(): Long {
         if (handle == 0L) {
             check(NativeBridge.available) {
                 "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
@@ -435,11 +623,74 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return handle
     }
 
+    /**
+     * Runs one synchronous native operation without allowing it to overlap a generation/export
+     * transaction or a renderer's direct C-ABI reads. Synchronous callers fail fast while the engine
+     * is busy or renderer-leased instead of blocking the UI or racing the single-slot native state.
+     */
+    private fun <T> withNativeHandle(
+        allowRendererLease: Boolean = false,
+        block: (Long) -> T,
+    ): T {
+        check(nativeMutex.tryLock()) { "AvatarEngine is busy; retry after the active native operation finishes" }
+        try {
+            val h = synchronized(lifecycleLock) {
+                check(!released) { "AvatarEngine has been released" }
+                check(if (allowRendererLease) rendererLeases == 1 else rendererLeases == 0) {
+                    if (allowRendererLease) {
+                        "render-thread native mutation requires an active SDK-managed renderer lease"
+                    } else {
+                        "AvatarEngine has an attached renderer; detach it before direct native operations"
+                    }
+                }
+                openHandleLocked()
+            }
+            return block(h)
+        } finally {
+            nativeMutex.unlock()
+        }
+    }
+
+    /**
+     * Requests shutdown. Native generation is cooperative-cancelled, jobs are joined, and renderer
+     * leases are honoured before `engineDestroy` runs. This is deliberately asynchronous so an
+     * Activity's main thread never blocks for a long geometry stage; new calls fail immediately.
+     * Low-level users of [nativeHandle] must detach their renderer before releasing the engine.
+     */
     fun release() {
-        jobs.forEach { it.cancel() }
-        if (handle != 0L) {
-            NativeBridge.engineDestroy(handle)
-            handle = 0L
+        synchronized(lifecycleLock) {
+            if (released) return
+            released = true
+        }
+        synchronized(jobs) { jobs.toList() }.forEach { it.cancel() }
+        rootJob.cancel(CancellationException("AvatarEngine released"))
+        scheduleDestroyIfReady()
+    }
+
+    /** Schedules destruction only after all coroutine jobs and renderer leases have ended. */
+    private fun scheduleDestroyIfReady() {
+        val shouldSchedule = synchronized(lifecycleLock) {
+            if (released && rootJob.isCompleted && rendererLeases == 0 && handle != 0L && !destroyScheduled) {
+                destroyScheduled = true
+                true
+            } else {
+                false
+            }
+        }
+        if (!shouldSchedule) return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            nativeMutex.withLock {
+                val doomed = synchronized(lifecycleLock) {
+                    if (released && rootJob.isCompleted && rendererLeases == 0) {
+                        handle.also { handle = 0L }
+                    } else {
+                        destroyScheduled = false
+                        0L
+                    }
+                }
+                if (doomed != 0L) NativeBridge.engineDestroy(doomed)
+            }
         }
     }
 
@@ -486,15 +737,17 @@ class AvatarEngine private constructor(private val appContext: Context) {
     fun generate(request: GenerationRequest): JobHandle = start(request)
 
     /** Analyses reference images without starting a build - used by the UI's "what did you see?" step. */
-    fun analyseImages(images: List<ImageReference>): List<ImageReference> {
+    fun analyseImages(images: List<ImageReference>): List<ImageReference> =
+        withNativeHandle { h -> analyseImagesWithHandle(h, images) }
+
+    /** Caller already owns nativeMutex for this single-slot engine operation. */
+    private fun analyseImagesWithHandle(h: Long, images: List<ImageReference>): List<ImageReference> {
         require(images.isNotEmpty() && images.size <= 4) { "1 to 4 reference images are supported" }
-        val h = openHandle()
         val n = images.size
         val widths = IntArray(n) { images[it].width }
         val heights = IntArray(n) { images[it].height }
         val channels = IntArray(n) { 4 }
         val roles = IntArray(n) { images[it].role.value }
-        @Suppress("UNCHECKED_CAST")
         val pixels = Array<ByteBuffer?>(n) { images[it].pixels }
         val nativeStride = NativeBridge.imageAnalysisFloatCount()
         check(nativeStride == ImageAnalysisPacking.FLOAT_COUNT) {
@@ -511,50 +764,16 @@ class AvatarEngine private constructor(private val appContext: Context) {
     }
 
     /**
-     * Turns the analyses into a spec: stature from the head-count ratio, skin and hair tone from the
-     * median Lab, garment colour and metalness from image B. Anything the caller already set
-     * explicitly is kept - the images fill in, they do not overwrite.
+     * Turns image analyses into the same canonical spec the native analyser will apply during
+     * generation. Keep this logic in parity with `af::specFromAnalysis`: generation resets the
+     * engine and re-analyses the pixels, so a different Kotlin estimate would make result metadata
+     * disagree with the mesh that was actually built.
      */
-    fun specFromImages(images: List<ImageReference>, base: AvatarSpec): AvatarSpec {
-        var spec = if (base.heightM.isFinite() && base.heightM > 0f) base
-                   else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
-        val identity = images.firstOrNull()
-        val detail = images.getOrNull(1)
-        if (identity?.analysis != null) {
-            val a = identity.analysis
-            /* A portrait has no absolute scale and must never turn stature into zero. A genuine
-               full-body frame can refine only the canonical default: body extent / head extent is
-               scale-free, then the 0.235 m adult-head prior converts that ratio to metres. A custom
-               caller override is preserved. */
-            val mayRefineDefault = kotlin.math.abs(spec.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f
-            val headHeight = a.headBox[3]
-            val statureInFrame = a.ankleY - a.headBox[1]
-            if (mayRefineDefault && a.isFullBody && headHeight > 0.02f && statureInFrame > 0.05f) {
-                val measured = (0.235f * (statureInFrame / headHeight))
-                    .coerceIn(AvatarSpec.MIN_HEIGHT_M, AvatarSpec.MAX_HEIGHT_M)
-                val confidence = ((a.poseConfidence - 0.45f) / 0.5f).coerceIn(0f, 1f)
-                val resolved = confidence * measured +
-                    (1f - confidence) * AvatarSpec.DEFAULT_HEIGHT_M
-                spec = spec.copy(heightM = resolved)
-            }
-            spec = spec.copy(skinMelanin = melaninFromLab(a.skinLab))
-        }
-        if (detail?.analysis != null) {
-            val b = detail.analysis
-            spec = spec.copy(
-                /* A garment reference that reads as hard surface selects the armour outfit unless
-                   the caller already asked for something specific. */
-                outfit = if (spec.outfit == Outfit.NONE && b.metalConfidence > 0.45f) Outfit.ARMOR_PLATE else spec.outfit,
-                gearMetalness = if (spec.gearMetalness < 0f) b.metalConfidence else spec.gearMetalness,
-                clothTone = if (spec.clothTone.any { it != 0f }) spec.clothTone else labToLinear(b.garmentLab),
-            )
-        }
-        return spec
-    }
+    fun specFromImages(images: List<ImageReference>, base: AvatarSpec): AvatarSpec =
+        ImageSpecResolver.resolveImages(images.map { it.role to it.analysis }, base)
 
     /** Runs the prompt parser only, and returns the resolved spec plus the match count. */
-    fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec {
-        val h = openHandle()
+    fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec = withNativeHandle { h ->
         val resolvedBase = if (base.heightM.isFinite() && base.heightM > 0f) base
                            else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
         /* Prompt analysis mutates the native handle. Reset first so a previous generation cannot
@@ -571,25 +790,23 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val spec = AvatarSpec.unpack(ints, floats, outPrompt[0] ?: prompt)
         /* Analysis is observational: keep the caller's explicit choices unless the prompt named a
            value the caller left at its default. */
-        return mergePrompted(resolvedBase, spec)
+        mergePrompted(resolvedBase, spec)
     }
 
     /* ------------------------------------------------------------------ export ---------------- */
 
     /** Writes the current result to [destination] (app-scoped storage) and returns the file. */
-    fun exportGlb(source: EngineResult, destination: File): File {
-        val h = openHandle()
+    fun exportGlb(source: EngineResult, destination: File): File = withNativeHandle { h ->
         requery(h, source.spec)
         destination.parentFile?.mkdirs()
         val rc = NativeBridge.engineExportGlb(h, destination.absolutePath)
         check(rc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
-        return destination
+        destination
     }
 
     /** Exports the same .glb to memory: the SDK contract offers both, and callers embedding the
      *  model in another container need the bytes without a second file. */
-    fun exportGlbBytes(source: EngineResult): ByteArray {
-        val h = openHandle()
+    fun exportGlbBytes(source: EngineResult): ByteArray = withNativeHandle { h ->
         requery(h, source.spec)
         val size = NativeBridge.engineExportGlbBytes(h, null)
         check(size > 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
@@ -599,7 +816,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val out = ByteArray(size.toInt())
         buffer.rewind()
         buffer.get(out)
-        return out
+        out
     }
 
     /* ------------------------------------------------------------------ internals ------------- */
@@ -608,82 +825,208 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val request = if (unresolvedRequest.spec.heightM.isFinite() && unresolvedRequest.spec.heightM > 0f)
             unresolvedRequest
         else unresolvedRequest.copy(spec = unresolvedRequest.spec.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M))
-        val parent = Job()
+
+        /* Parent every generation under rootJob. Supplying an unrelated Job to launch() would make
+           scope cancellation miss it, which used to let release destroy a handle under a running job. */
+        val parent = synchronized(lifecycleLock) {
+            check(!released) { "AvatarEngine has been released" }
+            check(rendererLeases == 0) {
+                "Detach the renderer before starting generation; the engine mesh is a single-slot native resource"
+            }
+            Job(rootJob)
+        }
         val handleObj = JobHandle(this, request, parent)
         synchronized(jobs) { jobs += handleObj }
 
+        parent.invokeOnCompletion { cause ->
+            /* A cancellation can happen before the coroutine body is dispatched. Complete the
+               public Deferred in that case too, or await() would remain suspended forever. */
+            if (!handleObj.isCompleted) {
+                val cancelled = cause is CancellationException || handleObj.shouldCancel()
+                val failure = cause ?: if (cancelled) CancellationException("generation cancelled")
+                    else IllegalStateException("generation ended without a result")
+                handleObj.update(
+                    handleObj.current().copy(
+                        running = false,
+                        cancelled = cancelled,
+                        failed = !cancelled,
+                        error = if (cancelled) null else failure.message,
+                        message = if (cancelled) "Cancelled" else failure.message ?: "failed",
+                    ),
+                )
+                handleObj.deliver(Result.failure(failure))
+            }
+            synchronized(jobs) { jobs.remove(handleObj) }
+        }
+
         scope.launch(parent) {
             val started = System.currentTimeMillis()
-            /* The progress accumulators are engine-wide, not per job: clear them here or the second
-               generation starts its bar where the first one finished. */
-            overall = 0f
-            lastProgressMs = 0L
-            logLines.clear()
             val timings = LinkedHashMap<Stage, Float>()
             try {
                 request.spec.requireGeneratable(request.prompt)
                 check(NativeBridge.available) {
                     "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
                 }
-                val h = openHandle()
-                NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
-                val resetRc = NativeBridge.engineReset(
-                    h, request.spec.packInts(), request.spec.packFloats(), request.prompt,
-                )
-                check(resetRc == 0) { "generation setup failed: ${NativeBridge.engineLastError(h)}" }
 
-                /* Images go in before the prompt so the prompt can override what the photo implied:
-                   the user typed the prompt last, so it wins. */
-                if (request.imageA != null || request.imageB != null) {
-                    val list = listOfNotNull(request.imageA, request.imageB)
-                    analyseImages(list)
-                }
-
-                currentStage = handleObj
-                val rc = NativeBridge.engineRunAll(h)
-                currentStage = null
-                if (rc != 0) {
-                    if (rc == CANCELLED) {
-                        handleObj.update(handleObj.current().copy(running = false, cancelled = true, message = "Cancelled"))
-                        handleObj.deliver(Result.failure(kotlinx.coroutines.CancellationException("generation cancelled")))
-                        return@launch
+                /* One native engine is a single-slot pipeline. Hold the lock across reset, image
+                   analysis, generation, stats and export so two requests can never overwrite one
+                   another's mesh or callback/progress state. */
+                val result = nativeMutex.withLock {
+                    if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+                    synchronized(lifecycleLock) {
+                        check(rendererLeases == 0) {
+                            "A renderer attached before generation acquired the native engine; detach it and retry"
+                        }
                     }
-                    error("generation failed (${NativeBridge.engineLastError(h)})")
+                    currentStage = handleObj
+                    try {
+                        synchronized(callbackLock) {
+                            progressAccumulator.reset()
+                            lastProgressMs = 0L
+                            logLines.clear()
+                        }
+
+                        val governor = DeviceResourceGovernor(appContext)
+                        var resources = governor.snapshot()
+                        // Severe thermal state is transient. Keep the request alive and wait briefly
+                        // for Android to report recovery instead of immediately failing generation.
+                        // Memory/storage pressure still fails fast, and cancellation is checked each poll.
+                        val thermalWaitStarted = System.currentTimeMillis()
+                        while (resources.state == DeviceResourceState.THERMAL_LIMIT &&
+                            System.currentTimeMillis() - thermalWaitStarted < MAX_THERMAL_WAIT_MS
+                        ) {
+                            if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+                            handleObj.update(
+                                handleObj.current().copy(
+                                    stage = Stage.ANALYZE_INPUTS,
+                                    stageProgress = 0f,
+                                    message = "Waiting for phone to cool down (Android thermal status ${resources.thermalStatus}); retrying automatically…",
+                                    running = true,
+                                    failed = false,
+                                    error = null,
+                                ),
+                            )
+                            delay(THERMAL_POLL_INTERVAL_MS)
+                            resources = governor.snapshot()
+                        }
+                        val deferredReason = when {
+                            resources.lowMemory || resources.state == DeviceResourceState.LOW_MEMORY -> "system memory is low"
+                            resources.state == DeviceResourceState.LOW_STORAGE -> "free storage is low"
+                            resources.state == DeviceResourceState.THERMAL_LIMIT -> "Android still reports a severe thermal state (${resources.thermalStatus}) after waiting"
+                            else -> null
+                        }
+                        check(!resources.generationShouldBeDeferred) {
+                            "Generation postponed because $deferredReason; Android thermal status ${resources.thermalStatus ?: "unavailable"}, " +
+                                "free RAM ${resources.availableRamBytes / 1048576} MB, free storage ${resources.availableStorageBytes / 1048576} MB. " +
+                                "Let the phone cool, close heavy apps, then retry."
+                        }
+                        if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+                        val safeBudget = request.memoryBudgetBytes.coerceAtMost(
+                            (resources.availableRamBytes - GENERATION_HEADROOM_BYTES).coerceAtLeast(64L * 1024 * 1024),
+                        )
+                        val h = openHandle()
+                        val budgetRc = NativeBridge.engineSetMemoryBudget(h, safeBudget)
+                        check(budgetRc == 0) { "memory budget rejected: ${NativeBridge.engineLastError(h)}" }
+                        val resetRc = NativeBridge.engineReset(
+                            h, request.spec.packInts(), request.spec.packFloats(), request.prompt,
+                        )
+                        check(resetRc == 0) { "generation setup failed: ${NativeBridge.engineLastError(h)}" }
+                        if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+
+                        /* Images go in before the prompt so the prompt can override what the photo implied:
+                           the user typed the prompt last, so it wins. */
+                        val hasImages = request.imageA != null || request.imageB != null
+                        if (hasImages) {
+                            analyseImagesWithHandle(h, listOfNotNull(request.imageA, request.imageB))
+                        }
+
+                        /* The native image analyser mutates its canonical spec. Parse the prompt after
+                           it so typed attributes win, then report the exact spec that the kernel will
+                           build (not a Kotlin-side approximation). */
+                        val resultSpec = if (hasImages || request.prompt.isNotBlank()) {
+                            // The native prompt analyser treats these arrays as in/out values.
+                            // Seed them with the resolved request spec; zero-filled arrays erase the
+                            // caller's measurements and can make both prompt and image generation fail.
+                            val specInts = request.spec.packInts()
+                            val specFloats = request.spec.packFloats()
+                            val outPrompt = arrayOfNulls<String>(1)
+                            val matched = NativeBridge.engineAnalyzePrompt(
+                                h, request.prompt, specInts, specFloats, outPrompt,
+                            )
+                            check(matched >= 0) { "prompt analysis failed: ${NativeBridge.engineLastError(h)}" }
+                            AvatarSpec.unpack(specInts, specFloats, outPrompt[0] ?: request.prompt)
+                        } else {
+                            request.spec
+                        }
+                        if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+
+                        /* Execute each native stage through the SDK's persistent dependency graph.
+                           That creates cancellation/progress boundaries between long stages without
+                           allowing concurrent calls against the single mutable engine handle. */
+                        for (stage in GenerationJobGraph.orderedStages()) {
+                            if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+                            handleObj.update(
+                                handleObj.current().copy(
+                                    stage = stage,
+                                    stageProgress = 0f,
+                                    message = stage.label,
+                                    running = true,
+                                ),
+                            )
+                            val stageRc = NativeBridge.engineStage(h, stage.value)
+                            if (stageRc == CANCELLED || handleObj.shouldCancel()) {
+                                throw CancellationException("generation cancelled")
+                            }
+                            check(stageRc == 0) {
+                                "${stage.label} failed (${NativeBridge.engineLastError(h)})"
+                            }
+                        }
+                        /* runAll now has no dirty work; it validates the stage chain, publishes the
+                           canonical DONE state and updates summary statistics. */
+                        val rc = NativeBridge.engineRunAll(h)
+                        if (rc == CANCELLED || handleObj.shouldCancel()) {
+                            throw CancellationException("generation cancelled")
+                        }
+                        check(rc == 0) { "generation finalization failed (${NativeBridge.engineLastError(h)})" }
+
+                        /* Collect the statistics the result reports. */
+                        val statsFloats = FloatArray(9)
+                        val statsLongs = LongArray(11)
+                        NativeBridge.engineStats(h, statsFloats, statsLongs)
+
+                        val regions = (0 until REGION_COUNT).map { NativeBridge.engineRegionName(it) }
+                        val file = File(engineOutputDir(appContext), "avatar-${handleObj.id}.glb")
+                        file.parentFile?.mkdirs()
+                        val exportRc = NativeBridge.engineExportGlb(h, file.absolutePath)
+                        check(exportRc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
+
+                        val counters = IntArray(5)
+                        NativeBridge.engineCounts(h, counters)
+                        timings[Stage.FIT_ANATOMY] = statsFloats[0]
+                        timings[Stage.GEOMETRY] = statsFloats[1] + statsFloats[2]
+                        timings[Stage.UV_UNWRAP] = statsFloats[5]
+                        timings[Stage.BAKE_TEXTURES] = statsFloats[6]
+                        timings[Stage.RIG] = statsFloats[7]
+                        timings[Stage.EXPORT] = statsFloats[8]
+
+                        EngineResult(
+                            glbFile = file,
+                            spec = resultSpec,
+                            vertexCount = counters[0],
+                            triangleCount = counters[1] / 3,
+                            submeshCount = counters[2],
+                            jointCount = counters[3],
+                            blendshapeCount = NativeBridge.engineBlendshapeNames().size,
+                            textureBytes = statsLongs[6],
+                            timings = timings,
+                            regionNames = regions,
+                        )
+                    } finally {
+                        currentStage = null
+                    }
                 }
 
-                /* Collect the statistics the result reports. */
-                val statsFloats = FloatArray(9)
-                val statsLongs = LongArray(11)
-                NativeBridge.engineStats(h, statsFloats, statsLongs)
-
-                val regions = (0 until REGION_COUNT).map { NativeBridge.engineRegionName(it) }
-                val file = File(engineOutputDir(appContext), "avatar-${handleObj.id}.glb")
-                file.parentFile?.mkdirs()
-                val exportRc = NativeBridge.engineExportGlb(h, file.absolutePath)
-                check(exportRc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
-
-                val counters = IntArray(5)
-                NativeBridge.engineCounts(h, counters)
-
-                timings[Stage.FIT_ANATOMY] = statsFloats[0]
-                timings[Stage.GEOMETRY] = statsFloats[1] + statsFloats[2]
-                timings[Stage.UV_UNWRAP] = statsFloats[5]
-                timings[Stage.BAKE_TEXTURES] = statsFloats[6]
-                timings[Stage.RIG] = statsFloats[7]
-                timings[Stage.EXPORT] = statsFloats[8]
-
-                val result = EngineResult(
-                    glbFile = file,
-                    spec = request.spec,
-                    vertexCount = counters[0],
-                    triangleCount = counters[1] / 3,
-                    submeshCount = counters[2],
-                    jointCount = counters[3],
-                    blendshapeCount = NativeBridge.engineBlendshapeNames().size,
-                    textureBytes = statsLongs[6],
-                    timings = timings,
-                    regionNames = regions,
-                )
+                if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
                 handleObj.update(
                     JobStatus(
                         stage = Stage.DONE,
@@ -692,21 +1035,40 @@ class AvatarEngine private constructor(private val appContext: Context) {
                         message = "Ready",
                         running = false,
                         elapsedMs = System.currentTimeMillis() - started,
-                    )
+                    ),
                 )
                 handleObj.deliver(Result.success(result))
             } catch (t: Throwable) {
                 currentStage = null
-                handleObj.update(
-                    handleObj.current().copy(
-                        running = false,
-                        failed = true,
-                        error = t.message ?: t.javaClass.simpleName,
-                        message = t.message ?: "failed",
-                        elapsedMs = System.currentTimeMillis() - started,
+                val cancelled = t is CancellationException || handleObj.shouldCancel()
+                if (cancelled) {
+                    val failure = if (t is CancellationException) t else CancellationException("generation cancelled")
+                    handleObj.update(
+                        handleObj.current().copy(
+                            running = false,
+                            cancelled = true,
+                            failed = false,
+                            error = null,
+                            message = "Cancelled",
+                            elapsedMs = System.currentTimeMillis() - started,
+                        ),
                     )
-                )
-                handleObj.deliver(Result.failure(t))
+                    handleObj.deliver(Result.failure(failure))
+                } else {
+                    val message = t.message ?: t.javaClass.simpleName
+                    handleObj.update(
+                        handleObj.current().copy(
+                            running = false,
+                            failed = true,
+                            error = message,
+                            message = message,
+                            elapsedMs = System.currentTimeMillis() - started,
+                        ),
+                    )
+                    handleObj.deliver(Result.failure(t))
+                }
+            } finally {
+                currentStage = null
             }
         }
         return handleObj
@@ -717,7 +1079,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
      * turned into StateFlow updates here; the Compose layer collects the flow on the main
      * dispatcher, so nothing touches the UI from a background thread.
      */
-    private var currentStage: JobHandle? = null
+    @Volatile private var currentStage: JobHandle? = null
 
     /**
      * The callback object the kernel calls back into.
@@ -729,24 +1091,28 @@ class AvatarEngine private constructor(private val appContext: Context) {
     private inner class KernelCallbacks {
         fun onProgress(stage: Int, fraction: Float, message: String) {
             val job = currentStage ?: return
-            val s = Stage.of(stage)
-            val now = System.currentTimeMillis()
-            val delta = if (lastProgressMs == 0L) 0L else now - lastProgressMs
-            lastProgressMs = now
-            /* Overall progress is weighted by measured stage cost, not split equally: on a
-               mid-range phone geometry is about two thirds of the wall clock, and a bar that races
-               to 60% and then stalls for a minute reads as a hang. */
-            overall += (STAGE_WEIGHTS[s] ?: 0f) * fraction.coerceIn(0f, 1f)
-            job.update(
-                JobStatus(
-                    stage = s,
-                    stageProgress = fraction.coerceIn(0f, 1f),
-                    overallProgress = overall.coerceIn(0f, 1f),
-                    message = message,
-                    running = true,
-                    elapsedMs = job.current().elapsedMs + delta,
+            synchronized(callbackLock) {
+                if (currentStage !== job) return@synchronized
+                val s = Stage.of(stage)
+                val now = System.currentTimeMillis()
+                val delta = if (lastProgressMs == 0L) 0L else now - lastProgressMs
+                lastProgressMs = now
+                /* Overall progress is the weighted cumulative stage fraction. Native callbacks
+                   report absolute fractions, so add only the monotone delta; adding each reported
+                   fraction would make a stage with many updates consume its weight several times. */
+                val safeFraction = fraction.coerceIn(0f, 1f)
+                val wholeJobProgress = progressAccumulator.update(s, safeFraction)
+                job.update(
+                    JobStatus(
+                        stage = s,
+                        stageProgress = safeFraction,
+                        overallProgress = wholeJobProgress,
+                        message = message,
+                        running = true,
+                        elapsedMs = job.current().elapsedMs + delta,
+                    ),
                 )
-            )
+            }
         }
 
         fun onLog(severity: Int, message: String) {
@@ -758,8 +1124,10 @@ class AvatarEngine private constructor(private val appContext: Context) {
                 2 -> "warn"
                 else -> "error"
             }
-            logLines.addLast("[$level] $message")
-            while (logLines.size > 256) logLines.removeFirst()
+            synchronized(callbackLock) {
+                logLines.addLast("[$level] $message")
+                while (logLines.size > 256) logLines.removeFirst()
+            }
         }
 
         fun shouldCancel(): Boolean = currentStage?.shouldCancel() ?: false
@@ -768,7 +1136,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
     private val callbackBridge = KernelCallbacks()
 
     private val logLines = ArrayDeque<String>()
-    private var overall = 0f
+    private val progressAccumulator = WeightedProgressAccumulator(STAGE_WEIGHTS)
     private var lastProgressMs = 0L
 
     private fun requery(h: Long, spec: AvatarSpec) {
@@ -786,6 +1154,9 @@ class AvatarEngine private constructor(private val appContext: Context) {
     companion object {
         const val ABI_VERSION = 1
         private const val REGION_COUNT = 13
+        private const val MAX_THERMAL_WAIT_MS = 120_000L
+        private const val THERMAL_POLL_INTERVAL_MS = 5_000L
+        private const val GENERATION_HEADROOM_BYTES = 512L * 1024 * 1024
         private const val CANCELLED = -6
 
         /** Relative cost of each stage, measured with the export probe on the host and on a
@@ -804,11 +1175,15 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
         private var instance: AvatarEngine? = null
 
-        /** One engine per process: the kernel owns a single 34 MB mesh budget and a GPU context. */
-        fun get(context: Context): AvatarEngine =
-            instance ?: synchronized(this) {
-                instance ?: AvatarEngine(context.applicationContext).also { instance = it }
+        /** One active engine per process; a released instance is replaced on the next get(). */
+        fun get(context: Context): AvatarEngine = synchronized(this) {
+            val current = instance
+            if (current == null || current.isReleased()) {
+                AvatarEngine(context.applicationContext).also { instance = it }
+            } else {
+                current
             }
+        }
 
         fun health(): EngineHealth {
             val loaded = NativeBridge.available
@@ -835,13 +1210,16 @@ class AvatarEngine private constructor(private val appContext: Context) {
             val info = android.app.ActivityManager.MemoryInfo()
             activityManager.getMemoryInfo(info)
             val stat = StatFs(context.filesDir.absolutePath)
-            val lowest = health().let { if (it.usable) return@let it else it }
+            val engineHealth = health()
             val engine = get(context)
+            val effectiveBudget = (info.availMem - GENERATION_HEADROOM_BYTES)
+                .coerceAtLeast(64L * 1024 * 1024)
+                .coerceAtMost(1536L * 1024 * 1024)
             return EngineCapabilities(
-                abiVersion = lowest.abiVersion,
-                engineVersion = lowest.engineVersion,
+                abiVersion = engineHealth.abiVersion,
+                engineVersion = engineHealth.engineVersion,
                 estimatedGlbBytes = 40L * 1024 * 1024,   // measured: 33-39 MB for a full avatar
-                memoryBudgetBytes = 1536L * 1024 * 1024,
+                memoryBudgetBytes = effectiveBudget,
                 totalRamBytes = info.totalMem,
                 lowRamDevice = activityManager.isLowRamDevice,
                 freeStorageBytes = stat.availableBytes,
@@ -855,18 +1233,6 @@ class AvatarEngine private constructor(private val appContext: Context) {
         fun engineOutputDir(context: Context): File = File(context.filesDir, "avatars")
 
         /* ------------------------------------------------------------------ helpers ----------- */
-
-        /**
-         * Inverts CIE L* to melanin content.
-         *
-         * Not a lookup table from a paper: it is the same monotone relation the texture bake uses
-         * (af_texture.cpp), solved the other way round, so a photo's skin tone and a typed
-         * `skin_melanin` land in the same place. L* 92 (very fair) -> ~0.06, L* 20 (deep) -> ~0.95.
-         */
-        private fun melaninFromLab(lab: FloatArray): Float {
-            val l = lab[0].coerceIn(0f, 100f)
-            return ((92f - l) / 78f).coerceIn(0.02f, 0.98f)
-        }
 
         /** Keeps whatever the caller set explicitly, fills the rest from the prompt. */
         private fun mergePrompted(base: AvatarSpec, prompted: AvatarSpec): AvatarSpec = base.copy(
@@ -892,7 +1258,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
         )
     }
 
-    /** Resident set size in bytes - the number the settings screen shows next to the 2 GB budget. */
+    /** Resident set size in bytes - the observed process-memory figure, not the native budget itself. */
     fun residentBytes(): Long = Debug.getPss() * 1024L
 
     fun deviceSdk(): Int = AndroidBuild.VERSION.SDK_INT

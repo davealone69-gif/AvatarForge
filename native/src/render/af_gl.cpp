@@ -24,9 +24,12 @@
  *  different (worse) image than the one the user was promised.
  */
 #include "af_render.h"
+#include "af_avatar_culler.h"
+#include "af_avatar_lod.h"
 #include "af_render_common.h"
 #include "af_environment.h"
 #include "af_shaders.h"
+#include "af_texture_compression.h"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>            /* EGL_OPENGL_ES3_BIT_KHR */
@@ -37,11 +40,65 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
+#ifndef GL_COMPRESSED_RGBA_ASTC_6x6_KHR
+#define GL_COMPRESSED_RGBA_ASTC_6x6_KHR 0x93B4
+#endif
+#ifndef GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR
+#define GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR 0x93D4
+#endif
+
 namespace af {
 namespace {
+
+bool glHasExtension(const char* wanted) {
+    if (!wanted || !*wanted) return false;
+    GLint count = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+    if (count > 0) {
+        for (GLint i = 0; i < count; ++i) {
+            const char* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, GLuint(i)));
+            if (extension && std::strcmp(extension, wanted) == 0) return true;
+        }
+        return false;
+    }
+    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    if (!extensions) return false;
+    const size_t length = std::strlen(wanted);
+    for (const char* at = extensions; (at = std::strstr(at, wanted)) != nullptr; ++at) {
+        const bool left = at == extensions || at[-1] == ' ';
+        const bool right = at[length] == '\0' || at[length] == ' ';
+        if (left && right) return true;
+    }
+    return false;
+}
+
+bool glHasCompressedFormat(GLenum wanted) {
+    GLint count = 0;
+    glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &count);
+    if (count <= 0 || count > 4096) return false;
+    std::vector<GLint> formats(static_cast<size_t>(count));
+    glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, formats.data());
+    return std::find(formats.begin(), formats.end(), static_cast<GLint>(wanted)) != formats.end();
+}
+
+uint64_t uncompressedAtlasFootprint(int width, int height, int channels) {
+    if (width <= 0 || height <= 0 || channels <= 0) return 0;
+    uint64_t total = 0;
+    int w = width, h = height;
+    for (int level = 0; level < 12; ++level) {
+        const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+        if (pixels > (UINT64_MAX - total) / static_cast<uint64_t>(channels)) return UINT64_MAX;
+        total += pixels * static_cast<uint64_t>(channels);
+        if (w == 1 && h == 1) break;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+    }
+    return total;
+}
 
 bool compileShader(GLenum type, const char* source, const char* label, GLuint* out, std::string* error) {
     const GLuint shader = glCreateShader(type);
@@ -77,6 +134,7 @@ public:
     void setCamera(const CameraState& camera) override { camera_ = camera; }
     void setOptions(const RendererOptions& options) override;
     RendererOptions options() const override { return options_; }
+    GpuProfile gpuProfile() const override { return gpuProfile_; }
     void renderFrame(float deltaSeconds) override;
     void setSkeletonVisible(bool visible) override { skeletonVisible_ = visible; }
     void setFlatShading(bool flat) override { flatShading_ = flat; }
@@ -94,6 +152,10 @@ private:
     bool createTargets(std::string* error);
     bool createAtlas(std::string* error);
     void uploadAtlas(std::string* error);
+    void startAtlasCompression();
+    void pollAtlasCompression();
+    void uploadCompressedAtlas(const EncodedAtlas& atlas);
+    void waitAtlasCompression();
     void ensureGeometryBuffers();
     void rebuildMaterialBlocks();
     void buildSkeletonLines();
@@ -153,8 +215,17 @@ private:
     RendererOptions activeTargetOptions_{};  /* last target set that completed successfully */
     RendererInfo info_{};
     RendererStats stats_{};
+    GpuProfile gpuProfile_{};
+    AsyncAtlasCompression atlasCompressionJob_;
+    bool atlasCompressionAttempted_ = false;
+    uint64_t atlasGpuBytes_ = 0;
     af_engine* engine_ = nullptr;
     CameraState camera_{};
+    AvatarCuller avatarCuller_;
+    AvatarLodSet avatarLods_;
+    int activeLod_ = 0;
+    bool indexDirty_ = true;
+    bool avatarVisible_ = false;
     FrameScene scene_{};
     EnvironmentParams env_{};
     ShGlobal sh_{};
@@ -239,15 +310,43 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     }
     hdrInternalFormat_ = floatColour ? GL_RGBA16F : GL_RGBA8;
 
-    info_.backend = "gles31";
-    info_.deviceName = rendererName ? rendererName : "unknown GPU";
+    GLint maxTextureSize = 0, maxSamples = 1;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    const bool astcExtension = glHasExtension("GL_KHR_texture_compression_astc_ldr") ||
+                               glHasExtension("GL_OES_texture_compression_astc");
+    const bool hasEtc2 = glHasCompressedFormat(GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC) &&
+                         glHasCompressedFormat(GL_COMPRESSED_RGBA8_ETC2_EAC) &&
+                         glHasCompressedFormat(GL_COMPRESSED_R11_EAC);
+    const bool hasAstc6x6 = astcExtension &&
+                            glHasCompressedFormat(GL_COMPRESSED_RGBA_ASTC_6x6_KHR) &&
+                            glHasCompressedFormat(GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR);
+
+    GpuDeviceCaps caps;
+    caps.backend = "gles31";
+    caps.vendorName = vendor ? vendor : "unknown vendor";
+    caps.deviceName = rendererName ? rendererName : "unknown GPU";
+    caps.driver = version;
+    caps.maxTextureDimension2D = static_cast<uint32_t>(std::max(0, maxTextureSize));
+    caps.maxColorSamples = static_cast<uint32_t>(std::max(1, maxSamples));
+    caps.supportsAstcLdr = hasAstc6x6;
+    caps.supportsEtc2 = hasEtc2;
+    caps.supportsFloatHdr = floatColour;
+    caps.softwareRenderer = (rendererName && (std::strstr(rendererName, "SwiftShader") ||
+                                               std::strstr(rendererName, "llvmpipe") ||
+                                               std::strstr(rendererName, "Software")));
+    gpuProfile_ = makeGpuProfile(caps);
+
+    info_.backend = caps.backend;
+    info_.deviceName = caps.deviceName;
     info_.apiVersion = version;
-    info_.driver = vendor ? vendor : "unknown vendor";
+    info_.driver = caps.vendorName;
+    info_.gpuProfile = gpuProfile_.name;
+    info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
     info_.supportsFloatHdr = floatColour;
-    info_.supportsMsaa = true;
-    info_.supportsShadows = true;
-    info_.supportsAnisotropy = true;   /* queried properly below; ES 3.0 has anisotropy via the
-                                          same enum, and the sampler clamps to the driver limit */
+    info_.supportsMsaa = maxSamples > 1;
+    info_.supportsShadows = maxTextureSize >= 1024;
+    info_.supportsAnisotropy = glHasExtension("GL_EXT_texture_filter_anisotropic");
     return true;
 }
 
@@ -480,6 +579,12 @@ bool GlRenderer::createTargets(std::string* error) {
 bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
     options_ = options;
     if (!createContext(window, error)) return false;
+    options_.msaaSamples = std::min(std::max(1, options_.msaaSamples),
+                                    static_cast<int>(gpuProfile_.maxMsaaSamples));
+    options_.shadowMapSize = std::max(512, std::min(options_.shadowMapSize, gpuProfile_.maxShadowMapSize));
+    options_.bloomLevels = std::max(0, std::min(options_.bloomLevels, gpuProfile_.maxBloomLevels));
+    options_.effectiveQualityLevel = std::max(0, std::min(options_.effectiveQualityLevel,
+                                                         gpuProfile_.maxQualityLevel));
     if (!createPrograms(error)) return false;
 
     glGenVertexArrays(1, &avatarVao_);
@@ -583,9 +688,9 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
 void GlRenderer::ensureGeometryBuffers() {
     if (!engine_) return;
     const int32_t vcount = af_engine_vertex_count(engine_);
-    const int32_t icount = af_engine_index_count(engine_);
     const af_vertex* verts = af_engine_vertices(engine_);
-    const uint32_t* indices = af_engine_indices(engine_);
+    const int32_t sourceIndexCount = af_engine_index_count(engine_);
+    const uint32_t* sourceIndices = af_engine_indices(engine_);
     if (vcount <= 0 || !verts) return;
 
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
@@ -601,6 +706,9 @@ void GlRenderer::ensureGeometryBuffers() {
         vertexCount_ = vcount;
     }
 
+    const std::vector<uint32_t>& lodIndices = avatarLods_.indices();
+    const int32_t icount = lodIndices.empty() ? sourceIndexCount : static_cast<int32_t>(lodIndices.size());
+    const uint32_t* indices = lodIndices.empty() ? sourceIndices : lodIndices.data();
     if (icount > 0 && indices) {
         const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
         if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
@@ -610,9 +718,10 @@ void GlRenderer::ensureGeometryBuffers() {
             indexCapacity_ = ibytes + ibytes / 4;
             indexCount_ = 0;
         }
-        if (indexCount_ != icount) {
+        if (indexDirty_ || indexCount_ != icount) {
             glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
             indexCount_ = icount;
+            indexDirty_ = false;
         }
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -621,6 +730,7 @@ void GlRenderer::ensureGeometryBuffers() {
 
 void GlRenderer::uploadAtlas(std::string* error) {
     if (!engine_) return;
+    atlasGpuBytes_ = 0;
     for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
         af_texture tex{};
         if (af_engine_texture(engine_, slot, &tex) != AF_OK) continue;
@@ -632,25 +742,134 @@ void GlRenderer::uploadAtlas(std::string* error) {
         glBindTexture(GL_TEXTURE_2D, atlasTexture_[slot]);
         glTexImage2D(GL_TEXTURE_2D, 0, GLint(internal), tex.width, tex.height, 0, format,
                      GL_UNSIGNED_BYTE, tex.data);
-        glGenerateMipmap(GL_TEXTURE_2D);   /* GLES has this built in; the Vulkan path blits */
+        glGenerateMipmap(GL_TEXTURE_2D);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        /* The generated chain must not collapse to magenta when a driver limits mip depth. */
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 12);
-
-        const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-        if (ext && std::strstr(ext, "GL_EXT_texture_filter_anisotropic")) {
+        int levels = 1, mw = tex.width, mh = tex.height;
+        while ((mw > 1 || mh > 1) && levels < 12) {
+            mw = mw > 1 ? mw / 2 : 1;
+            mh = mh > 1 ? mh / 2 : 1;
+            ++levels;
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
+        if (info_.supportsAnisotropy) {
             GLfloat maxAniso = 1.0f;
             glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso);
             glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */,
                             std::min(4.0f, maxAniso));
         }
+        const uint64_t bytes = uncompressedAtlasFootprint(tex.width, tex.height, tex.channels);
+        atlasGpuBytes_ = atlasGpuBytes_ > UINT64_MAX - bytes ? UINT64_MAX : atlasGpuBytes_ + bytes;
     }
     atlasUploaded_ = true;
+    stats_.textureBytes = atlasGpuBytes_;
+    startAtlasCompression();
     (void)error;
 }
+
+void GlRenderer::startAtlasCompression() {
+    if (!engine_ || atlasCompressionAttempted_ || gpuProfile_.atlasCompression == AtlasCompression::NONE)
+        return;
+    atlasCompressionAttempted_ = true;
+    std::array<af_texture, AF_TEX_COUNT> sources{};
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot)
+        (void)af_engine_texture(engine_, slot, &sources[static_cast<size_t>(slot)]);
+    const bool started = atlasCompressionJob_.start(sources, gpuProfile_);
+    info_.textureCompression = started
+        ? std::string(atlasCompressionName(gpuProfile_.atlasCompression)) + " (pending)"
+        : atlasCompressionName(AtlasCompression::NONE);
+}
+
+void GlRenderer::pollAtlasCompression() {
+    EncodedAtlas atlas;
+    if (!atlasCompressionJob_.poll(&atlas)) return;
+    if (!atlas.anyValid()) {
+        info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
+        return;
+    }
+    uploadCompressedAtlas(atlas);
+}
+
+void GlRenderer::uploadCompressedAtlas(const EncodedAtlas& atlas) {
+    if (!engine_ || context_ == EGL_NO_CONTEXT) return;
+    bool uploadedAny = false;
+    bool usedFallback = false;
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        const EncodedTexture& texture = atlas.textures[static_cast<size_t>(slot)];
+        if (!texture.valid()) continue;
+        GLenum internal = 0;
+        switch (texture.encoding) {
+            case AtlasTextureEncoding::ASTC_6X6_UNORM: internal = GL_COMPRESSED_RGBA_ASTC_6x6_KHR; break;
+            case AtlasTextureEncoding::ASTC_6X6_SRGB: internal = GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR; break;
+            case AtlasTextureEncoding::ETC2_RGBA8_SRGB: internal = GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC; break;
+            case AtlasTextureEncoding::ETC2_RGBA8_UNORM: internal = GL_COMPRESSED_RGBA8_ETC2_EAC; break;
+            case AtlasTextureEncoding::ETC2_R11_UNORM: internal = GL_COMPRESSED_R11_EAC; break;
+        }
+        bool ok = internal != 0;
+        glBindTexture(GL_TEXTURE_2D, atlasTexture_[slot]);
+        for (int attempt = 0; attempt < 16 && glGetError() != GL_NO_ERROR; ++attempt) {}
+        if (ok) {
+            for (size_t level = 0; level < texture.levels.size(); ++level) {
+                const EncodedMip& mip = texture.levels[level];
+                if (mip.bytes.empty() || mip.bytes.size() > static_cast<size_t>(std::numeric_limits<GLsizei>::max())) {
+                    ok = false;
+                    break;
+                }
+                glCompressedTexImage2D(GL_TEXTURE_2D, GLint(level), internal, mip.width, mip.height, 0,
+                                       GLsizei(mip.bytes.size()), mip.bytes.data());
+                if (glGetError() != GL_NO_ERROR) { ok = false; break; }
+            }
+        }
+        if (!ok) {
+            /* A driver-side compressed upload refusal is non-fatal: restore the raw base level and
+               let GLES rebuild the mip chain exactly as it did before this optimization. */
+            af_texture raw{};
+            if (af_engine_texture(engine_, slot, &raw) == AF_OK && raw.data && raw.width > 0 && raw.height > 0) {
+                const GLenum rawInternal = (raw.channels == 1) ? GL_R8
+                    : (slot == AF_TEX_BASE_COLOR) ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+                const GLenum rawFormat = (raw.channels == 1) ? GL_RED : GL_RGBA;
+                glTexImage2D(GL_TEXTURE_2D, 0, GLint(rawInternal), raw.width, raw.height, 0, rawFormat,
+                             GL_UNSIGNED_BYTE, raw.data);
+                glGenerateMipmap(GL_TEXTURE_2D);
+                int levels = 1, mw = raw.width, mh = raw.height;
+                while ((mw > 1 || mh > 1) && levels < 12) {
+                    mw = mw > 1 ? mw / 2 : 1;
+                    mh = mh > 1 ? mh / 2 : 1;
+                    ++levels;
+                }
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
+                usedFallback = true;
+            }
+            continue;
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, GLint(texture.levels.size() - 1));
+        const uint64_t compressedBytes = texture.byteSize();
+        const uint64_t rawBytes = [&]() {
+            af_texture raw{};
+            return af_engine_texture(engine_, slot, &raw) == AF_OK
+                ? uncompressedAtlasFootprint(raw.width, raw.height, raw.channels) : uint64_t(0);
+        }();
+        if (atlasGpuBytes_ >= rawBytes) atlasGpuBytes_ -= rawBytes;
+        atlasGpuBytes_ = atlasGpuBytes_ > UINT64_MAX - compressedBytes ? UINT64_MAX
+                                                                       : atlasGpuBytes_ + compressedBytes;
+        uploadedAny = true;
+    }
+    stats_.textureBytes = atlasGpuBytes_;
+    if (uploadedAny) {
+        info_.textureCompression = usedFallback ? "mixed compressed/raw fallback"
+                                                : atlasCompressionName(gpuProfile_.atlasCompression);
+    } else {
+        info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
+    }
+}
+
+void GlRenderer::waitAtlasCompression() { atlasCompressionJob_.waitDiscard(); }
 
 void GlRenderer::rebuildMaterialBlocks() {
     if (!engine_) return;
@@ -767,6 +986,22 @@ void GlRenderer::updateScene(float deltaSeconds) {
     /* depthZeroToOne = false: GL clip space, which is also why the ES dialect of the shaders has
        AF_CLIP_Y = +1 and rescales the shadow lookup's z. */
     buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_, false);
+    int lodIndexCounts[kAvatarLodLevels] = {};
+    int lodCount = avatarLods_.levelCount();
+    if (lodCount > 0) {
+        for (int level = 0; level < lodCount; ++level)
+            lodIndexCounts[level] = static_cast<int>(avatarLods_.level(level).indexCount);
+    } else {
+        lodCount = 1;
+        lodIndexCounts[0] = engine_ ? std::max(0, af_engine_index_count(engine_)) : 0;
+    }
+    const float quality = static_cast<float>(std::max(0, std::min(3, options_.effectiveQualityLevel))) / 3.0f;
+    const AvatarCullResult cull = avatarCuller_.update(scene_.modelMin, scene_.modelMax, scene_.hasModel,
+                                                         lodIndexCounts, lodCount, camera_, surfaceWidth_,
+                                                         surfaceHeight_, quality, gpuProfile_.lodDistanceScale);
+    avatarVisible_ = cull.visible;
+    activeLod_ = std::max(0, cull.lod);
+    triangles_ = cull.triangleCount;
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
     scene_.camera.uiParams[1] = highlightRegion_ >= 0 ? 1.0f : 0.0f;
@@ -863,7 +1098,13 @@ void GlRenderer::drawShadowPass() {
     glBindVertexArray(avatarVao_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
-    glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
+    const bool haveLods = avatarLods_.levelCount() > 0;
+    const AvatarLodLevel& lod = avatarLods_.level(activeLod_);
+    const GLsizei drawCount = haveLods ? static_cast<GLsizei>(lod.indexCount)
+                                        : std::max(0, af_engine_index_count(engine_));
+    const size_t first = haveLods ? lod.firstIndex : 0;
+    glDrawElements(GL_TRIANGLES, drawCount, GL_UNSIGNED_INT,
+                   reinterpret_cast<const void*>(first * sizeof(uint32_t)));
     glDisable(GL_POLYGON_OFFSET_FILL);
     ++drawCalls_;
 }
@@ -896,7 +1137,7 @@ void GlRenderer::drawForwardPass() {
     }
 
     /* ---- the avatar: one draw per submesh so each gets its own material block ---- */
-    if (engine_ && vertexCount_ > 0 && indexCount_ > 0) {
+    if (avatarVisible_ && engine_ && vertexCount_ > 0 && indexCount_ > 0) {
         glUseProgram(forwardProgram_);
         glBindVertexArray(avatarVao_);
         glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
@@ -912,15 +1153,24 @@ void GlRenderer::drawForwardPass() {
 
         const af_submesh* submeshes = af_engine_submeshes(engine_);
         const int n = af_engine_submesh_count(engine_);
+        const bool haveLods = avatarLods_.levelCount() > 0;
+        const AvatarLodLevel& lod = avatarLods_.level(activeLod_);
         for (int i = 0; i < n; ++i) {
             glBindBufferRange(GL_UNIFORM_BUFFER, 1, materialUbo_, GLintptr(i) * materialStride_,
                               sizeof(MaterialUbo));
-            const int offset = submeshes[i].index_offset;
-            glDrawElements(GL_TRIANGLES, submeshes[i].index_count, GL_UNSIGNED_INT,
-                           reinterpret_cast<const void*>(size_t(offset) * sizeof(uint32_t)));
-            ++drawCalls_;
+            const bool haveRange = haveLods && static_cast<size_t>(i) < lod.submeshes.size();
+            const uint32_t offset = haveRange ? lod.submeshes[static_cast<size_t>(i)].firstIndex
+                                              : static_cast<uint32_t>(std::max(0, submeshes[i].index_offset));
+            const GLsizei count = haveRange ? static_cast<GLsizei>(lod.submeshes[static_cast<size_t>(i)].indexCount)
+                                            : std::max(0, submeshes[i].index_count);
+            if (count > 0) {
+                glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT,
+                               reinterpret_cast<const void*>(size_t(offset) * sizeof(uint32_t)));
+                ++drawCalls_;
+            }
         }
-        triangles_ = indexCount_ / 3;
+        triangles_ = haveLods ? static_cast<int>(lod.indexCount / 3)
+                              : std::max(0, af_engine_index_count(engine_)) / 3;
     }
 
     /* ---- skeleton overlay ---- */
@@ -1003,6 +1253,7 @@ void GlRenderer::drawComposite() {
 
 void GlRenderer::renderFrame(float deltaSeconds) {
     if (contextLost_ || display_ == EGL_NO_DISPLAY) return;
+    pollAtlasCompression();
     if (targetsDirty_) {
         targetsDirty_ = false;
         const RendererOptions rollback = activeTargetOptions_;
@@ -1068,20 +1319,45 @@ void GlRenderer::renderFrame(float deltaSeconds) {
  *  Interface plumbing and teardown
  * ============================================================================================ */
 void GlRenderer::setOptions(const RendererOptions& options) {
+    RendererOptions normalized = options;
+    normalized.msaaSamples = std::min(std::max(1, normalized.msaaSamples),
+                                     static_cast<int>(gpuProfile_.maxMsaaSamples));
+    normalized.shadowMapSize = std::max(512, std::min(normalized.shadowMapSize, gpuProfile_.maxShadowMapSize));
+    normalized.bloomLevels = std::max(0, std::min(normalized.bloomLevels, gpuProfile_.maxBloomLevels));
+    normalized.effectiveQualityLevel = std::max(0, std::min(normalized.effectiveQualityLevel,
+                                                            gpuProfile_.maxQualityLevel));
     const bool needsRebuild =
-        options.msaaSamples != options_.msaaSamples ||
-        options.enableShadows != options_.enableShadows ||
-        (options.enableShadows && options.shadowMapSize != options_.shadowMapSize) ||
-        options.enableBloom != options_.enableBloom ||
-        (options.enableBloom && options.bloomLevels != options_.bloomLevels);
-    options_ = options;
+        normalized.msaaSamples != options_.msaaSamples ||
+        normalized.enableShadows != options_.enableShadows ||
+        (normalized.enableShadows && normalized.shadowMapSize != options_.shadowMapSize) ||
+        normalized.enableBloom != options_.enableBloom ||
+        (normalized.enableBloom && normalized.bloomLevels != options_.bloomLevels);
+    options_ = normalized;
     if (needsRebuild && context_ != EGL_NO_CONTEXT) targetsDirty_ = true;
 }
 
 void GlRenderer::attachEngine(af_engine* engine) {
+    waitAtlasCompression();
     engine_ = engine;
+    atlasCompressionAttempted_ = false;
+    atlasGpuBytes_ = 0;
+    stats_.textureBytes = 0;
+    info_.textureCompression = atlasCompressionName(AtlasCompression::NONE);
     meshDirty_ = true;
+    indexDirty_ = true;
+    activeLod_ = 0;
     atlasUploaded_ = false;
+    avatarLods_.clear();
+    if (engine_) {
+        const int32_t vertices = af_engine_vertex_count(engine_);
+        const int32_t indices = af_engine_index_count(engine_);
+        const af_vertex* rest = af_engine_vertices_rest(engine_);
+        if (!rest) rest = af_engine_vertices(engine_);
+        avatarLods_.build(rest, static_cast<size_t>(std::max(0, vertices)),
+                          af_engine_indices(engine_), static_cast<size_t>(std::max(0, indices)),
+                          af_engine_submeshes(engine_),
+                          static_cast<size_t>(std::max(0, af_engine_submesh_count(engine_))));
+    }
     if (engine_ && context_ != EGL_NO_CONTEXT) {
         std::string error;
         uploadAtlas(&error);
@@ -1116,6 +1392,7 @@ void GlRenderer::destroyTargets() {
 }
 
 void GlRenderer::destroyAll() {
+    waitAtlasCompression();
     if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT) {
         eglMakeCurrent(display_, surface_, surface_, context_);
         destroyTargets();

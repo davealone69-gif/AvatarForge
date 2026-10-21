@@ -290,24 +290,83 @@ fn builds_a_watertight_avatar_end_to_end() {
     let duration = engine.clip_duration(walk);
     assert!(duration > 0.5, "walk clip reports {duration} s");
     let pose_a = engine.sample_clip(walk, 0.0).expect("sample at 0");
-    let pose_b = engine.sample_clip(walk, duration * 0.5).expect("sample at mid");
+    let pose_b = engine
+        .sample_clip(walk, duration * 0.5)
+        .expect("sample at mid");
     assert_eq!(pose_a.len(), pose_b.len());
     let delta: f32 = pose_a
         .iter()
         .zip(pose_b.iter())
         .map(|(a, b)| (a - b).abs())
         .sum();
-    assert!(delta > 0.5, "the walk clip is not animated (total delta {delta})");
-    engine.apply_clip(walk, duration * 0.25).expect("apply clip");
-    let posed = engine.vertices().to_vec();
-    engine.apply_clip(af::af_sys::AF_CLIP_REST, 0.0).expect("rest pose");
-    let rest = engine.vertices();
+    assert!(
+        delta > 0.5,
+        "the walk clip is not animated (total delta {delta})"
+    );
+    // The bind stream is the authoritative baseline. `vertices()` is the mutable deformed stream,
+    // so comparing a clip against it after applying REST only compares two outputs of the pose path
+    // and can miss a shared drift bug.
+    let bind = engine
+        .vertices_rest()
+        .iter()
+        .map(|v| v.pos)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bind.len(),
+        engine.vertices().len(),
+        "bind and deformed streams have the same topology"
+    );
+
+    engine
+        .apply_clip(walk, duration * 0.25)
+        .expect("apply clip");
+    let posed = engine.vertices().iter().map(|v| v.pos).collect::<Vec<_>>();
     let moved = posed
         .iter()
-        .zip(rest.iter())
-        .filter(|(a, b)| (a.pos[1] - b.pos[1]).abs() > 0.002)
+        .zip(bind.iter())
+        .filter(|(a, b)| {
+            let dx = a[0] - b[0];
+            let dy = a[1] - b[1];
+            let dz = a[2] - b[2];
+            dx * dx + dy * dy + dz * dz > 4e-6
+        })
         .count();
-    assert!(moved > 1000, "only {moved} vertices moved when the clip was applied");
+    assert!(
+        moved > 1000,
+        "only {moved} vertices moved from the bind pose"
+    );
+
+    let max_position_delta = |a: &[[f32; 3]], b: &[[f32; 3]]| -> f32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| {
+                let dx = x[0] - y[0];
+                let dy = x[1] - y[1];
+                let dz = x[2] - y[2];
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .fold(0.0, f32::max)
+    };
+
+    engine
+        .apply_clip(af::af_sys::AF_CLIP_REST, 0.0)
+        .expect("rest pose");
+    let restored = engine.vertices().iter().map(|v| v.pos).collect::<Vec<_>>();
+    let rest_error = max_position_delta(&restored, &bind);
+    assert!(
+        rest_error < 1e-5,
+        "REST differs from the bind stream by {rest_error:.2e} m"
+    );
+
+    engine
+        .apply_clip(walk, duration * 0.25)
+        .expect("reapply clip after REST");
+    let walk_again = engine.vertices().iter().map(|v| v.pos).collect::<Vec<_>>();
+    let repeat_error = max_position_delta(&walk_again, &posed);
+    assert!(
+        repeat_error < 1e-5,
+        "walk -> REST -> walk accumulated {repeat_error:.2e} m of drift"
+    );
 
     // --- textures -------------------------------------------------------------------------
     let base = engine.texture(af::af_sys::AF_TEX_BASE_COLOR).expect("base colour");

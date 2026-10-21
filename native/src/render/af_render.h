@@ -47,6 +47,7 @@
 #include <string>
 
 #include "../../include/afcore.h"
+#include "af_gpu_profile.h"
 
 /* ANativeWindow is opaque to us; forward declaration keeps this header usable in host builds. */
 struct ANativeWindow;
@@ -55,13 +56,14 @@ namespace af {
 
 /* ------------------------------------------------------------------ configuration --------- */
 
-/* Quality presets the UI and the SDK both use. `AUTO` measures the device: it starts from the
-   middle preset and steps *down* at runtime if the smoothed frame time exceeds the 30 FPS
-   budget (thermal/battery awareness - see Renderer::renderFrame()). */
+/* Quality presets the UI and the SDK both use. `AUTO` starts from the middle preset and steps
+   down under sustained frame-time pressure (see Renderer::renderFrame()). The Kotlin SurfaceView
+   additionally feeds Android thermal status into the requested preset on API 29 and newer. */
 enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
+    int   effectiveQualityLevel = 1; /* internal 0..3 tier selected by BudgetRenderer */
     bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
@@ -94,8 +96,8 @@ struct CameraState {
 
 /* Per-frame timing the UI shows in the stats drawer, and the budget controller reads. */
 struct RendererStats {
-    float frameMs        = 0.0f;   /* GPU-side frame time, 16-frame rolling mean              */
-    float cpuMs          = 0.0f;   /* CPU submit cost for the same window                     */
+    float frameMs        = 0.0f;   /* smoothed frame-start interval; FPS/cadence, not GPU timer */
+    float cpuMs          = 0.0f;   /* CPU-side renderer call duration; may include driver waits */
     float fps            = 0.0f;
     int   drawCalls      = 0;
     int   triangles      = 0;
@@ -113,6 +115,8 @@ struct RendererInfo {
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
     std::string apiVersion;   /* e.g. "Vulkan 1.1.0" / "OpenGL ES 3.2"                   */
     std::string driver;       /* driver version string, shown in the health screen       */
+    std::string gpuProfile;   /* capability-bounded profile applied by BudgetRenderer   */
+    std::string textureCompression;
     bool supportsShadows = false;
     bool supportsMsaa    = false;
     bool supportsFloatHdr = false;
@@ -149,6 +153,7 @@ public:
     virtual void setCamera(const CameraState& camera) = 0;
     virtual void setOptions(const RendererOptions& options) = 0;
     virtual RendererOptions options() const = 0;
+    virtual GpuProfile gpuProfile() const = 0;
 
     /* Renders one frame and presents it. `deltaSeconds` drives the automatic quality
        controller and any time-based effects (the environment sun has no animation, so the
