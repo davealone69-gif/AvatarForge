@@ -133,7 +133,7 @@ fun ViewerScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
-            Header(result, rendererInfo, stats)
+            Header(result, rendererInfo, stats, settings)
             if (rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -190,15 +190,15 @@ fun ViewerScreen(
 }
 
 @Composable
-private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats) {
+private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, settings: RenderSettings) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
         Column(Modifier.padding(10.dp)) {
             Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
             val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
             Text(
-                "$backend · %.0f FPS (%.1f ms) · %s".format(
+                "$backend · %.0f FPS (%.1f ms frame interval) · %s".format(
                     stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
+                    if (stats.meetsTarget) "on target" else if (settings.quality == Quality.AUTO) "below 30 FPS; AUTO can reduce effects" else "below 30 FPS; selected preset is fixed",
                 ),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
