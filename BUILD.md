@@ -159,10 +159,12 @@ Build properties, all optional:
 | `-Paf.prebuiltJni=$PWD/prebuilt` | package the `.so` files from `prebuilt/` and skip CMake entirely - the way to build the APK on a small machine |
 | `-Paf.lowRam=true` | `-O1` for the natives plus a single-threaded CMake build |
 
-Release signing: put a `keystore.properties` (storeFile / storePassword / keyAlias / keyPassword) at
-the repository root to sign with your own key, otherwise the release build is signed with the debug
-keystore so it can still be installed on a test device. R8 is deliberately off; see the comment in
-`app/build.gradle.kts`.
+Release signing is fail-closed: put a valid `keystore.properties` (storeFile / storePassword /
+keyAlias / keyPassword) at the repository root before invoking `:app:assembleRelease` or
+`:app:bundleRelease`. Without a real signing key those tasks fail. CI always provides the debug APK
+for device testing and builds a signed release APK plus AAB only when all four `AF_RELEASE_*` GitHub
+secrets are configured. R8/resource shrinking remain disabled pending a dedicated shrink + JNI runtime
+verification pass; see `app/build.gradle.kts`.
 
 ### Artifacts built in this repository
 
