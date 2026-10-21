@@ -81,4 +81,4 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
 - **MISSING**: no implementation exists.
 - **BLOCKED**: a specific dependency or environment prevents the check.
 
-A successful CI/package build does not establish physical-device runtime verification. Release artifacts signed with the debug certificate are for testing, not production distribution.
+A successful CI/package build does not establish physical-device runtime verification. The debug APK is for testing; release APK/AAB packaging is blocked unless a real release keystore is configured. R8/resource shrinking and physical-device runtime verification remain separate gates.
