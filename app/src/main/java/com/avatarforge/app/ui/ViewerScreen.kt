@@ -180,7 +180,7 @@ fun ViewerScreen(
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     when (panel) {
                         ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
                         ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
