@@ -68,6 +68,7 @@ import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.RenderProfileStore
 import com.avatarforge.sdk.render.RendererStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -125,7 +126,7 @@ class MainActivity : ComponentActivity() {
         var result by remember { mutableStateOf<EngineResult?>(null) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
-        var settings by remember { mutableStateOf(AvatarForge.recommendedSettings(context)) }
+        var settings by remember { mutableStateOf(RenderProfileStore.load(context, AvatarForge.recommendedSettings(context))) }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
@@ -313,7 +314,7 @@ class MainActivity : ComponentActivity() {
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
-                        onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onSettings = { settings = it; RenderProfileStore.save(context, it); surfaceView?.applySettings(it) },
                         panel = panel,
                         onPanel = { panel = it },
                         clipIndex = clipIndex,
