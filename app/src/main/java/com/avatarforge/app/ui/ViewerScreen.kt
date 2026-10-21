@@ -214,6 +214,11 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
         Column(Modifier.padding(10.dp)) {
             Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Target stature %.2f m (spec value, not measured mesh bounds)".format(result.spec.heightM),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
             Text(
                 "$backend · %.0f FPS (%.1f ms frame interval) · %s".format(
