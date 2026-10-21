@@ -170,25 +170,36 @@ fun ViewerScreen(
             }
         }
 
-        if (panel != ViewerPanel.CAMERA) {
+        if (panel == ViewerPanel.SYSTEM_CHECK) {
             Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 56.dp),
+                modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(8.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    TextButton(onClick = { onPanel(ViewerPanel.CAMERA) }) { Text("← Back to 3D viewer") }
+                    SystemCheckPanel(rendererError, rendererInfo, stats, thermalStatus, settings)
+                }
+            }
+        } else if (panel != ViewerPanel.CAMERA) {
+            Card(
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(bottom = 56.dp),
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             ) {
-                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     when (panel) {
                         ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
                         ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
                         ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo, thermalStatus)
-                        ViewerPanel.SYSTEM_CHECK -> SystemCheckPanel(rendererError, rendererInfo, stats, thermalStatus, settings)
-                        ViewerPanel.CAMERA -> Unit
+                        ViewerPanel.SYSTEM_CHECK, ViewerPanel.CAMERA -> Unit
                     }
                 }
             }
