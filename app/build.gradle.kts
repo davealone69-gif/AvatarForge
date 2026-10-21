@@ -13,6 +13,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val keystoreProps = rootProject.file("keystore.properties")
+val hasReleaseKeystore = keystoreProps.isFile
+
 android {
     namespace = "com.avatarforge.app"
     compileSdk = 34
@@ -39,8 +42,6 @@ android {
      * to package a release APK/AAB. Debug signing is for the debug variant only; it is never silently
      * reused for a release artifact. CI skips release packaging until release signing secrets exist.
      */
-    val keystoreProps = rootProject.file("keystore.properties")
-    val hasReleaseKeystore = keystoreProps.isFile
     if (hasReleaseKeystore) {
         val props = Properties().apply { keystoreProps.inputStream().use { load(it) } }
         val requiredKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
