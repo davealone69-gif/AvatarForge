@@ -377,11 +377,19 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
             )
         }
     }
-    Text(
-        "Effective tier ${stats.qualityLevel} · ${stats.drawCalls} draw calls · ${stats.triangles} visible triangles · renderer call %.1f ms".format(stats.cpuMs),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    if (info == null) {
+        Text(
+            "No renderer is active here. These settings are saved and will apply when the 3D viewer starts.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        Text(
+            "Effective tier ${stats.qualityLevel} · ${stats.drawCalls} draw calls · ${stats.triangles} visible triangles · renderer call %.1f ms".format(stats.cpuMs),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     info?.let {
         Text(
             "%s · %s · %s · %s".format(it.backend, it.deviceName, it.apiVersion, it.driver),
