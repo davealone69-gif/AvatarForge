@@ -85,6 +85,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var surfaceHeight = 0
     private var performanceHintSession: PerformanceHintManager.Session? = null
     private var thermalRegistration: AutoCloseable? = null
+    private val _thermalStatusFlow = MutableStateFlow<Int?>(null)
+    val thermalStatusFlow: StateFlow<Int?> = _thermalStatusFlow.asStateFlow()
     @Volatile private var thermalStatus: Int? = null
     private val thermalExecutor = Executor { command -> handler.post(command) }
     @Volatile private var visible = false
@@ -103,9 +105,11 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private fun registerThermalListener() {
         thermalStatus = AndroidThermalMonitor.currentStatus(context)
+        _thermalStatusFlow.value = thermalStatus
         thermalRegistration = AndroidThermalMonitor.register(context, thermalExecutor) { status ->
             if (!released) {
                 thermalStatus = status
+                _thermalStatusFlow.value = status
                 renderer?.applyOptions(settingsForThermal(settings))
             }
         }
