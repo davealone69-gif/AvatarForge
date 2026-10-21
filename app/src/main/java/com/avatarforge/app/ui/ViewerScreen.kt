@@ -71,6 +71,7 @@ fun ViewerScreen(
     onBack: () -> Unit,
     rendererInfo: RendererInfo?,
     stats: RendererStats,
+    thermalStatus: Int?,
     camera: CameraSettings,
     onCamera: (CameraSettings) -> Unit,
     settings: RenderSettings,
@@ -178,7 +179,7 @@ fun ViewerScreen(
                         ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
-                        ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
+                        ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo, thermalStatus)
                         ViewerPanel.CAMERA -> Unit
                     }
                 }
@@ -335,7 +336,7 @@ private fun ExportPanel(onExport: () -> Unit, onShare: () -> Unit, onExportTo: (
 }
 
 @Composable
-private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -> Unit, stats: RendererStats, info: RendererInfo?) {
+private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -> Unit, stats: RendererStats, info: RendererInfo?, thermalStatus: Int?) {
     Text("Renderer", style = MaterialTheme.typography.titleSmall)
     info?.let {
         Text(
@@ -344,12 +345,29 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            "shadow map %d · MSAA %dx · bloom %d levels · %.0f MiB textures".format(
-                stats.shadowMapSize, stats.msaaSamples, stats.bloomLevels, stats.textureMiB,
+            "shadow map %d · MSAA %dx · bloom %d levels".format(
+                stats.shadowMapSize, stats.msaaSamples, stats.bloomLevels,
             ),
             style = MaterialTheme.typography.bodySmall,
         )
+        Text(
+            "Avatar texture atlas estimate: %.1f MiB (render targets and driver overhead excluded)".format(stats.textureMiB),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
+    val thermalLabel = when (thermalStatus) {
+        0 -> "none"
+        1 -> "light"
+        2 -> "moderate"
+        3 -> "severe"
+        4 -> "critical"
+        5 -> "emergency"
+        6 -> "shutdown"
+        null -> "unavailable on this Android version/device"
+        else -> "unknown ($thermalStatus)"
+    }
+    Text("Android thermal status: $thermalLabel", style = MaterialTheme.typography.bodySmall)
     ToggleRow("Shadows", settings.shadows) { onSettings(settings.copy(shadows = it)) }
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
