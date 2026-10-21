@@ -473,7 +473,7 @@ private fun SystemCheckPanel(
                 val s = latestStats.value
                 runCatching { governor.snapshot() }.getOrNull()?.let { resources = it }
                 val snapshot = resources
-                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
+                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
             }
             running = false
         }
@@ -500,7 +500,8 @@ private fun SystemCheckPanel(
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
     DiagnosticLine("Mesh submitted", "${stats.triangles} visible triangles · ${stats.vertices} vertices · ${stats.drawCalls} draw calls")
     DiagnosticLine("Texture memory", "%.1f MiB avatar-atlas estimate only; total GPU memory is not exposed".format(stats.textureMiB))
-    DiagnosticLine("Thermal status", when (thermalStatus) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($thermalStatus)" })
+    val currentThermal = thermalStatus ?: resources.thermalStatus
+    DiagnosticLine("Thermal status", when (currentThermal) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($currentThermal)" })
     DiagnosticLine("Requested quality", settings.quality.name)
     DiagnosticLine("Effective quality tier", "${stats.qualityLevel} · MSAA ${stats.msaaSamples}x · shadow map ${stats.shadowMapSize} · bloom ${stats.bloomLevels}")
     rendererError?.let { Text("Renderer error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
