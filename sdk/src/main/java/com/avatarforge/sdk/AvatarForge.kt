@@ -77,12 +77,12 @@ object AvatarForge {
         val gb = info.totalMem / (1024.0 * 1024.0 * 1024.0)
         val lowRam = activityManager.isLowRamDevice
         val thermal = resources.thermalStatus
-        val severeThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_SEVERE
+        val criticalThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_CRITICAL
         val moderateThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_MODERATE
         val preset = when {
             lowRam || gb < 4.0 || info.lowMemory ||
                 resources.availableRamBytes < 1536L * 1024 * 1024 ||
-                resources.state == DeviceResourceState.LOW_STORAGE || severeThermal -> Quality.LOW
+                resources.state == DeviceResourceState.LOW_STORAGE || criticalThermal -> Quality.LOW
             gb < 6.0 || resources.availableRamBytes < 2L * 1024 * 1024 * 1024 ||
                 moderateThermal -> Quality.MEDIUM
             else -> Quality.HIGH
