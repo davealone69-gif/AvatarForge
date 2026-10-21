@@ -407,7 +407,7 @@ class MainActivity : ComponentActivity() {
         }
         // Grok-Girls Compose navigation pattern, adapted to destinations that actually exist
         // in AvatarForge. No placeholder routes are exposed.
-        if (screen != Screen.PROGRESS) {
+        if (screen != Screen.PROGRESS && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
