@@ -33,7 +33,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ADB="${ADB:-${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb}"
 # Fall back to a bare "adb" when that path does not exist, so a phone-tools-only machine works.
 [ -x "$ADB" ] || ADB="adb"
-PKG="${PKG:-com.avatarforge.app}"
+PKG="${PKG:-com.avatarforge}"
 APK=""
 SOAK=0
 OUT="$ROOT/artifacts/device-report.txt"
