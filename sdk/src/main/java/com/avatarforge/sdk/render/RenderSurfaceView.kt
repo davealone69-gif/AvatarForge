@@ -306,8 +306,13 @@ class RenderSurfaceView @JvmOverloads constructor(
             } catch (t: Throwable) {
                 closePerformanceHints()
                 _error.value = t.message ?: t.javaClass.simpleName
+                /* A single transient frame failure must not permanently freeze the viewer on a
+                   black SurfaceView. Keep the diagnostic visible, then retry at a low rate while
+                   the view remains visible. A successful frame clears the stale error below. */
+                if (visible) handler.postDelayed(this, FRAME_ERROR_RETRY_MS)
                 return
             }
+            if (_error.value != null) _error.value = null
             if (visible) {
                 /* The previous loop always slept 16 ms *after* doing the render work. A 22 ms
                    frame therefore became 38 ms (~26 FPS), which falsely triggered the quality
