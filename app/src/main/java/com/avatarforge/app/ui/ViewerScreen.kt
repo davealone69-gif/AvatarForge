@@ -131,7 +131,7 @@ fun ViewerScreen(
                 },
         )
 
-        Column(
+        if (panel != ViewerPanel.SYSTEM_CHECK) Column(
             Modifier
                 .align(Alignment.TopStart)
                 .statusBarsPadding()
@@ -152,7 +152,7 @@ fun ViewerScreen(
             }
         }
 
-        Row(
+        if (panel != ViewerPanel.SYSTEM_CHECK) Row(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
