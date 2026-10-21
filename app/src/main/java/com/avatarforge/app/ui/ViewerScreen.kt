@@ -27,10 +27,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -42,9 +44,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
@@ -62,7 +68,7 @@ import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 
 /** Which editing panel is open. Only one at a time: this is a phone, not a workstation. */
-enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER }
+enum class ViewerPanel { CAMERA, RENDER, SYSTEM_CHECK, POSE, FACE, INSPECT, EXPORT }
 
 @Composable
 fun ViewerScreen(
@@ -181,6 +187,7 @@ fun ViewerScreen(
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
                         ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo, thermalStatus)
+                        ViewerPanel.SYSTEM_CHECK -> SystemCheckPanel(rendererError, rendererInfo, stats, thermalStatus, settings)
                         ViewerPanel.CAMERA -> Unit
                     }
                 }
@@ -399,9 +406,85 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     Text("Sun elevation %.0f°".format(settings.sunElevationDeg), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.sunElevationDeg, onValueChange = { onSettings(settings.copy(sunElevationDeg = it)) }, valueRange = 2f..85f)
     Text("Sun intensity %.2f".format(settings.sunIntensity), style = MaterialTheme.typography.bodySmall)
+    Text("Controls direct-light brightness. Higher values brighten lit surfaces and can wash out highlights.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Slider(value = settings.sunIntensity, onValueChange = { onSettings(settings.copy(sunIntensity = it)) }, valueRange = 0.5f..8f)
     Text("Shadow softness %.1f".format(settings.shadowSoftness), style = MaterialTheme.typography.bodySmall)
+    Text("Controls shadow-edge blur, not the sun brightness. Higher values soften edges; shadows must be enabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Slider(value = settings.shadowSoftness, onValueChange = { onSettings(settings.copy(shadowSoftness = it)) }, valueRange = 0.5f..3f)
+}
+
+private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val thermal: Int?)
+
+/** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
+@Composable
+private fun SystemCheckPanel(
+    rendererError: String?,
+    info: RendererInfo?,
+    stats: RendererStats,
+    thermalStatus: Int?,
+    settings: RenderSettings,
+) {
+    val samples = remember { mutableStateListOf<AdaptiveSample>() }
+    var running by remember { mutableStateOf(false) }
+    val latestStats = rememberUpdatedState(stats)
+    val latestThermal = rememberUpdatedState(thermalStatus)
+    LaunchedEffect(running) {
+        if (running) {
+            samples.clear()
+            repeat(15) {
+                delay(1_000L)
+                val s = latestStats.value
+                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value))
+            }
+            running = false
+        }
+    }
+    Text("System check + adaptive proof", style = MaterialTheme.typography.titleSmall)
+    Text("Live measurements from this renderer session. A green check means the value was observed, not that an unrun test passed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    DiagnosticLine("Native engine", if (AvatarEngine.health().usable) "available" else "unavailable: ${AvatarEngine.health().problem ?: "unknown reason"}")
+    DiagnosticLine("GPU backend", info?.let { "${it.backend} · ${it.deviceName}" } ?: "not initialised")
+    DiagnosticLine("Graphics API / driver", info?.let { "${it.apiVersion} · ${it.driver}" } ?: "not available")
+    DiagnosticLine("Render surface", if (rendererError == null && info != null) "render loop active; no current reported error" else rendererError ?: "waiting for renderer")
+    DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
+    DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
+    DiagnosticLine("Mesh submitted", "${stats.triangles} visible triangles · ${stats.vertices} vertices · ${stats.drawCalls} draw calls")
+    DiagnosticLine("Texture memory", "%.1f MiB avatar-atlas estimate only; total GPU memory is not exposed".format(stats.textureMiB))
+    DiagnosticLine("Thermal status", when (thermalStatus) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($thermalStatus)" })
+    DiagnosticLine("Requested quality", settings.quality.name)
+    DiagnosticLine("Effective quality tier", "${stats.qualityLevel} · MSAA ${stats.msaaSamples}x · shadow map ${stats.shadowMapSize} · bloom ${stats.bloomLevels}")
+    rendererError?.let { Text("Renderer error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    Text("Proof-of-learning loop", style = MaterialTheme.typography.titleSmall)
+    Text("Run a 15-second observation. AUTO should move down only after sustained slow frames and move up only after sustained headroom. The test records real FPS, frame interval, tier and thermal samples; it does not claim AI training.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        AssistChip(onClick = { if (!running) running = true }, label = { Text(if (running) "Sampling… ${samples.size}/15" else "Run 15-second check") }, enabled = !running)
+        AssistChip(onClick = { samples.clear() }, label = { Text("Clear evidence") }, enabled = !running && samples.isNotEmpty())
+    }
+    if (samples.isNotEmpty()) {
+        val first = samples.first()
+        val last = samples.last()
+        val tierChanges = samples.zipWithNext().count { (a, b) -> a.tier != b.tier }
+        val averageFps = samples.map { it.fps }.average()
+        DiagnosticLine("Samples", "${samples.size}/15 · average %.1f FPS".format(averageFps))
+        DiagnosticLine("Start → end", "%.1f → %.1f FPS · tier %d → %d".format(first.fps, last.fps, first.tier, last.tier))
+        DiagnosticLine("Observed tier transitions", tierChanges.toString())
+        DiagnosticLine("Evidence verdict", when {
+            samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
+            settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
+            tierChanges > 0 -> "ADAPTATION OBSERVED · real effective tier changed during sampling"
+            else -> "RECORDED · no tier change observed; stable performance can be the correct result"
+        })
+        Text("Last sample: ${last.fps} FPS · ${last.frameMs} ms interval · ${last.cpuMs} ms renderer call · thermal ${last.thermal?.toString() ?: "unavailable"}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        Text("No evidence captured this session yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun DiagnosticLine(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+        Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 @Composable
