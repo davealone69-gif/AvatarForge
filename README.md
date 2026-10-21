@@ -111,3 +111,22 @@ For a versioned, easy-to-find download, open [GitHub Releases](https://github.co
 The release APK currently uses the repository's fallback debug signing certificate unless `keystore.properties` is supplied to a local build. It is suitable for testing, not a production signing identity. Never commit a release keystore or its passwords.
 
 Install from the phone: download the APK, open it in Downloads, and allow installation from that source if Android asks. The APK is ARM64 and targets Android 8.0 (API 26) or newer. AvatarForge is intended to work offline and its APK must not request the `INTERNET` permission.
+
+
+## Update imported from Dropbox (2026-10-21)
+
+The update notes and verification records have been imported into
+[`docs/dropbox-update-2026-10-21/`](docs/dropbox-update-2026-10-21/). This is documentation and build-evidence
+synchronization only: the shared Dropbox folder contains APK/AAR binaries and documentation, **not a full
+source checkout**. The binaries have not been uploaded into this repository by this change, and this
+commit does not claim a new build or a phone-runtime pass.
+
+- [Updated status and evidence](docs/dropbox-update-2026-10-21/STATUS.md)
+- [Build instructions](docs/dropbox-update-2026-10-21/BUILD.md)
+- [Physical-device acceptance checklist](docs/dropbox-update-2026-10-21/DEVICE.md)
+- [Build 0.10.1 evidence](docs/dropbox-update-2026-10-21/BUILD-0.10.1.txt)
+- [SHA-256 manifest for the Dropbox artifacts](docs/dropbox-update-2026-10-21/SHA256SUMS.txt)
+- [Open the original Dropbox folder to obtain the APK/AAR files](https://www.dropbox.com/scl/fo/s22v1herlm6dgzc825gx7/AOAZnyUA6jJ3KC1NXT_pXWs?rlkey=b7jvxccotfdaqoab72c88x9qv&st=bml9bve2&dl=0)
+
+**Runtime status remains UNVERIFIED:** the update's own report says the Galaxy S24 installation, rendering,
+offline generation, GPU behavior, performance and thermal/lifecycle acceptance have not been tested.
