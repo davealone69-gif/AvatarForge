@@ -495,7 +495,12 @@ private fun SystemCheckPanel(
     DiagnosticLine("Available system RAM", "%.0f MiB available · %.1f GiB total".format(resources.availableRamBytes / 1048576.0, resources.totalRamBytes / 1073741824.0))
     DiagnosticLine("Free app storage", "%.0f MiB".format(resources.availableStorageBytes / 1048576.0))
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
-    DiagnosticLine("Render surface", if (rendererError == null && info != null) "render loop active; no current reported error" else rendererError ?: "waiting for renderer")
+    DiagnosticLine("Render surface", when {
+        rendererError != null -> rendererError
+        info != null -> "render loop active; no current reported error"
+        result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
+        else -> "waiting for renderer initialisation"
+    })
     DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
     DiagnosticLine("Mesh submitted", "${stats.triangles} visible triangles · ${stats.vertices} vertices · ${stats.drawCalls} draw calls")
