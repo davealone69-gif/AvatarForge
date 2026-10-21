@@ -56,23 +56,13 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000
           fi
 
-      - name: Verify required ARM64 native libraries exist
-        run: |
-          set -euo pipefail
-          for lib in libafcore.so libafrender.so libavatarforge.so; do
-            test -s "prebuilt/arm64-v8a/$lib" || {
-              echo "::error::Missing prebuilt/arm64-v8a/$lib. Build native libraries with tools/build_android.sh and commit the outputs."
-              exit 1
-            }
-          done
-
-      - name: Build debug APK, release APK, and SDK AAR
+      - name: Compile native sources, run unit tests, and build APKs/AAR
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace --console=plain \
+            :app:testDebugUnitTest :sdk:testReleaseUnitTest \
             :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
-            -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+            -Paf.abIs=arm64-v8a
 
       - name: Stage easy-download artifacts
         run: |
