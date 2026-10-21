@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -885,16 +886,39 @@ class AvatarEngine private constructor(private val appContext: Context) {
                             logLines.clear()
                         }
 
-                        val resources = DeviceResourceGovernor(appContext).snapshot()
+                        val governor = DeviceResourceGovernor(appContext)
+                        var resources = governor.snapshot()
+                        // Severe thermal state is transient. Keep the request alive and wait briefly
+                        // for Android to report recovery instead of immediately failing generation.
+                        // Memory/storage pressure still fails fast, and cancellation is checked each poll.
+                        val thermalWaitStarted = System.currentTimeMillis()
+                        while (resources.state == DeviceResourceState.THERMAL_LIMIT &&
+                            System.currentTimeMillis() - thermalWaitStarted < MAX_THERMAL_WAIT_MS
+                        ) {
+                            if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
+                            handleObj.update(
+                                handleObj.current().copy(
+                                    stage = Stage.ANALYZE_INPUTS,
+                                    stageProgress = 0f,
+                                    message = "Waiting for phone to cool down (Android thermal status ${resources.thermalStatus}); retrying automatically…",
+                                    running = true,
+                                    failed = false,
+                                    error = null,
+                                ),
+                            )
+                            delay(THERMAL_POLL_INTERVAL_MS)
+                            resources = governor.snapshot()
+                        }
                         val deferredReason = when {
                             resources.lowMemory || resources.state == DeviceResourceState.LOW_MEMORY -> "system memory is low"
                             resources.state == DeviceResourceState.LOW_STORAGE -> "free storage is low"
-                            resources.state == DeviceResourceState.THERMAL_LIMIT -> "the device is thermally constrained"
+                            resources.state == DeviceResourceState.THERMAL_LIMIT -> "Android still reports a severe thermal state (${resources.thermalStatus}) after waiting"
                             else -> null
                         }
                         check(!resources.generationShouldBeDeferred) {
-                            "Generation postponed because $deferredReason; free RAM ${resources.availableRamBytes / 1048576} MB, " +
-                                "free storage ${resources.availableStorageBytes / 1048576} MB. Retry when the device recovers."
+                            "Generation postponed because $deferredReason; Android thermal status ${resources.thermalStatus ?: "unavailable"}, " +
+                                "free RAM ${resources.availableRamBytes / 1048576} MB, free storage ${resources.availableStorageBytes / 1048576} MB. " +
+                                "Let the phone cool, close heavy apps, then retry."
                         }
                         if (handleObj.shouldCancel()) throw CancellationException("generation cancelled")
                         val safeBudget = request.memoryBudgetBytes.coerceAtMost(
@@ -1130,6 +1154,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
     companion object {
         const val ABI_VERSION = 1
         private const val REGION_COUNT = 13
+        private const val MAX_THERMAL_WAIT_MS = 120_000L
+        private const val THERMAL_POLL_INTERVAL_MS = 5_000L
         private const val GENERATION_HEADROOM_BYTES = 512L * 1024 * 1024
         private const val CANCELLED = -6
 
