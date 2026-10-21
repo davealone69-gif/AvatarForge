@@ -56,6 +56,7 @@ import com.avatarforge.app.ui.ViewerPanel
 import com.avatarforge.app.ui.POSE_CLIP
 import com.avatarforge.app.ui.ViewerScreen
 import com.avatarforge.app.ui.SystemCheckScreen
+import com.avatarforge.app.ui.RenderSettingsScreen
 import com.avatarforge.app.ui.poseClipName
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.DeviceResourceGovernor
@@ -76,7 +77,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class Screen { INPUT, PROGRESS, VIEWER, SYSTEM_CHECK }
+private enum class Screen { INPUT, PROGRESS, VIEWER, RENDER_SETTINGS, SYSTEM_CHECK }
 
 class MainActivity : ComponentActivity() {
 
@@ -144,7 +145,7 @@ class MainActivity : ComponentActivity() {
                         job?.cancel()
                         screen = Screen.INPUT
                     }
-                    Screen.SYSTEM_CHECK -> screen = Screen.INPUT
+                    Screen.RENDER_SETTINGS, Screen.SYSTEM_CHECK -> screen = Screen.INPUT
                     Screen.INPUT -> Unit
                 }
             }
@@ -298,6 +299,15 @@ class MainActivity : ComponentActivity() {
                 },
             )
 
+            Screen.RENDER_SETTINGS -> RenderSettingsScreen(
+                settings = settings,
+                onSettings = { settings = it; RenderProfileStore.save(context, it) },
+                stats = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0),
+                rendererInfo = null,
+                thermalStatus = DeviceResourceGovernor(context).snapshot().thermalStatus,
+                onBack = { screen = Screen.INPUT },
+            )
+
             Screen.SYSTEM_CHECK -> SystemCheckScreen(
                 result = null,
                 rendererError = null,
@@ -420,7 +430,7 @@ class MainActivity : ComponentActivity() {
         }
         // Grok-Girls Compose navigation pattern, adapted to destinations that actually exist
         // in AvatarForge. No placeholder routes are exposed.
-        if (screen != Screen.PROGRESS && screen != Screen.SYSTEM_CHECK && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
+        if (screen != Screen.PROGRESS && screen != Screen.SYSTEM_CHECK && screen != Screen.RENDER_SETTINGS && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -451,12 +461,13 @@ class MainActivity : ComponentActivity() {
                     )
                     DropdownMenuItem(
                         text = { Text("Render settings") },
-                        enabled = result != null,
                         onClick = {
                             menuExpanded = false
                             if (result != null) {
                                 panel = ViewerPanel.RENDER
                                 screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.RENDER_SETTINGS
                             }
                         },
                     )
