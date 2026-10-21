@@ -94,7 +94,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/AvatarForge-debug-arm64.apk
-          find sdk/build/outputs -type f -name '*.aar' -exec cp {} dist/AvatarForge-sdk.aar \\;
+          find sdk/build/outputs -type f -name '*.aar' -exec cp {} dist/AvatarForge-sdk.aar \;
           if [[ -s app/build/outputs/apk/release/app-release.apk ]]; then
             cp app/build/outputs/apk/release/app-release.apk dist/AvatarForge-release-arm64.apk
           fi
