@@ -4,9 +4,9 @@ sdk.dir=/path/to/android-sdk
 ndk.dir=/path/to/android-sdk/ndk/26.1.10909125
 
 # ---------------------------------------------------------------------------------------------
-# Release signing (optional). Copy the four keys below into keystore.properties at the repo root
-# and the release build will use your keystore. Without that file the release APK is signed with
-# the debug keystore (~/.android/debug.keystore) so it can still be installed on a test device.
+# Release signing (required for release APK/AAB packaging). Copy these four keys into
+# keystore.properties at the repository root. Without a real keystore, release packaging fails closed;
+# the debug APK remains available for installation and testing.
 # ---------------------------------------------------------------------------------------------
 # storeFile=/absolute/path/to/avatarforge-release.jks
 # storePassword=...
