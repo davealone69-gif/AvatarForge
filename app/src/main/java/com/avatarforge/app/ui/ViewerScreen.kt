@@ -430,8 +430,28 @@ private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs:
 
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
+fun SystemCheckScreen(
+    result: EngineResult?,
+    rendererError: String?,
+    rendererInfo: RendererInfo?,
+    stats: RendererStats,
+    thermalStatus: Int?,
+    settings: RenderSettings,
+    onBack: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        TextButton(onClick = onBack) { Text("← Back") }
+        SystemCheckPanel(result, rendererError, rendererInfo, stats, thermalStatus, settings)
+    }
+}
+
+@Composable
 private fun SystemCheckPanel(
-    result: EngineResult,
+    result: EngineResult?,
     rendererError: String?,
     info: RendererInfo?,
     stats: RendererStats,
@@ -462,8 +482,13 @@ private fun SystemCheckPanel(
     Text("Live measurements from this renderer session. A green check means the value was observed, not that an unrun test passed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     val engineHealth = remember { AvatarEngine.health() }
     DiagnosticLine("Native engine", if (engineHealth.usable) "available" else "unavailable: ${engineHealth.problem ?: "unknown reason"}")
-    DiagnosticLine("Generated avatar", "${result.spec.heightM} m requested stature · ${result.blendshapeCount} blendshape channels")
-    DiagnosticLine("GLB export", if (result.glbFile.isFile && result.glbFile.length() > 0L) "present · %.1f MiB".format(result.glbFile.length() / 1048576.0) else "MISSING OR EMPTY · export file check failed")
+    if (result == null) {
+        DiagnosticLine("Generated avatar", "no completed avatar in this session")
+        DiagnosticLine("GLB export", "not applicable until generation completes")
+    } else {
+        DiagnosticLine("Generated avatar", "${result.spec.heightM} m requested stature · ${result.blendshapeCount} blendshape channels")
+        DiagnosticLine("GLB export", if (result.glbFile.isFile && result.glbFile.length() > 0L) "present · %.1f MiB".format(result.glbFile.length() / 1048576.0) else "MISSING OR EMPTY · export file check failed")
+    }
     DiagnosticLine("GPU backend", info?.let { "${it.backend} · ${it.deviceName}" } ?: "not initialised")
     DiagnosticLine("Graphics API / driver", info?.let { "${it.apiVersion} · ${it.driver}" } ?: "not available")
     DiagnosticLine("GPU capabilities", info?.let { "shadows ${if (it.supportsShadows) "yes" else "no"} · MSAA ${if (it.supportsMsaa) "yes" else "no"} · HDR ${if (it.supportsFloatHdr) "yes" else "no"} · anisotropy ${if (it.supportsAnisotropy) "yes" else "no"}" } ?: "not available")
@@ -498,6 +523,7 @@ private fun SystemCheckPanel(
         DiagnosticLine("Resource state start → end", "${first.resourceState} → ${last.resourceState}")
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
+            info == null -> "SYSTEM ONLY · no active renderer; adaptive behaviour cannot be proven here"
             settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
             tierChanges > 0 -> "ADAPTATION OBSERVED · real effective tier changed during sampling"
             else -> "RECORDED · no tier change observed; stable performance can be the correct result"
