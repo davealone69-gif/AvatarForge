@@ -55,8 +55,10 @@ import com.avatarforge.app.ui.ProgressScreen
 import com.avatarforge.app.ui.ViewerPanel
 import com.avatarforge.app.ui.POSE_CLIP
 import com.avatarforge.app.ui.ViewerScreen
+import com.avatarforge.app.ui.SystemCheckScreen
 import com.avatarforge.app.ui.poseClipName
 import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.DeviceResourceGovernor
 import com.avatarforge.sdk.AvatarForge
 import com.avatarforge.sdk.AvatarSpec
 import com.avatarforge.sdk.EngineResult
@@ -74,7 +76,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class Screen { INPUT, PROGRESS, VIEWER }
+private enum class Screen { INPUT, PROGRESS, VIEWER, SYSTEM_CHECK }
 
 class MainActivity : ComponentActivity() {
 
@@ -142,6 +144,7 @@ class MainActivity : ComponentActivity() {
                         job?.cancel()
                         screen = Screen.INPUT
                     }
+                    Screen.SYSTEM_CHECK -> screen = Screen.INPUT
                     Screen.INPUT -> Unit
                 }
             }
@@ -295,6 +298,16 @@ class MainActivity : ComponentActivity() {
                 },
             )
 
+            Screen.SYSTEM_CHECK -> SystemCheckScreen(
+                result = null,
+                rendererError = null,
+                rendererInfo = null,
+                stats = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0),
+                thermalStatus = DeviceResourceGovernor(context).snapshot().thermalStatus,
+                settings = settings,
+                onBack = { screen = Screen.INPUT },
+            )
+
             Screen.VIEWER -> {
                 val finished = result
                 if (finished == null) {
@@ -407,7 +420,7 @@ class MainActivity : ComponentActivity() {
         }
         // Grok-Girls Compose navigation pattern, adapted to destinations that actually exist
         // in AvatarForge. No placeholder routes are exposed.
-        if (screen != Screen.PROGRESS && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
+        if (screen != Screen.PROGRESS && screen != Screen.SYSTEM_CHECK && !(screen == Screen.VIEWER && panel == ViewerPanel.SYSTEM_CHECK)) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -444,6 +457,18 @@ class MainActivity : ComponentActivity() {
                             if (result != null) {
                                 panel = ViewerPanel.RENDER
                                 screen = Screen.VIEWER
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("System check") },
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) {
+                                panel = ViewerPanel.SYSTEM_CHECK
+                                screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.SYSTEM_CHECK
                             }
                         },
                     )
