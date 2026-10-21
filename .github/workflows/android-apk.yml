@@ -46,6 +46,7 @@ jobs:
         run: bash tools/verify.sh
 
       - name: Configure optional release signing
+        if: github.event_name != 'pull_request'
         id: release_signing
         env:
           AF_RELEASE_KEYSTORE_BASE64: ${{ secrets.AF_RELEASE_KEYSTORE_BASE64 }}
