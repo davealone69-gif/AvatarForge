@@ -476,6 +476,11 @@ private fun SystemCheckPanel(
                 samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
             }
             running = false
+        } else {
+            while (true) {
+                delay(1_000L)
+                runCatching { governor.snapshot() }.getOrNull()?.let { resources = it }
+            }
         }
     }
     Text("System check + adaptive proof", style = MaterialTheme.typography.titleSmall)
