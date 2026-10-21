@@ -56,9 +56,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.DeviceResourceGovernor
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraSettings
@@ -424,7 +426,7 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     Slider(value = settings.shadowSoftness, onValueChange = { onSettings(settings.copy(shadowSoftness = it)) }, valueRange = 0.5f..3f)
 }
 
-private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val thermal: Int?)
+private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val thermal: Int?, val availableRamBytes: Long, val availableStorageBytes: Long, val resourceState: String)
 
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
@@ -436,6 +438,9 @@ private fun SystemCheckPanel(
     thermalStatus: Int?,
     settings: RenderSettings,
 ) {
+    val context = LocalContext.current
+    val governor = remember(context) { DeviceResourceGovernor(context) }
+    var resources by remember { mutableStateOf(governor.snapshot()) }
     val samples = remember { mutableStateListOf<AdaptiveSample>() }
     var running by remember { mutableStateOf(false) }
     val latestStats = rememberUpdatedState(stats)
@@ -446,7 +451,9 @@ private fun SystemCheckPanel(
             repeat(15) {
                 delay(1_000L)
                 val s = latestStats.value
-                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value))
+                runCatching { governor.snapshot() }.getOrNull()?.let { resources = it }
+                val snapshot = resources
+                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
             }
             running = false
         }
@@ -459,6 +466,10 @@ private fun SystemCheckPanel(
     DiagnosticLine("GLB export", if (result.glbFile.isFile && result.glbFile.length() > 0L) "present · %.1f MiB".format(result.glbFile.length() / 1048576.0) else "MISSING OR EMPTY · export file check failed")
     DiagnosticLine("GPU backend", info?.let { "${it.backend} · ${it.deviceName}" } ?: "not initialised")
     DiagnosticLine("Graphics API / driver", info?.let { "${it.apiVersion} · ${it.driver}" } ?: "not available")
+    DiagnosticLine("GPU capabilities", info?.let { "shadows ${if (it.supportsShadows) "yes" else "no"} · MSAA ${if (it.supportsMsaa) "yes" else "no"} · HDR ${if (it.supportsFloatHdr) "yes" else "no"} · anisotropy ${if (it.supportsAnisotropy) "yes" else "no"}" } ?: "not available")
+    DiagnosticLine("Available system RAM", "%.0f MiB available · %.1f GiB total".format(resources.availableRamBytes / 1048576.0, resources.totalRamBytes / 1073741824.0))
+    DiagnosticLine("Free app storage", "%.0f MiB".format(resources.availableStorageBytes / 1048576.0))
+    DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", if (rendererError == null && info != null) "render loop active; no current reported error" else rendererError ?: "waiting for renderer")
     DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
@@ -482,6 +493,9 @@ private fun SystemCheckPanel(
         DiagnosticLine("Samples", "${samples.size}/15 · average %.1f FPS".format(averageFps))
         DiagnosticLine("Start → end", "%.1f → %.1f FPS · tier %d → %d".format(first.fps, last.fps, first.tier, last.tier))
         DiagnosticLine("Observed tier transitions", tierChanges.toString())
+        DiagnosticLine("RAM during sample window", "%.0f → %.0f MiB available".format(first.availableRamBytes / 1048576.0, last.availableRamBytes / 1048576.0))
+        DiagnosticLine("Storage during sample window", "%.0f → %.0f MiB free".format(first.availableStorageBytes / 1048576.0, last.availableStorageBytes / 1048576.0))
+        DiagnosticLine("Resource state start → end", "${first.resourceState} → ${last.resourceState}")
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
             settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
