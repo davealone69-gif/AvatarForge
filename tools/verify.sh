@@ -20,6 +20,9 @@ QUICK="${1:-}"
 FAILED=0
 SECTION=0
 
+# The shell opens the redirected harness log before build_host.sh can create its output directory.
+mkdir -p build-host
+
 banner() { SECTION=$((SECTION + 1)); printf '\n\033[1m[%d] %s\033[0m\n' "$SECTION" "$1"; }
 ok()     { printf '    \033[32mPASS\033[0m %s\n' "$1"; }
 bad()    { printf '    \033[31mFAIL\033[0m %s\n' "$1"; FAILED=1; }
@@ -113,8 +116,8 @@ if [ -f build-host/libafcore.so ]; then
     fi
 fi
 
-export RUSTUP_HOME="${RUSTUP_HOME:-/usr/local/tc/rustup}"
-export CARGO_HOME="${CARGO_HOME:-/usr/local/tc/cargo-home}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export PATH="$CARGO_HOME/bin:$PATH"
 if command -v cargo >/dev/null 2>&1; then
     if ( cd rust && cargo build --release --offline -q -p af-core ) > /tmp/af_rust_build.txt 2>&1; then
