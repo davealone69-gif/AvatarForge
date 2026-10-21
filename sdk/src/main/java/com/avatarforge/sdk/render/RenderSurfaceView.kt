@@ -527,5 +527,6 @@ class RenderSurfaceView @JvmOverloads constructor(
            keep - the honest number is in RendererStats.fps. */
         const val FRAME_INTERVAL_NS = 16_666_667L
         const val FRAME_RETRY_MS = 16L
+        const val FRAME_ERROR_RETRY_MS = 1000L
     }
 }
