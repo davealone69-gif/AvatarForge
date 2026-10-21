@@ -304,6 +304,8 @@ class MainActivity : ComponentActivity() {
                     val stats by surfaceViewState?.stats?.collectAsState()
                         ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
                     val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
+                    val thermalStatus by surfaceViewState?.thermalStatusFlow?.collectAsState()
+                        ?: remember { mutableStateOf<Int?>(null) }
                     ViewerScreen(
                         result = finished,
                         engine = engine,
@@ -311,6 +313,7 @@ class MainActivity : ComponentActivity() {
                         onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,
+                        thermalStatus = thermalStatus,
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
