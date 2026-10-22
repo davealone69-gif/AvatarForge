@@ -195,7 +195,7 @@ private:
     void updateAnimation(float deltaSeconds);
     void uploadDynamicGeometry(VkCommandBuffer cmd);
     void writePostSlices();
-    void recordCommands(VkCommandBuffer cmd, uint32_t imageIndex);
+    bool recordCommands(VkCommandBuffer cmd, uint32_t imageIndex);
     void recordShadowPass(VkCommandBuffer cmd);
     void recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex);
 
@@ -235,6 +235,9 @@ private:
     bool atlasCompressionAttempted_ = false;
     uint64_t atlasGpuBytes_[AF_TEX_COUNT] = {};
 
+    ANativeWindow* window_ = nullptr; /* valid for this renderer's surface lifetime */
+    bool frameFatal_ = false;
+    VkResult lastFrameVkResult_ = VK_SUCCESS;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -416,6 +419,9 @@ private:
  *  Initialisation
  * ============================================================================================ */
 bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
+    window_ = window;
+    frameFatal_ = false;
+    lastFrameVkResult_ = VK_SUCCESS;
     options_ = options;
     if (!createInstance(error)) return false;
     if (!createSurface(window, error)) return false;
@@ -508,6 +514,8 @@ bool VulkanRenderer::createSurface(ANativeWindow* window, std::string* error) {
     ci.window = window;
     const VkResult r = vkCreateAndroidSurfaceKHR(instance_, &ci, nullptr, &surface_);
     if (r != VK_SUCCESS) {
+        lastFrameVkResult_ = r;
+        stats_.lastVkResult = int(r);
         setError(error, "vkCreateAndroidSurfaceKHR", r);
         return false;
     }
@@ -2011,7 +2019,13 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
+        const VkResult beginResult = vkBeginCommandBuffer(cmd, &bi);
+    if (beginResult != VK_SUCCESS) {
+        lastFrameVkResult_ = beginResult;
+        stats_.lastVkResult = int(beginResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkBeginCommandBuffer failed (VkResult %d)\\n", int(beginResult));
+        return false;
+    }
         imageBarrier(cmd, atlasImages_[i], VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         VkClearColorValue white{};
@@ -2895,7 +2909,7 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdEndRenderPass(cmd);
 }
 
-void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
+bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     drawCallsThisFrame_ = 0;
     trianglesThisFrame_ = 0;
 
@@ -3000,54 +3014,184 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         ++drawCallsThisFrame_;
     }
 
-    vkEndCommandBuffer(cmd);
+    const VkResult endResult = vkEndCommandBuffer(cmd);
+    if (endResult != VK_SUCCESS) {
+        lastFrameVkResult_ = endResult;
+        stats_.lastVkResult = int(endResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkEndCommandBuffer failed (VkResult %d)\\n", int(endResult));
+        return false;
+    }
+    return true;
 }
 
 /* ============================================================================================
  *  Frame loop
  * ============================================================================================ */
 void VulkanRenderer::renderFrame(float deltaSeconds) {
-    if (!device_ || swapchain_ == VK_NULL_HANDLE) return;
+    if (!device_ || swapchain_ == VK_NULL_HANDLE || frameFatal_) return;
+    ++stats_.frameAttempts;
     pollAtlasCompression();
     if (targetsDirty_) applyOptionChanges();
 
-    const auto recreateSwapchain = [this]() {
-        int w = 0, h = 0;
-        VkSurfaceCapabilitiesKHR caps{};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) != VK_SUCCESS) return false;
-        if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX) {
-            w = int(caps.currentExtent.width);
-            h = int(caps.currentExtent.height);
-        } else {
-            w = int(swapExtent_.width);
-            h = int(swapExtent_.height);
-        }
-        if (w <= 0 || h <= 0) return false;
-        /* Force recreation even when Android reports the same extent after OUT_OF_DATE. */
-        swapExtent_.width = 0;
-        return resize(w, h);
+    const auto failFatal = [this](VkResult result, const char* operation) {
+        lastFrameVkResult_ = result;
+        stats_.lastVkResult = int(result);
+        frameFatal_ = true;
+        stats_.frameFatal = true;
+        std::fprintf(stderr, "AvatarForge Vulkan: renderer halted: %s failed (VkResult %d)\\n",
+                     operation, int(result));
     };
 
-    if (vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+    const auto rebuildFrameSync = [this]() -> bool {
+        if (vkDeviceWaitIdle(device_) != VK_SUCCESS) return false;
+        for (VkSemaphore& semaphore : imageAvailable_) {
+            if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+            semaphore = VK_NULL_HANDLE;
+        }
+        for (VkSemaphore& semaphore : renderFinished_) {
+            if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+            semaphore = VK_NULL_HANDLE;
+        }
+        for (VkFence& fence : inFlight_) {
+            if (fence != VK_NULL_HANDLE) vkDestroyFence(device_, fence, nullptr);
+            fence = VK_NULL_HANDLE;
+        }
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (VkSemaphore& semaphore : imageAvailable_) {
+            const VkResult result = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &semaphore);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        for (VkSemaphore& semaphore : renderFinished_) {
+            const VkResult result = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &semaphore);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (VkFence& fence : inFlight_) {
+            const VkResult result = vkCreateFence(device_, &fenceInfo, nullptr, &fence);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        return true;
+    };
+
+    const auto recreateSwapchain = [this, &failFatal]() -> bool {
+        if (!device_ || !surface_) return false;
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle during swapchain recovery"); return false; }
+        VkSurfaceCapabilitiesKHR caps{};
+        const VkResult capResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps);
+        if (capResult != VK_SUCCESS) {
+            lastFrameVkResult_ = capResult;
+            stats_.lastVkResult = int(capResult);
+            std::fprintf(stderr, "AvatarForge Vulkan: surface capability query failed (VkResult %d)\\n", int(capResult));
+            return false;
+        }
+        int width = 0, height = 0;
+        if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX) {
+            width = int(caps.currentExtent.width);
+            height = int(caps.currentExtent.height);
+        } else {
+            width = int(swapExtent_.width);
+            height = int(swapExtent_.height);
+        }
+        if (width <= 0 || height <= 0) return false;
+        /* resize() normally skips an unchanged extent. Zero it to force swapchain and dependent
+           targets to be rebuilt after OUT_OF_DATE/SUBOPTIMAL or an abandoned acquired image. */
+        swapExtent_.width = 0;
+        std::string error;
+        if (!resize(width, height)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: swapchain recreation failed: %s\\n", error.c_str());
+            return false;
+        }
+        framebufferResized_ = false;
+        return true;
+    };
+
+    const auto recoverAcquiredImage = [this, &rebuildFrameSync, &recreateSwapchain, &failFatal]() {
+        /* Once acquire has signalled, an early return would reuse a signalled binary semaphore
+           and leave an image acquired. Wait idle, replace all frame sync objects, then destroy /
+           recreate the swapchain so the abandoned image is released before another acquire. */
+        if (!rebuildFrameSync()) {
+            failFatal(lastFrameVkResult_, "frame synchronization recovery");
+            return false;
+        }
+        if (!recreateSwapchain()) {
+            failFatal(lastFrameVkResult_, "swapchain recovery");
+            return false;
+        }
+        return true;
+    };
+
+    if (frameIndex_ >= inFlight_.size() || frameIndex_ >= imageAvailable_.size()) {
+        failFatal(VK_ERROR_INITIALIZATION_FAILED, "frame synchronization state validation");
         return;
+    }
+    const VkResult waited = vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    if (waited != VK_SUCCESS) { failFatal(waited, "vkWaitForFences"); return; }
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
-                                                   imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
+                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapchain();
+        if (!recreateSwapchain()) failFatal(lastFrameVkResult_, "OUT_OF_DATE swapchain recreation");
         return;
     }
-    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return;
+    if (acquired == VK_ERROR_SURFACE_LOST_KHR) {
+        /* Surface loss cannot be repaired by changing extent alone. Recreate the Android surface
+           against the renderer-owned window and verify the selected queue still supports it. */
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after surface loss"); return; }
+        if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+        std::string error;
+        if (!window_ || !createSurface(window_, &error)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: surface recreation failed: %s\\n", error.c_str());
+            failFatal(lastFrameVkResult_ == VK_SUCCESS ? VK_ERROR_SURFACE_LOST_KHR : lastFrameVkResult_,
+                      "Android surface recreation");
+            return;
+        }
+        VkBool32 supported = VK_FALSE;
+        const VkResult supportResult = vkGetPhysicalDeviceSurfaceSupportKHR(phys_, queueFamily_, surface_, &supported);
+        if (supportResult != VK_SUCCESS || supported != VK_TRUE) {
+            failFatal(supportResult != VK_SUCCESS ? supportResult : VK_ERROR_SURFACE_LOST_KHR,
+                      "present-queue support after surface recreation");
+            return;
+        }
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        failFatal(acquired, "vkAcquireNextImageKHR");
+        return;
+    }
+    if (imageIndex >= swapFramebuffers_.size() || imageIndex >= renderFinished_.size()) {
+        lastFrameVkResult_ = VK_ERROR_INITIALIZATION_FAILED;
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
     const bool acquiredSuboptimal = acquired == VK_SUBOPTIMAL_KHR;
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
-    if (vkResetCommandBuffer(cmd_[frameIndex_], 0) != VK_SUCCESS) return;
-    recordCommands(cmd_[frameIndex_], imageIndex);
+    const VkResult commandReset = vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    if (commandReset != VK_SUCCESS) {
+        lastFrameVkResult_ = commandReset;
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    if (!recordCommands(cmd_[frameIndex_], imageIndex)) {
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
 
-    if (vkResetFences(device_, 1, &inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult fenceReset = vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (fenceReset != VK_SUCCESS) {
+        failFatal(fenceReset, "vkResetFences");
+        return;
+    }
 
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -3061,16 +3205,12 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
     const VkResult submitted = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
     if (submitted != VK_SUCCESS) {
-        /* Resetting the fence before a failed submit leaves it unsignalled forever. Replace it
-           with a signalled fence so a transient submit failure cannot deadlock the next frame. */
-        vkDestroyFence(device_, inFlight_[frameIndex_], nullptr);
-        VkFenceCreateInfo fenceInfo{};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        inFlight_[frameIndex_] = VK_NULL_HANDLE;
-        vkCreateFence(device_, &fenceInfo, nullptr, &inFlight_[frameIndex_]);
+        lastFrameVkResult_ = submitted;
+        if (submitted == VK_ERROR_DEVICE_LOST) { failFatal(submitted, "vkQueueSubmit"); return; }
+        if (!recoverAcquiredImage()) return;
         return;
     }
+    ++stats_.frameSubmissions;
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -3080,10 +3220,13 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
+    lastFrameVkResult_ = presented;
+    stats_.lastVkResult = int(presented);
 
-    /* Count frames only after successful queue submission and an accepted presentation request.
-       This is CPU cadence, not a GPU-completion timer. */
+    /* This counter means the presentation request was accepted, not GPU completion or proof
+       that the image was physically displayed. */
     if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
+        ++stats_.presentRequestsAccepted;
         ++stats_.frames;
         stats_.drawCalls = drawCallsThisFrame_;
         stats_.triangles = trianglesThisFrame_;
@@ -3096,11 +3239,33 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
-
-    if (acquiredSuboptimal || presented == VK_ERROR_OUT_OF_DATE_KHR ||
-        presented == VK_SUBOPTIMAL_KHR) {
-        recreateSwapchain();
+    if (presented == VK_ERROR_SURFACE_LOST_KHR) {
+        /* Fail closed if a replacement surface cannot be created on the next call. */
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after present surface loss"); return; }
+        if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+        std::string error;
+        if (!window_ || !createSurface(window_, &error)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: present surface recreation failed: %s\\n", error.c_str());
+            failFatal(VK_ERROR_SURFACE_LOST_KHR, "present surface recreation");
+            return;
+        }
+        VkBool32 supported = VK_FALSE;
+        const VkResult supportResult = vkGetPhysicalDeviceSurfaceSupportKHR(phys_, queueFamily_, surface_, &supported);
+        if (supportResult != VK_SUCCESS || supported != VK_TRUE) {
+            failFatal(supportResult != VK_SUCCESS ? supportResult : VK_ERROR_SURFACE_LOST_KHR,
+                      "present-queue support after surface recreation");
+            return;
+        }
+        if (!recoverAcquiredImage()) return;
+        return;
     }
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR || acquiredSuboptimal) {
+        if (!recreateSwapchain()) failFatal(lastFrameVkResult_, "post-present swapchain recreation");
+        return;
+    }
+    if (presented != VK_SUCCESS) failFatal(presented, "vkQueuePresentKHR");
 }
 
 void VulkanRenderer::applyOptionChanges() {
