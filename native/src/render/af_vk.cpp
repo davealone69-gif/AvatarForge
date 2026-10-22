@@ -3068,7 +3068,25 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
             inFlight_[frameIndex_] = VK_NULL_HANDLE;
             std::fprintf(stderr, "AvatarForge Vulkan: could not recreate frame fence\\n");
         }
+        /* The image was acquired and its semaphore signalled, but no submission will consume
+           that semaphore. Retire it and rebuild the swapchain instead of reusing invalid sync state. */
+        vkDeviceWaitIdle(device_);
+        vkDestroySemaphore(device_, imageAvailable_[frameIndex_], nullptr);
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &imageAvailable_[frameIndex_]) != VK_SUCCESS) {
+            imageAvailable_[frameIndex_] = VK_NULL_HANDLE;
+            std::fprintf(stderr, "AvatarForge Vulkan: could not recreate acquire semaphore after command reset failure\\n");
+        }
         framebufferResized_ = true;
+        swapExtent_ = {0, 0};
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS &&
+            caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
+            if (!resize(int(caps.currentExtent.width), int(caps.currentExtent.height))) {
+                std::fprintf(stderr, "AvatarForge Vulkan: swapchain recovery after command reset failure did not complete\\n");
+            }
+        }
         return;
     }
     recordCommands(cmd_[frameIndex_], imageIndex);
