@@ -438,7 +438,7 @@ class MainActivity : ComponentActivity() {
                     .padding(8.dp),
             ) {
                 TextButton(onClick = { menuExpanded = true }) {
-                    Text("☰ MENU")
+                    Text("⚙ SETTINGS")
                 }
                 DropdownMenu(
                     expanded = menuExpanded,
