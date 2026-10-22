@@ -8,7 +8,7 @@ Scope: `work/android-engine-dev`, current feature/fix branches, renderer telemet
 - **Phone rendering:** UNVERIFIED. No current-source APK has been installed and exercised on the physical Samsung S24 in this audit.
 - **Main renderer hypothesis:** the supplied all-zero frame/FPS/CPU-call telemetry is stronger evidence that the Kotlin frame loop is not reaching or publishing a frame than it is evidence of a blendshape shader failure.
 - **Immediate source defect found:** `RenderSurfaceView.surfaceChanged()` removed the only scheduled frame callback when `renderer.resize()` failed. That can permanently stop frames until another surface event. PR #12 changes this to schedule a delayed retry while the surface is still valid and retain the visible error until a successful frame clears it.
-- **Additional native risk found:** Vulkan frame submission/presentation errors are not all handled. In particular, a failed `vkQueueSubmit` occurs after resetting the in-flight fence; returning without restoring/retiring that fence can leave the next frame waiting indefinitely. This needs a separate native recovery change and device/validation-layer testing.
+- **Native recovery change now committed to PR #12:** Vulkan fence waits, image acquisition, command-buffer reset, queue submission and presentation now check and log their `VkResult`. A failed command reset recreates a signalled fence; a failed queue submission recreates the frame fence and acquire semaphore and forces swapchain recreation. Resize now rebuilds per-swapchain-image render-finished semaphores so their count/lifetime tracks the swapchain. This is source-level recovery only; it still requires CI and Samsung/validation-layer runtime verification.
 - **No-server architecture:** the app explicitly targets offline/on-device generation and has no INTERNET permission. A server start button or server dependency would be incorrect unless the product requirement changes. The current server/bridge surface is therefore intentionally absent, not a missing backend that should be faked.
 
 ## Renderer and zero telemetry
@@ -53,7 +53,7 @@ Scope: `work/android-engine-dev`, current feature/fix branches, renderer telemet
 ## UI and controls
 
 - Current `work/android-engine-dev` menu has Builder, 3D Viewer, Render settings and System check. The self-test/diagnostics menu item exists on the separate `fix/restore-self-test-menu-phase4` branch; it is included in PR #12 so the integration branch carries it.
-- The menu trigger is still text `☰ MENU`, not the requested gear/settings icon. This is a real UI follow-up, not a renderer root cause.
+- PR #12 changes the menu trigger to `⚙ SETTINGS` and includes the self-test/diagnostics menu route. This is a text glyph rather than a vector icon; no decorative icon dependency was added.
 - Viewer panels expose camera, render settings, pose/clip, facial blendshape sliders, region inspection, and export/share/save-to. Their presence is source-confirmed; each callback still needs installed-device interaction tests.
 - Export UI's “Save to app storage” action reports the already-created app-private file; “Save to…” invokes the Storage Access Framework; “Share” uses a FileProvider content URI. Verify each action and GLB byte count on-device.
 - The app has no server/bridge menu because it is explicitly offline-first. Do not add dummy server buttons or hidden network dependencies.
@@ -66,7 +66,7 @@ The following changes have been integrated into the open PR #12 branch `fix/rend
 - PR #10 head/hands procedural geometry pass.
 - New SurfaceView resize-failure frame-loop retry.
 
-Other branches need selective review rather than wholesale merging:
+The open PR's latest source also contains Vulkan result checking/recovery in `native/src/render/af_vk.cpp`. CI run #151 was triggered for the resulting commit; its outcome must be checked before calling the branch build-verified.\n\nOther branches need selective review rather than wholesale merging:
 - `feat/avatar-realism-upgrade` and `feat/json-asset-registry` are heavily diverged from the active engine branch. The JSON schema/asset registry work is useful candidate material, but it must be rebased and tested against the current SDK before integration.
 - `fix/avatarforge-overexposed-render` has no effective `AvatarRenderer.kt` content difference from the active branch in the inspected file, despite the branch name.
 - `fix/renderer-recovery-2026-10-21` includes a recovery note and historical APK/AAR checksums, explicitly marked not device-verified. Those packages predate the current fixes and must not be represented as current builds.
