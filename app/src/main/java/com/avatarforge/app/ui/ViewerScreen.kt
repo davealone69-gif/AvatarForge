@@ -533,7 +533,9 @@ private fun SystemCheckPanel(
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", when {
         rendererError != null -> rendererError
-        info != null -> "render loop active; no current reported error"
+        info != null && (stats.fps <= 0f || stats.frameMs <= 0f || stats.cpuMs <= 0f) ->
+            "GPU backend initialised, but frame telemetry is invalid/zero; renderer health is NOT verified"
+        info != null -> "GPU backend active; frame telemetry is reporting"
         result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
         else -> "waiting for renderer initialisation"
     })
