@@ -1,0 +1,559 @@
+[
+  {
+    "key": "face_epicanthic_fold",
+    "group": "Advanced Face",
+    "label": "Epicanthic Fold",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0,
+    "maximum": 1,
+    "step": 0.01,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_eye_tilt",
+    "group": "Advanced Face",
+    "label": "Eye Canthal Tilt",
+    "type": "float",
+    "unit": "degrees",
+    "minimum": -20,
+    "maximum": 20,
+    "step": 0.5,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_nose_bridge_height",
+    "group": "Advanced Face",
+    "label": "Nose Bridge Height",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 1.5,
+    "step": 0.01,
+    "default": 1,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_nose_tip_rotation",
+    "group": "Advanced Face",
+    "label": "Nose Tip Up/Down",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": -1,
+    "maximum": 1,
+    "step": 0.01,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_lip_curve",
+    "group": "Advanced Face",
+    "label": "Lip Curve / Smile Line",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": -1,
+    "maximum": 1,
+    "step": 0.01,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_ear_type",
+    "group": "Advanced Face",
+    "label": "Ear Shape",
+    "type": "enum",
+    "default": "Human",
+    "options": [
+      "Human",
+      "Elf",
+      "Mechanical Node",
+      "Cyber-Antenna"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "face_teeth_style",
+    "group": "Advanced Face",
+    "label": "Teeth Style",
+    "type": "enum",
+    "default": "Human",
+    "options": [
+      "Human",
+      "Fangs",
+      "Sharpened",
+      "Metallic",
+      "Missing"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "skin_freckles_density",
+    "group": "Skin Details",
+    "label": "Freckle Density",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_moles_count",
+    "group": "Skin Details",
+    "label": "Beauty Marks",
+    "type": "int",
+    "unit": "count",
+    "minimum": 0,
+    "maximum": 20,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_scarring",
+    "group": "Skin Details",
+    "label": "Scarring / Battle Damage",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_subsurface_scattering",
+    "group": "Skin Details",
+    "label": "Subsurface Scattering (Skin Softness)",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 50,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_pore_visibility",
+    "group": "Skin Details",
+    "label": "Pore Texture Visibility",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 20,
+    "requires_rebuild": false
+  },
+  {
+    "key": "skin_wetness",
+    "group": "Skin Details",
+    "label": "Sweat / Wetness Shader",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "hair_strand_thickness",
+    "group": "Hair Physics",
+    "label": "Strand Thickness",
+    "type": "float",
+    "unit": "ratio",
+    "minimum": 0.5,
+    "maximum": 2,
+    "step": 0.1,
+    "default": 1,
+    "requires_rebuild": false
+  },
+  {
+    "key": "hair_gravity_influence",
+    "group": "Hair Physics",
+    "label": "Gravity Influence",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 50,
+    "requires_rebuild": false
+  },
+  {
+    "key": "hair_highlight_color",
+    "group": "Hair Physics",
+    "label": "Secondary Highlight Color",
+    "type": "color",
+    "default": "#FFFFFF",
+    "requires_rebuild": false
+  },
+  {
+    "key": "hair_highlight_opacity",
+    "group": "Hair Physics",
+    "label": "Highlight Blend Amount",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_rust_level",
+    "group": "Cybernetics Advanced",
+    "label": "Rust / Corrosion",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_oil_leaks",
+    "group": "Cybernetics Advanced",
+    "label": "Oil / Fluid Leaks",
+    "type": "bool",
+    "default": false,
+    "requires_rebuild": false
+  },
+  {
+    "key": "cyber_visible_wiring",
+    "group": "Cybernetics Advanced",
+    "label": "Visible Cable Density",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": true
+  },
+  {
+    "key": "cyber_core_pulse_speed",
+    "group": "Cybernetics Advanced",
+    "label": "Core Reactor Pulse Rate",
+    "type": "float",
+    "unit": "hz",
+    "minimum": 0,
+    "maximum": 5,
+    "step": 0.1,
+    "default": 1,
+    "requires_rebuild": false
+  },
+  {
+    "key": "armor_cape_type",
+    "group": "Armor - Extras",
+    "label": "Cape / Cloak",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Roman Sagum",
+      "Tactical Ghillie Cloak",
+      "Cybernetic Energy Cape"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "armor_cape_physics",
+    "group": "Armor - Extras",
+    "label": "Cape Wind Physics Weight",
+    "type": "float",
+    "unit": "kg",
+    "minimum": 0.1,
+    "maximum": 10,
+    "step": 0.1,
+    "default": 1,
+    "requires_rebuild": false
+  },
+  {
+    "key": "armor_decals",
+    "group": "Armor - Details",
+    "label": "Faction Decals / Insignia",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Roman SPQR",
+      "Biohazard",
+      "Cybernetic Brand",
+      "Harley Quinn Diamonds",
+      "Demon Sigil"
+    ],
+    "requires_rebuild": false
+  },
+  {
+    "key": "armor_dirt_level",
+    "group": "Armor - Details",
+    "label": "Grime / Mud Level",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "armor_blood_splatter",
+    "group": "Armor - Details",
+    "label": "Blood Splatter",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "outfit_layering",
+    "group": "Clothing Layers",
+    "label": "Clothing Layer Style",
+    "type": "enum",
+    "default": "Single Layer",
+    "options": [
+      "Single Layer",
+      "Underwear + Outerwear",
+      "Base + Armor + Accessories"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "cloth_simulation_quality",
+    "group": "Clothing Layers",
+    "label": "Cloth Physics Quality",
+    "type": "enum",
+    "default": "High",
+    "options": [
+      "Low",
+      "Medium",
+      "High",
+      "Ultra"
+    ],
+    "requires_rebuild": false
+  },
+  {
+    "key": "cloth_wetness",
+    "group": "Clothing Layers",
+    "label": "Clothing Wetness",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "accessory_glasses",
+    "group": "Accessories Advanced",
+    "label": "Eyewear",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Tactical Goggles",
+      "Cyber Visor",
+      "Sunglasses",
+      "Reading Glasses"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "accessory_earrings",
+    "group": "Accessories Advanced",
+    "label": "Earrings",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Studs",
+      "Hoops",
+      "Cyber Ports",
+      "Dangling"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "accessory_necklace",
+    "group": "Accessories Advanced",
+    "label": "Neckwear / Collar",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Choker",
+      "Heavy Chain",
+      "Tactical Neck Guard",
+      "Dog Tags"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "weapon_holster_state",
+    "group": "Weapons",
+    "label": "Weapon State",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "Holstered/Sheathed",
+      "Drawn/Active",
+      "None"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "weapon_glow_effect",
+    "group": "Weapons",
+    "label": "Weapon Energy Glow",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "weapon_engraving",
+    "group": "Weapons",
+    "label": "Weapon Engraving / Details",
+    "type": "enum",
+    "default": "None",
+    "options": [
+      "None",
+      "Ancient Runes",
+      "Tech Serial Numbers",
+      "Tribal Carvings"
+    ],
+    "requires_rebuild": false
+  },
+  {
+    "key": "rig_skeleton_type",
+    "group": "Rigging",
+    "label": "Skeleton Base",
+    "type": "enum",
+    "default": "Standard Humanoid",
+    "options": [
+      "Standard Humanoid",
+      "Digitigrade (Animal Legs)",
+      "Mech/Heavy"
+    ],
+    "requires_rebuild": true
+  },
+  {
+    "key": "rig_ik_grounding",
+    "group": "Rigging",
+    "label": "Foot IK Grounding",
+    "type": "bool",
+    "default": true,
+    "requires_rebuild": false
+  },
+  {
+    "key": "anim_idle_style",
+    "group": "Rigging",
+    "label": "Default Idle Animation",
+    "type": "enum",
+    "default": "Neutral",
+    "options": [
+      "Neutral",
+      "Breathing/Subtle",
+      "Robotic/Static",
+      "Combat Ready",
+      "Sassy/Fashion"
+    ],
+    "requires_rebuild": false
+  },
+  {
+    "key": "expression_face_blend_weight",
+    "group": "Facial Animation",
+    "label": "Expression Intensity",
+    "type": "float",
+    "unit": "percentage",
+    "minimum": 0,
+    "maximum": 100,
+    "step": 1,
+    "default": 50,
+    "requires_rebuild": false
+  },
+  {
+    "key": "expression_micro_expressions",
+    "group": "Facial Animation",
+    "label": "Enable Micro-Expressions",
+    "type": "bool",
+    "default": true,
+    "requires_rebuild": false
+  },
+  {
+    "key": "ai_voice_pitch",
+    "group": "AI Personality",
+    "label": "Voice Pitch",
+    "type": "float",
+    "unit": "semitone",
+    "minimum": -12,
+    "maximum": 12,
+    "step": 0.1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "ai_voice_accent",
+    "group": "AI Personality",
+    "label": "Voice Accent",
+    "type": "enum",
+    "default": "Neutral",
+    "options": [
+      "Neutral",
+      "British",
+      "Southern US",
+      "Eastern European",
+      "Synthetic/Robotic"
+    ],
+    "requires_rebuild": false
+  },
+  {
+    "key": "ai_personality_trait_dominance",
+    "group": "AI Personality",
+    "label": "Submissive vs. Dominant",
+    "type": "float",
+    "unit": "scale",
+    "minimum": -100,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "ai_personality_trait_humor",
+    "group": "AI Personality",
+    "label": "Seriousness vs. Sarcasm",
+    "type": "float",
+    "unit": "scale",
+    "minimum": -100,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  },
+  {
+    "key": "ai_personality_trait_energy",
+    "group": "AI Personality",
+    "label": "Calm vs. Energetic",
+    "type": "float",
+    "unit": "scale",
+    "minimum": -100,
+    "maximum": 100,
+    "step": 1,
+    "default": 0,
+    "requires_rebuild": false
+  }
+]

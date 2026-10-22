@@ -3023,7 +3023,12 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
     }
 
-    vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    const VkResult waited = vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    if (waited != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkWaitForFences failed (%d)\\n", int(waited));
+        framebufferResized_ = true;
+        return;
+    }
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
@@ -3032,13 +3037,58 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         framebufferResized_ = true;
         return;
     }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkAcquireNextImageKHR failed (%d)\\n", int(acquired));
+        framebufferResized_ = true;
+        return;
+    }
     if (acquired == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
-    vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+
+    /* Reset the fence only after an image has been acquired. If submission then fails, restore
+       a signalled fence so the next frame cannot block forever waiting for work that was never queued. */
+    const VkResult reset = vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (reset != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkResetFences failed (%d)\\n", int(reset));
+        framebufferResized_ = true;
+        return;
+    }
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
-    vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    const VkResult commandReset = vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    if (commandReset != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkResetCommandBuffer failed (%d)\\n", int(commandReset));
+        /* No submission owns this fence. Restore its signalled state before returning. */
+        vkDestroyFence(device_, inFlight_[frameIndex_], nullptr);
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &inFlight_[frameIndex_]) != VK_SUCCESS) {
+            inFlight_[frameIndex_] = VK_NULL_HANDLE;
+            std::fprintf(stderr, "AvatarForge Vulkan: could not recreate frame fence\\n");
+        }
+        /* The image was acquired and its semaphore signalled, but no submission will consume
+           that semaphore. Retire it and rebuild the swapchain instead of reusing invalid sync state. */
+        vkDeviceWaitIdle(device_);
+        vkDestroySemaphore(device_, imageAvailable_[frameIndex_], nullptr);
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &imageAvailable_[frameIndex_]) != VK_SUCCESS) {
+            imageAvailable_[frameIndex_] = VK_NULL_HANDLE;
+            std::fprintf(stderr, "AvatarForge Vulkan: could not recreate acquire semaphore after command reset failure\\n");
+        }
+        framebufferResized_ = true;
+        swapExtent_ = {0, 0};
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS &&
+            caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
+            if (!resize(int(caps.currentExtent.width), int(caps.currentExtent.height))) {
+                std::fprintf(stderr, "AvatarForge Vulkan: swapchain recovery after command reset failure did not complete\\n");
+            }
+        }
+        return;
+    }
     recordCommands(cmd_[frameIndex_], imageIndex);
 
     VkSubmitInfo submit{};
@@ -3051,7 +3101,37 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult submitted = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
+    if (submitted != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkQueueSubmit failed (%d); scheduling swapchain recovery\\n", int(submitted));
+        vkDeviceWaitIdle(device_);
+        vkDestroyFence(device_, inFlight_[frameIndex_], nullptr);
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &inFlight_[frameIndex_]) != VK_SUCCESS) {
+            inFlight_[frameIndex_] = VK_NULL_HANDLE;
+            std::fprintf(stderr, "AvatarForge Vulkan: could not recreate frame fence after submit failure\\n");
+        }
+        /* The acquire semaphore may have been signalled without a matching queue wait. Replace it. */
+        vkDestroySemaphore(device_, imageAvailable_[frameIndex_], nullptr);
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &imageAvailable_[frameIndex_]) != VK_SUCCESS) {
+            imageAvailable_[frameIndex_] = VK_NULL_HANDLE;
+            std::fprintf(stderr, "AvatarForge Vulkan: could not recreate acquire semaphore\\n");
+        }
+        framebufferResized_ = true;
+        swapExtent_ = {0, 0};  /* force resize() to rebuild swapchain resources */
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS &&
+            caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
+            if (!resize(int(caps.currentExtent.width), int(caps.currentExtent.height))) {
+                std::fprintf(stderr, "AvatarForge Vulkan: swapchain recovery after submit failure did not complete\\n");
+            }
+        }
+        return;
+    }
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -3061,7 +3141,12 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
+        framebufferResized_ = true;
+    } else if (presented != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkQueuePresentKHR failed (%d)\\n", int(presented));
+        framebufferResized_ = true;
+    }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 
@@ -3192,12 +3277,36 @@ void VulkanRenderer::waitIdle() {
 bool VulkanRenderer::resize(int width, int height) {
     if (!device_ || width <= 0 || height <= 0) return false;
     if (swapExtent_.width == uint32_t(width) && swapExtent_.height == uint32_t(height)) return true;
-    vkDeviceWaitIdle(device_);
+    const VkResult idle = vkDeviceWaitIdle(device_);
+    if (idle != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkDeviceWaitIdle before resize failed (%d)\\n", int(idle));
+        return false;
+    }
+    /* Render-finished semaphores are indexed by swapchain image, so their lifetime must match
+       the swapchain even if a resize changes the image count. */
+    for (VkSemaphore semaphore : renderFinished_)
+        if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+    renderFinished_.clear();
     destroySwapchainResources();
     destroyTargets();
     destroyPipelines();
     std::string error;
-    if (!createSwapchain(&error, width, height)) return false;
+    if (!createSwapchain(&error, width, height)) {
+        std::fprintf(stderr, "AvatarForge Vulkan: swapchain recreation failed: %s\\n", error.c_str());
+        return false;
+    }
+    if (renderFinished_.empty()) {
+        renderFinished_.resize(swapImages_.size(), VK_NULL_HANDLE);
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (size_t i = 0; i < renderFinished_.size(); ++i) {
+            const VkResult created = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &renderFinished_[i]);
+            if (created != VK_SUCCESS) {
+                std::fprintf(stderr, "AvatarForge Vulkan: render-finished semaphore creation failed (%d)\\n", int(created));
+                return false;
+            }
+        }
+    }
     if (!createShadowTarget(&error)) return false;
     if (!createHdrTargets(&error)) return false;
     if (!createPipelines(&error)) return false;

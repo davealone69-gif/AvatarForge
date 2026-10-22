@@ -438,7 +438,7 @@ class MainActivity : ComponentActivity() {
                     .padding(8.dp),
             ) {
                 TextButton(onClick = { menuExpanded = true }) {
-                    Text("☰ MENU")
+                    Text("⚙ SETTINGS")
                 }
                 DropdownMenu(
                     expanded = menuExpanded,
@@ -473,6 +473,18 @@ class MainActivity : ComponentActivity() {
                     )
                     DropdownMenuItem(
                         text = { Text("System check") },
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) {
+                                panel = ViewerPanel.SYSTEM_CHECK
+                                screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.SYSTEM_CHECK
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Self-test & diagnostics") },
                         onClick = {
                             menuExpanded = false
                             if (result != null) {
