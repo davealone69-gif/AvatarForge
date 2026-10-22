@@ -3143,6 +3143,9 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
            against the renderer-owned window and verify the selected queue still supports it. */
         const VkResult idle = vkDeviceWaitIdle(device_);
         if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after surface loss"); return; }
+        /* A surface must outlive every swapchain created from it. Tear the old swapchain down
+           before destroying the lost surface; the next recovery step rebuilds it on the new one. */
+        destroySwapchainResources();
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
         surface_ = VK_NULL_HANDLE;
         std::string error;
@@ -3243,6 +3246,9 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         /* Fail closed if a replacement surface cannot be created on the next call. */
         const VkResult idle = vkDeviceWaitIdle(device_);
         if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after present surface loss"); return; }
+        /* A surface must outlive every swapchain created from it. Tear the old swapchain down
+           before destroying the lost surface; the next recovery step rebuilds it on the new one. */
+        destroySwapchainResources();
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
         surface_ = VK_NULL_HANDLE;
         std::string error;
