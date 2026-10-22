@@ -3001,9 +3001,6 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     }
 
     vkEndCommandBuffer(cmd);
-    stats_.drawCalls = drawCallsThisFrame_;
-    stats_.triangles = trianglesThisFrame_;
-    stats_.vertices = vertexCount_;
 }
 
 /* ============================================================================================
@@ -3088,6 +3085,9 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
        This is CPU cadence, not a GPU-completion timer. */
     if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
         ++stats_.frames;
+        stats_.drawCalls = drawCallsThisFrame_;
+        stats_.triangles = trianglesThisFrame_;
+        stats_.vertices = vertexCount_;
         if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
             const float alpha = 0.06f;
             stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
