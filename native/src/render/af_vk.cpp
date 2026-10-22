@@ -3014,31 +3014,41 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     pollAtlasCompression();
     if (targetsDirty_) applyOptionChanges();
 
-    stats_.frames++;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        /* Exponential smoothing over ~30 frames: responsive enough for the quality controller,
-           stable enough not to oscillate on a single slow frame. */
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-    }
+    const auto recreateSwapchain = [this]() {
+        int w = 0, h = 0;
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) != VK_SUCCESS) return false;
+        if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX) {
+            w = int(caps.currentExtent.width);
+            h = int(caps.currentExtent.height);
+        } else {
+            w = int(swapExtent_.width);
+            h = int(swapExtent_.height);
+        }
+        if (w <= 0 || h <= 0) return false;
+        /* Force recreation even when Android reports the same extent after OUT_OF_DATE. */
+        swapExtent_.width = 0;
+        return resize(w, h);
+    };
 
-    vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    if (vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+        return;
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-        framebufferResized_ = true;
+        recreateSwapchain();
         return;
     }
-    if (acquired == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
-    vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return;
+    const bool acquiredSuboptimal = acquired == VK_SUBOPTIMAL_KHR;
+    if (vkResetFences(device_, 1, &inFlight_[frameIndex_]) != VK_SUCCESS) return;
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
-    vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    if (vkResetCommandBuffer(cmd_[frameIndex_], 0) != VK_SUCCESS) return;
     recordCommands(cmd_[frameIndex_], imageIndex);
 
     VkSubmitInfo submit{};
@@ -3051,7 +3061,18 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult submitted = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
+    if (submitted != VK_SUCCESS) {
+        /* Resetting the fence before a failed submit leaves it unsignalled forever. Replace it
+           with a signalled fence so a transient submit failure cannot deadlock the next frame. */
+        vkDestroyFence(device_, inFlight_[frameIndex_], nullptr);
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        inFlight_[frameIndex_] = VK_NULL_HANDLE;
+        vkCreateFence(device_, &fenceInfo, nullptr, &inFlight_[frameIndex_]);
+        return;
+    }
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -3061,19 +3082,23 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
+
+    /* Count frames only after successful queue submission and an accepted presentation request.
+       This is CPU cadence, not a GPU-completion timer. */
+    if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
+        ++stats_.frames;
+        if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
+            const float alpha = 0.06f;
+            stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
+            stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
+        }
+    }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 
-    if (framebufferResized_) {
-        framebufferResized_ = false;
-        int w = 0, h = 0;
-        VkSurfaceCapabilitiesKHR caps{};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS) {
-            w = int(caps.currentExtent.width);
-            h = int(caps.currentExtent.height);
-        }
-        if (w > 0 && h > 0) resize(w, h);
+    if (acquiredSuboptimal || presented == VK_ERROR_OUT_OF_DATE_KHR ||
+        presented == VK_SUBOPTIMAL_KHR) {
+        recreateSwapchain();
     }
 }
 
