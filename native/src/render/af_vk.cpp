@@ -2916,7 +2916,14 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bi);
+    const VkResult beginResult = vkBeginCommandBuffer(cmd, &bi);
+    if (beginResult != VK_SUCCESS) {
+        lastFrameVkResult_ = beginResult;
+        stats_.lastVkResult = int(beginResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkBeginCommandBuffer failed (VkResult %d)\\n",
+                     int(beginResult));
+        return false;
+    }
 
     uploadDynamicGeometry(cmd);
 
