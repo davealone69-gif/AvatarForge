@@ -3043,13 +3043,14 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     }
     if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return;
     const bool acquiredSuboptimal = acquired == VK_SUBOPTIMAL_KHR;
-    if (vkResetFences(device_, 1, &inFlight_[frameIndex_]) != VK_SUCCESS) return;
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
     if (vkResetCommandBuffer(cmd_[frameIndex_], 0) != VK_SUCCESS) return;
     recordCommands(cmd_[frameIndex_], imageIndex);
+
+    if (vkResetFences(device_, 1, &inFlight_[frameIndex_]) != VK_SUCCESS) return;
 
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
