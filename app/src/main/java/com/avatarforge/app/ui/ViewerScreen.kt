@@ -563,12 +563,18 @@ private fun SystemCheckPanel(
         DiagnosticLine("RAM during sample window", "%.0f → %.0f MiB available".format(first.availableRamBytes / 1048576.0, last.availableRamBytes / 1048576.0))
         DiagnosticLine("Storage during sample window", "%.0f → %.0f MiB free".format(first.availableStorageBytes / 1048576.0, last.availableStorageBytes / 1048576.0))
         DiagnosticLine("Resource state start → end", "${first.resourceState} → ${last.resourceState}")
+        val hasValidRenderTelemetry = samples.any { sample ->
+            sample.fps.isFinite() && sample.fps > 0f &&
+                sample.frameMs.isFinite() && sample.frameMs > 0f &&
+                sample.cpuMs.isFinite() && sample.cpuMs > 0f
+        }
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
             info == null -> "SYSTEM ONLY · no active renderer; adaptive behaviour cannot be proven here"
-            settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
+            !hasValidRenderTelemetry -> "INCONCLUSIVE · invalid render telemetry (zero/non-finite FPS, frame interval or renderer-call time); fix frame loop/counters before judging adaptation"
+            settings.quality != Quality.AUTO -> "RECORDED ONLY · telemetry observed; adaptive tier changes require AUTO mode"
             tierChanges > 0 -> "ADAPTATION OBSERVED · real effective tier changed during sampling"
-            else -> "RECORDED · no tier change observed; stable performance can be the correct result"
+            else -> "RECORDED ONLY · valid telemetry but no tier change observed; adaptation was not demonstrated"
         })
         Text("Last sample: ${last.fps} FPS · ${last.frameMs} ms interval · ${last.cpuMs} ms renderer call · thermal ${last.thermal?.toString() ?: "unavailable"}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {
