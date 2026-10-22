@@ -483,6 +483,18 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Self-test & diagnostics") },
+                        onClick = {
+                            menuExpanded = false
+                            if (result != null) {
+                                panel = ViewerPanel.SYSTEM_CHECK
+                                screen = Screen.VIEWER
+                            } else {
+                                screen = Screen.SYSTEM_CHECK
+                            }
+                        },
+                    )
                 }
             }
         }
