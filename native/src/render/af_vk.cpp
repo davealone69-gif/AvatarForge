@@ -3105,6 +3105,13 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         }
         framebufferResized_ = true;
         swapExtent_ = {0, 0};  /* force resize() to rebuild swapchain resources */
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS &&
+            caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
+            if (!resize(int(caps.currentExtent.width), int(caps.currentExtent.height))) {
+                std::fprintf(stderr, "AvatarForge Vulkan: swapchain recovery after submit failure did not complete\\n");
+            }
+        }
         return;
     }
 
@@ -3252,12 +3259,36 @@ void VulkanRenderer::waitIdle() {
 bool VulkanRenderer::resize(int width, int height) {
     if (!device_ || width <= 0 || height <= 0) return false;
     if (swapExtent_.width == uint32_t(width) && swapExtent_.height == uint32_t(height)) return true;
-    vkDeviceWaitIdle(device_);
+    const VkResult idle = vkDeviceWaitIdle(device_);
+    if (idle != VK_SUCCESS) {
+        std::fprintf(stderr, "AvatarForge Vulkan: vkDeviceWaitIdle before resize failed (%d)\\n", int(idle));
+        return false;
+    }
+    /* Render-finished semaphores are indexed by swapchain image, so their lifetime must match
+       the swapchain even if a resize changes the image count. */
+    for (VkSemaphore semaphore : renderFinished_)
+        if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+    renderFinished_.clear();
     destroySwapchainResources();
     destroyTargets();
     destroyPipelines();
     std::string error;
-    if (!createSwapchain(&error, width, height)) return false;
+    if (!createSwapchain(&error, width, height)) {
+        std::fprintf(stderr, "AvatarForge Vulkan: swapchain recreation failed: %s\\n", error.c_str());
+        return false;
+    }
+    if (renderFinished_.empty()) {
+        renderFinished_.resize(swapImages_.size(), VK_NULL_HANDLE);
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (size_t i = 0; i < renderFinished_.size(); ++i) {
+            const VkResult created = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &renderFinished_[i]);
+            if (created != VK_SUCCESS) {
+                std::fprintf(stderr, "AvatarForge Vulkan: render-finished semaphore creation failed (%d)\\n", int(created));
+                return false;
+            }
+        }
+    }
     if (!createShadowTarget(&error)) return false;
     if (!createHdrTargets(&error)) return false;
     if (!createPipelines(&error)) return false;
