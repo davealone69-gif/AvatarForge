@@ -293,12 +293,12 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     m.fingerLength[2] = fingerSpan * 1.00f;  /* middle  */
     m.fingerLength[3] = fingerSpan * 0.94f;  /* ring    */
     m.fingerLength[4] = fingerSpan * 0.78f;  /* little  */
-    const float baseFingerR = m.palmWidth * 0.118f;
-    m.fingerRadius[0] = baseFingerR * 1.18f;
-    m.fingerRadius[1] = baseFingerR * 1.00f;
-    m.fingerRadius[2] = baseFingerR * 1.02f;
-    m.fingerRadius[3] = baseFingerR * 0.95f;
-    m.fingerRadius[4] = baseFingerR * 0.84f;
+    const float baseFingerR = m.palmWidth * 0.103f;
+    m.fingerRadius[0] = baseFingerR * 1.10f;
+    m.fingerRadius[1] = baseFingerR * 0.96f;
+    m.fingerRadius[2] = baseFingerR * 0.98f;
+    m.fingerRadius[3] = baseFingerR * 0.91f;
+    m.fingerRadius[4] = baseFingerR * 0.80f;
 
     const float thighR = circ.thigh / (2.0f * kPi);
     m.thighRx = thighR * 1.03f;
