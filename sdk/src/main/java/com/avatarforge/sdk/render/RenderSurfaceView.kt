@@ -476,7 +476,18 @@ class RenderSurfaceView @JvmOverloads constructor(
                     .getOrDefault(false)
                 if (!resized) {
                     _error.value = _error.value ?: "Renderer resize failed for ${width}×${height}; GPU targets could not be recreated"
-                    handler.removeCallbacks(frameLoop)
+                    /*
+                     * Do not permanently stop the frame loop here. Resize can fail transiently
+                     * while Android is replacing the native window/swapchain. The previous code
+                     * removed the only scheduled frame callback, so no later frame could exercise
+                     * the backend's own resize/recovery path and telemetry stayed at zero forever.
+                     * Keep the visible loop alive; the error remains exposed until a later
+                     * successful frame clears it.
+                     */
+                    if (visible && activeSurface?.isValid == true) {
+                        handler.removeCallbacks(frameLoop)
+                        handler.postDelayed(frameLoop, FRAME_ERROR_RETRY_MS)
+                    }
                 } else {
                     _error.value = null
                     if (visible) {
