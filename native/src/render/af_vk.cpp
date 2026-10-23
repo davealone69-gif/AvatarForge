@@ -195,7 +195,7 @@ private:
     void updateAnimation(float deltaSeconds);
     void uploadDynamicGeometry(VkCommandBuffer cmd);
     void writePostSlices();
-    void recordCommands(VkCommandBuffer cmd, uint32_t imageIndex);
+    bool recordCommands(VkCommandBuffer cmd, uint32_t imageIndex);
     void recordShadowPass(VkCommandBuffer cmd);
     void recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex);
 
@@ -235,6 +235,9 @@ private:
     bool atlasCompressionAttempted_ = false;
     uint64_t atlasGpuBytes_[AF_TEX_COUNT] = {};
 
+    ANativeWindow* window_ = nullptr; /* valid for this renderer's surface lifetime */
+    bool frameFatal_ = false;
+    VkResult lastFrameVkResult_ = VK_SUCCESS;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -395,7 +398,9 @@ private:
     bool avatarVisible_ = false;
     FrameScene scene_{};
     EnvironmentParams env_{};
+    EnvironmentParams projectedEnv_{};
     ShGlobal sh_{};
+    bool shProjectionValid_ = false;
     bool meshDirty_ = true;
     bool atlasDirty_ = true;
     int highlightRegion_ = -1;
@@ -410,12 +415,16 @@ private:
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     int drawCallsThisFrame_ = 0;
     int trianglesThisFrame_ = 0;
+    bool lodBudgetWarningLogged_ = false;
 };
 
 /* ============================================================================================
  *  Initialisation
  * ============================================================================================ */
 bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
+    window_ = window;
+    frameFatal_ = false;
+    lastFrameVkResult_ = VK_SUCCESS;
     options_ = options;
     if (!createInstance(error)) return false;
     if (!createSurface(window, error)) return false;
@@ -508,6 +517,8 @@ bool VulkanRenderer::createSurface(ANativeWindow* window, std::string* error) {
     ci.window = window;
     const VkResult r = vkCreateAndroidSurfaceKHR(instance_, &ci, nullptr, &surface_);
     if (r != VK_SUCCESS) {
+        lastFrameVkResult_ = r;
+        stats_.lastVkResult = int(r);
         setError(error, "vkCreateAndroidSurfaceKHR", r);
         return false;
     }
@@ -2011,7 +2022,13 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
+        const VkResult beginResult = vkBeginCommandBuffer(cmd, &bi);
+    if (beginResult != VK_SUCCESS) {
+        lastFrameVkResult_ = beginResult;
+        stats_.lastVkResult = int(beginResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkBeginCommandBuffer failed (VkResult %d)\\n", int(beginResult));
+        return false;
+    }
         imageBarrier(cmd, atlasImages_[i], VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         VkClearColorValue white{};
@@ -2404,7 +2421,24 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     env_.turbidity = options_.turbidity;
     env_.groundAlbedo = options_.groundAlbedo;
     env_.intensity = options_.environmentIntensity;
-    projectToSh(env_, &sh_, 1024);
+
+    /* SH projection samples the analytic sky and performs expensive transcendental work.
+       The environment is independent of the camera and avatar pose, so recomputing it on every
+       frame wastes CPU and can starve animation/render submission on mobile. Reproject only when
+       one of the six actual lighting inputs changes. Exact comparisons are intentional here:
+       these are UI/config values, not accumulated simulation state. */
+    const bool environmentChanged = !shProjectionValid_ ||
+        env_.sunAzimuthDeg != projectedEnv_.sunAzimuthDeg ||
+        env_.sunElevationDeg != projectedEnv_.sunElevationDeg ||
+        env_.sunIntensity != projectedEnv_.sunIntensity ||
+        env_.turbidity != projectedEnv_.turbidity ||
+        env_.groundAlbedo != projectedEnv_.groundAlbedo ||
+        env_.intensity != projectedEnv_.intensity;
+    if (environmentChanged) {
+        projectToSh(env_, &sh_, 1024);
+        projectedEnv_ = env_;
+        shProjectionValid_ = true;
+    }
 
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
     buildCameraUbo(&scene_, camera_, options_, env_, sh_, int(swapExtent_.width), int(swapExtent_.height), true);
@@ -2425,6 +2459,12 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     avatarVisible_ = cull.visible;
     activeLod_ = std::max(0, cull.lod);
     trianglesThisFrame_ = cull.triangleCount;
+    if (cull.triangleBudgetExceeded && !lodBudgetWarningLogged_) {
+        std::fprintf(stderr,
+                     "AvatarForge: mobile triangle target unmet; selected coarsest available LOD (%d triangles, target 50000).\n",
+                     cull.triangleCount);
+        lodBudgetWarningLogged_ = true;
+    }
 
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
@@ -2895,14 +2935,21 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdEndRenderPass(cmd);
 }
 
-void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
+bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
     drawCallsThisFrame_ = 0;
     trianglesThisFrame_ = 0;
 
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bi);
+    const VkResult beginResult = vkBeginCommandBuffer(cmd, &bi);
+    if (beginResult != VK_SUCCESS) {
+        lastFrameVkResult_ = beginResult;
+        stats_.lastVkResult = int(beginResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkBeginCommandBuffer failed (VkResult %d)\\n",
+                     int(beginResult));
+        return false;
+    }
 
     uploadDynamicGeometry(cmd);
 
@@ -3000,46 +3047,187 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         ++drawCallsThisFrame_;
     }
 
-    vkEndCommandBuffer(cmd);
-    stats_.drawCalls = drawCallsThisFrame_;
-    stats_.triangles = trianglesThisFrame_;
-    stats_.vertices = vertexCount_;
+    const VkResult endResult = vkEndCommandBuffer(cmd);
+    if (endResult != VK_SUCCESS) {
+        lastFrameVkResult_ = endResult;
+        stats_.lastVkResult = int(endResult);
+        std::fprintf(stderr, "AvatarForge Vulkan: vkEndCommandBuffer failed (VkResult %d)\\n", int(endResult));
+        return false;
+    }
+    return true;
 }
 
 /* ============================================================================================
  *  Frame loop
  * ============================================================================================ */
 void VulkanRenderer::renderFrame(float deltaSeconds) {
-    if (!device_ || swapchain_ == VK_NULL_HANDLE) return;
+    if (!device_ || swapchain_ == VK_NULL_HANDLE || frameFatal_) return;
+    ++stats_.frameAttempts;
     pollAtlasCompression();
     if (targetsDirty_) applyOptionChanges();
 
-    stats_.frames++;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        /* Exponential smoothing over ~30 frames: responsive enough for the quality controller,
-           stable enough not to oscillate on a single slow frame. */
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-    }
+    const auto failFatal = [this](VkResult result, const char* operation) {
+        lastFrameVkResult_ = result;
+        stats_.lastVkResult = int(result);
+        frameFatal_ = true;
+        stats_.frameFatal = true;
+        std::fprintf(stderr, "AvatarForge Vulkan: renderer halted: %s failed (VkResult %d)\\n",
+                     operation, int(result));
+    };
 
-    vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    const auto rebuildFrameSync = [this]() -> bool {
+        if (vkDeviceWaitIdle(device_) != VK_SUCCESS) return false;
+        for (VkSemaphore& semaphore : imageAvailable_) {
+            if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+            semaphore = VK_NULL_HANDLE;
+        }
+        for (VkSemaphore& semaphore : renderFinished_) {
+            if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+            semaphore = VK_NULL_HANDLE;
+        }
+        for (VkFence& fence : inFlight_) {
+            if (fence != VK_NULL_HANDLE) vkDestroyFence(device_, fence, nullptr);
+            fence = VK_NULL_HANDLE;
+        }
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (VkSemaphore& semaphore : imageAvailable_) {
+            const VkResult result = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &semaphore);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        for (VkSemaphore& semaphore : renderFinished_) {
+            const VkResult result = vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &semaphore);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (VkFence& fence : inFlight_) {
+            const VkResult result = vkCreateFence(device_, &fenceInfo, nullptr, &fence);
+            if (result != VK_SUCCESS) { lastFrameVkResult_ = result; return false; }
+        }
+        return true;
+    };
+
+    const auto recreateSwapchain = [this, &failFatal]() -> bool {
+        if (!device_ || !surface_) return false;
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle during swapchain recovery"); return false; }
+        VkSurfaceCapabilitiesKHR caps{};
+        const VkResult capResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps);
+        if (capResult != VK_SUCCESS) {
+            lastFrameVkResult_ = capResult;
+            stats_.lastVkResult = int(capResult);
+            std::fprintf(stderr, "AvatarForge Vulkan: surface capability query failed (VkResult %d)\\n", int(capResult));
+            return false;
+        }
+        int width = 0, height = 0;
+        if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.height != UINT32_MAX) {
+            width = int(caps.currentExtent.width);
+            height = int(caps.currentExtent.height);
+        } else {
+            width = int(swapExtent_.width);
+            height = int(swapExtent_.height);
+        }
+        if (width <= 0 || height <= 0) return false;
+        /* resize() normally skips an unchanged extent. Zero it to force swapchain and dependent
+           targets to be rebuilt after OUT_OF_DATE/SUBOPTIMAL or an abandoned acquired image. */
+        swapExtent_.width = 0;
+        std::string error;
+        if (!resize(width, height)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: swapchain recreation failed: %s\\n", error.c_str());
+            return false;
+        }
+        framebufferResized_ = false;
+        return true;
+    };
+
+    const auto recoverAcquiredImage = [this, &rebuildFrameSync, &recreateSwapchain, &failFatal]() {
+        /* Once acquire has signalled, an early return would reuse a signalled binary semaphore
+           and leave an image acquired. Wait idle, replace all frame sync objects, then destroy /
+           recreate the swapchain so the abandoned image is released before another acquire. */
+        if (!rebuildFrameSync()) {
+            failFatal(lastFrameVkResult_, "frame synchronization recovery");
+            return false;
+        }
+        if (!recreateSwapchain()) {
+            failFatal(lastFrameVkResult_, "swapchain recovery");
+            return false;
+        }
+        return true;
+    };
+
+    if (frameIndex_ >= inFlight_.size() || frameIndex_ >= imageAvailable_.size()) {
+        failFatal(VK_ERROR_INITIALIZATION_FAILED, "frame synchronization state validation");
+        return;
+    }
+    const VkResult waited = vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    if (waited != VK_SUCCESS) { failFatal(waited, "vkWaitForFences"); return; }
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
-                                                   imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
+                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-        framebufferResized_ = true;
+        if (!recreateSwapchain()) failFatal(lastFrameVkResult_, "OUT_OF_DATE swapchain recreation");
         return;
     }
-    if (acquired == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
-    vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (acquired == VK_ERROR_SURFACE_LOST_KHR) {
+        /* Surface loss cannot be repaired by changing extent alone. Recreate the Android surface
+           against the renderer-owned window and verify the selected queue still supports it. */
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after surface loss"); return; }
+        /* A surface must outlive every swapchain created from it. Tear the old swapchain down
+           before destroying the lost surface; the next recovery step rebuilds it on the new one. */
+        destroySwapchainResources();
+        if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+        std::string error;
+        if (!window_ || !createSurface(window_, &error)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: surface recreation failed: %s\\n", error.c_str());
+            failFatal(lastFrameVkResult_ == VK_SUCCESS ? VK_ERROR_SURFACE_LOST_KHR : lastFrameVkResult_,
+                      "Android surface recreation");
+            return;
+        }
+        VkBool32 supported = VK_FALSE;
+        const VkResult supportResult = vkGetPhysicalDeviceSurfaceSupportKHR(phys_, queueFamily_, surface_, &supported);
+        if (supportResult != VK_SUCCESS || supported != VK_TRUE) {
+            failFatal(supportResult != VK_SUCCESS ? supportResult : VK_ERROR_SURFACE_LOST_KHR,
+                      "present-queue support after surface recreation");
+            return;
+        }
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        failFatal(acquired, "vkAcquireNextImageKHR");
+        return;
+    }
+    if (imageIndex >= swapFramebuffers_.size() || imageIndex >= renderFinished_.size()) {
+        lastFrameVkResult_ = VK_ERROR_INITIALIZATION_FAILED;
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    const bool acquiredSuboptimal = acquired == VK_SUBOPTIMAL_KHR;
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
-    vkResetCommandBuffer(cmd_[frameIndex_], 0);
-    recordCommands(cmd_[frameIndex_], imageIndex);
+    const VkResult commandReset = vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    if (commandReset != VK_SUCCESS) {
+        lastFrameVkResult_ = commandReset;
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    if (!recordCommands(cmd_[frameIndex_], imageIndex)) {
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+
+    const VkResult fenceReset = vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (fenceReset != VK_SUCCESS) {
+        failFatal(fenceReset, "vkResetFences");
+        return;
+    }
 
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -3051,7 +3239,14 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult submitted = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
+    if (submitted != VK_SUCCESS) {
+        lastFrameVkResult_ = submitted;
+        if (submitted == VK_ERROR_DEVICE_LOST) { failFatal(submitted, "vkQueueSubmit"); return; }
+        if (!recoverAcquiredImage()) return;
+        return;
+    }
+    ++stats_.frameSubmissions;
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -3061,20 +3256,55 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
+    lastFrameVkResult_ = presented;
+    stats_.lastVkResult = int(presented);
+
+    /* This counter means the presentation request was accepted, not GPU completion or proof
+       that the image was physically displayed. */
+    if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
+        ++stats_.presentRequestsAccepted;
+        ++stats_.frames;
+        stats_.drawCalls = drawCallsThisFrame_;
+        stats_.triangles = trianglesThisFrame_;
+        stats_.vertices = vertexCount_;
+        if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
+            const float alpha = 0.06f;
+            stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
+            stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
+        }
+    }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
-
-    if (framebufferResized_) {
-        framebufferResized_ = false;
-        int w = 0, h = 0;
-        VkSurfaceCapabilitiesKHR caps{};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS) {
-            w = int(caps.currentExtent.width);
-            h = int(caps.currentExtent.height);
+    if (presented == VK_ERROR_SURFACE_LOST_KHR) {
+        /* Fail closed if a replacement surface cannot be created on the next call. */
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) { failFatal(idle, "vkDeviceWaitIdle after present surface loss"); return; }
+        /* A surface must outlive every swapchain created from it. Tear the old swapchain down
+           before destroying the lost surface; the next recovery step rebuilds it on the new one. */
+        destroySwapchainResources();
+        if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+        std::string error;
+        if (!window_ || !createSurface(window_, &error)) {
+            std::fprintf(stderr, "AvatarForge Vulkan: present surface recreation failed: %s\\n", error.c_str());
+            failFatal(VK_ERROR_SURFACE_LOST_KHR, "present surface recreation");
+            return;
         }
-        if (w > 0 && h > 0) resize(w, h);
+        VkBool32 supported = VK_FALSE;
+        const VkResult supportResult = vkGetPhysicalDeviceSurfaceSupportKHR(phys_, queueFamily_, surface_, &supported);
+        if (supportResult != VK_SUCCESS || supported != VK_TRUE) {
+            failFatal(supportResult != VK_SUCCESS ? supportResult : VK_ERROR_SURFACE_LOST_KHR,
+                      "present-queue support after surface recreation");
+            return;
+        }
+        if (!recoverAcquiredImage()) return;
+        return;
     }
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR || acquiredSuboptimal) {
+        if (!recreateSwapchain()) failFatal(lastFrameVkResult_, "post-present swapchain recreation");
+        return;
+    }
+    if (presented != VK_SUCCESS) failFatal(presented, "vkQueuePresentKHR");
 }
 
 void VulkanRenderer::applyOptionChanges() {
@@ -3157,6 +3387,7 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
     meshDirty_ = true;
     indexDirty_ = true;
     activeLod_ = 0;
+    lodBudgetWarningLogged_ = false;
     indirectCommandCount_ = 0;
     atlasUploaded_ = false;
     materialUboSize_ = 0;
@@ -3178,7 +3409,10 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
     }
 }
 
-void VulkanRenderer::invalidateMesh() { meshDirty_ = true; }
+void VulkanRenderer::invalidateMesh() {
+    meshDirty_ = true;
+    lodBudgetWarningLogged_ = false;
+}
 
 void VulkanRenderer::setCamera(const CameraState& camera) { camera_ = camera; }
 

@@ -107,7 +107,12 @@ struct RendererStats {
     int   bloomLevels    = 0;
     uint64_t textureBytes = 0;
     int   qualityLevel   = 2;      /* effective QualityPreset after automatic stepping        */
-    int   frames         = 0;
+    int   frames         = 0;   /* accepted present requests; not physical display/GPU completion */
+    uint64_t frameAttempts = 0;
+    uint64_t frameSubmissions = 0;
+    uint64_t presentRequestsAccepted = 0;
+    int   lastVkResult = 0;     /* VK_SUCCESS is zero; exact last failing VkResult otherwise */
+    bool  frameFatal = false;   /* renderer stopped after unrecoverable Vulkan/surface failure */
 };
 
 struct RendererInfo {

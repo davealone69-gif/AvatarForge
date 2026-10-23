@@ -13,7 +13,10 @@
 namespace af {
 namespace {
 
-constexpr float kLodFractions[2] = {0.55f, 0.25f};
+/* Mobile-first simplification targets: approximately 12% and 5% of source triangles.
+   These are targets, not guarantees: topology, UV seams and skin-weight boundaries can
+   limit simplification, so runtime selection must always use measured generated counts. */
+constexpr float kLodFractions[2] = {0.12f, 0.05f};
 constexpr uint32_t kInvalidIndex = std::numeric_limits<uint32_t>::max();
 
 struct EdgeKey {

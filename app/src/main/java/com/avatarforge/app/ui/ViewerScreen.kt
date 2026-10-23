@@ -229,7 +229,7 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
                 color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
             )
             Text(
-                "%.0f s to build · %d tris on screen".format(
+                "%.0f s to build · %d tris selected for rendering".format(
                     result.timings.values.sum() / 1000f,
                     stats.triangles,
                 ),
@@ -533,13 +533,15 @@ private fun SystemCheckPanel(
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", when {
         rendererError != null -> rendererError
+        stats.frameFatal -> "FATAL: Vulkan renderer stopped (VkResult ${stats.lastVkResult})"
+        stats.lastVkResult != 0 -> "Vulkan recovery/result code ${stats.lastVkResult}; inspect renderer logs"
         info != null -> "render loop active; no current reported error"
         result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
         else -> "waiting for renderer initialisation"
     })
     DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
-    DiagnosticLine("Mesh submitted", "${stats.triangles} visible triangles · ${stats.vertices} vertices · ${stats.drawCalls} draw calls")
+    DiagnosticLine("Mesh draw selection", "${stats.triangles} triangles selected · ${stats.vertices} vertices in mesh · ${stats.drawCalls} draw calls")
     DiagnosticLine("Texture memory", "%.1f MiB avatar-atlas estimate only; total GPU memory is not exposed".format(stats.textureMiB))
     val currentThermal = thermalStatus ?: resources.thermalStatus
     DiagnosticLine("Thermal status", when (currentThermal) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($currentThermal)" })
