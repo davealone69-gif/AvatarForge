@@ -1555,14 +1555,16 @@ static void testAvatarCuller() {
     const int highPolyIndices[3] = {1226016, 147120, 61440};
     const AvatarCullResult mobileBudget = culler.update(modelMin, modelMax, true,
         highPolyIndices, 3, camera, 1080, 1920, 1.0f, 1.0f);
-    CHECK(mobileBudget.visible && mobileBudget.lod == 1 && mobileBudget.triangleCount == 49040,
+    CHECK(mobileBudget.visible && mobileBudget.lod == 1 && mobileBudget.triangleCount == 49040 &&
+              !mobileBudget.triangleBudgetExceeded,
           "mobile culler selects the finest available LOD at or below the 50k triangle target (%d, %d tris)",
           mobileBudget.lod, mobileBudget.triangleCount);
 
     const int degradedBudgetIndices[3] = {1226016, 300000, 180000};
     const AvatarCullResult degradedBudget = culler.update(modelMin, modelMax, true,
         degradedBudgetIndices, 3, camera, 1080, 1920, 1.0f, 1.0f);
-    CHECK(degradedBudget.visible && degradedBudget.lod == 2 && degradedBudget.triangleCount == 60000,
+    CHECK(degradedBudget.visible && degradedBudget.lod == 2 && degradedBudget.triangleCount == 60000 &&
+              degradedBudget.triangleBudgetExceeded,
           "when no generated LOD meets 50k, culler keeps the avatar visible and selects the coarsest available level");
     CameraState lowQualityCamera = camera;
     lowQualityCamera.distance = 3.0f;
