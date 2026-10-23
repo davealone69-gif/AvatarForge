@@ -25,6 +25,9 @@
         android:theme="@style/Theme.AvatarForge"
         android:extractNativeLibs="true">
 
+        <!-- Allows shell-driven Perfetto profiling on Android 10+ release builds. -->
+        <profileable android:shell="true" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
