@@ -15,6 +15,8 @@ At the start of every new session:
 3. Compare the reported bug against current code and other branches before implementing anything.
 4. Continue from the last incomplete task. Update this checkpoint after meaningful changes and before stopping.
 5. Never claim a build is green unless required checks passed for the exact commit. Never claim device verification unless the APK was installed and tested on a physical device.
+6. **Keep checking GitHub Actions quality/build results while working.** After each meaningful push, check Actions/checks for that exact head SHA; inspect failed or cancelled jobs/logs, fix failures on the existing working branch, push, and recheck the new SHA. Before merging any PR, confirm its current head SHA and required checks are green. Recheck open PRs and quality workflows when resuming. Do not treat a stale green run on an older SHA as proof for newer code.
+7. Record the latest checked SHA, workflow/run URL, result, failures/fixes, and device-test status in this file. If a workflow is queued or running, leave it marked pending and check again before declaring the build done.
 
 ## Current objective
 
@@ -34,12 +36,15 @@ On `work/android-engine-dev`, prior session reported these commits:
 
 Re-check the live branch head and source before assuming these commits remain current or sufficient.
 
-## Verification truth
+## Verification truth and latest quality check
 
-- A prior report said Android Actions run #185 passed for commit `d6f554533249d26b92247ee68df057631462a98c`. Re-check the live run and exact head before relying on that result.
-- Physical Samsung Galaxy S24 runtime verification is **OUTSTANDING** unless a newer verified record proves otherwise.
+- Previous session reported Android Actions run #185 for `d6f554533249d26b92247ee68df057631462a98c`; its current status and relevance must be rechecked before relying on it.
+- Latest live branch/PR inventory was checked on 2026-10-23. The canonical branch head and latest Actions run result still need to be confirmed in the next resume pass.
+- **Latest checked commit SHA:** pending recheck.
+- **Latest GitHub Actions run URL/status:** pending recheck.
+- **Physical Samsung Galaxy S24 runtime verification:** OUTSTANDING unless a newer verified record proves otherwise.
 - CI success is not installed-device verification. A successful renderer initialization is not proof of visible frames. Zero FPS/zero triangles is inconclusive/failure evidence, not a pass.
-- Do not label the app production-ready without the required CI checks and installed-device runtime verification.
+- Do not label the app production-ready without required CI checks and installed-device runtime verification.
 
 ## Known open PRs at last checkpoint
 
@@ -83,7 +88,11 @@ Branch deletion capability was not available through the GitHub connector in the
 - 2026-10-23: Created this persistent checkpoint so a new chat can resume from repository state instead of relying on conversation memory.
 - Previous work: renderer GL rollback logging/minimal-target fallback and Kotlin zero-frame watchdog were committed to `work/android-engine-dev` (SHAs above).
 - Previous work: PR #7 and #9 were closed without merging; branches were preserved. Branch audit/consolidation remains incomplete.
+- 2026-10-23: Added an explicit ongoing GitHub Actions quality/build monitoring rule: check exact-SHA results after pushes, inspect failures, fix and rerun, recheck PR heads before merge, and log the last verified SHA/run/device status. Current live build status has not yet been confirmed in this update.
 
 ## Next exact task
 
-Resume the branch audit from live GitHub state. For each branch, compare against `work/android-engine-dev`, identify changes already present vs unique changes, and record a disposition: **already integrated**, **selectively port**, **keep for later**, or **safe to retire**. Prioritize renderer/Vulkan fixes. Do not close/delete a branch with unique unpreserved work. Then run checks on the exact resulting commit and update this file.
+1. Check the current `work/android-engine-dev` HEAD and live Actions runs/checks for that exact SHA. Also inspect the relevant open PR heads, especially renderer/Vulkan PRs.
+2. If a build is running, wait/check again; if failed, inspect job logs, fix on the existing branch, push, and verify the new SHA.
+3. Resume the branch audit. For each branch, compare against `work/android-engine-dev`, identify changes already present vs unique changes, and record a disposition: **already integrated**, **selectively port**, **keep for later**, or **safe to retire**.
+4. Do not close/delete a branch with unique unpreserved work. Run checks on the exact resulting commit and update this file.
