@@ -1665,6 +1665,16 @@ static void testAvatarLodSet() {
     CHECK(!rejected.build(vertices.data(), vertices.size(), indices.data(), indices.size(), &malformed, 1) &&
               rejected.levelCount() == 0,
           "malformed source ranges are rejected instead of generating unsafe GPU indices");
+
+    std::vector<uint32_t> outOfRangeIndices = indices;
+    outOfRangeIndices[0] = static_cast<uint32_t>(vertices.size());
+    CHECK(!rejected.build(vertices.data(), vertices.size(), outOfRangeIndices.data(),
+                          outOfRangeIndices.size(), &submesh, 1) && rejected.levelCount() == 0,
+          "out-of-range vertex references are rejected and leave no partial LOD state");
+
+    CHECK(!rejected.build(vertices.data(), vertices.size(), indices.data(), indices.size() - 1,
+                          &submesh, 1) && rejected.levelCount() == 0,
+          "truncated/non-triangle index streams are rejected and leave no partial LOD state");
 }
 
 /* ------------------------------------------ parallel work error propagation -------------------- */
