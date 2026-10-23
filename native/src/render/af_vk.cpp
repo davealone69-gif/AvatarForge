@@ -683,12 +683,29 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     swapColorSpace_ = chosen.colorSpace;
 
     uint32_t modeCount = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, nullptr);
-    std::vector<VkPresentModeKHR> modes(modeCount ? modeCount : 1);
-    if (modeCount) vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, modes.data());
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;   /* always available, vsync'd */
+    VkResult modeResult = vkGetPhysicalDeviceSurfacePresentModesKHR(
+        phys_, surface_, &modeCount, nullptr);
+    if (modeResult != VK_SUCCESS) {
+        setError(error, "vkGetPhysicalDeviceSurfacePresentModesKHR(count)", modeResult);
+        return false;
+    }
+    if (modeCount == 0) {
+        if (error) *error = "Vulkan surface reports zero supported present modes";
+        return false;
+    }
+    std::vector<VkPresentModeKHR> modes(modeCount);
+    modeResult = vkGetPhysicalDeviceSurfacePresentModesKHR(
+        phys_, surface_, &modeCount, modes.data());
+    if (modeResult != VK_SUCCESS || modeCount == 0) {
+        setError(error, "vkGetPhysicalDeviceSurfacePresentModesKHR(list)", modeResult);
+        if (modeResult == VK_SUCCESS && error)
+            *error = "Vulkan surface present-mode list became empty during enumeration";
+        return false;
+    }
+    modes.resize(modeCount);
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;   /* Vulkan requires FIFO support. */
     for (VkPresentModeKHR m : modes) {
-        if (m == VK_PRESENT_MODE_MAILBOX_KHR) { presentMode = m; break; }   /* lowest latency */
+        if (m == VK_PRESENT_MODE_MAILBOX_KHR) { presentMode = m; break; }
     }
 
     VkExtent2D extent = caps.currentExtent;
@@ -732,9 +749,20 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     if (ci.oldSwapchain != VK_NULL_HANDLE) vkDestroySwapchainKHR(device_, ci.oldSwapchain, nullptr);
 
     uint32_t n = 0;
-    vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr);
+    VkResult imagesResult = vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr);
+    if (imagesResult != VK_SUCCESS || n == 0) {
+        setError(error, "vkGetSwapchainImagesKHR(count)", imagesResult);
+        if (imagesResult == VK_SUCCESS && error)
+            *error = "Vulkan swapchain created with zero images";
+        return false;
+    }
     swapImages_.resize(n);
-    vkGetSwapchainImagesKHR(device_, swapchain_, &n, swapImages_.data());
+    imagesResult = vkGetSwapchainImagesKHR(device_, swapchain_, &n, swapImages_.data());
+    if (imagesResult != VK_SUCCESS || n == 0) {
+        setError(error, "vkGetSwapchainImagesKHR(list)", imagesResult);
+        return false;
+    }
+    swapImages_.resize(n);
 
     swapViews_.resize(n, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < n; ++i)
@@ -3062,11 +3090,24 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
-    if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+    if (acquired == VK_ERROR_OUT_OF_DATE_KHR || acquired == VK_SUBOPTIMAL_KHR) {
+        /* Do not reset the in-flight fence until an image is acquired and submitted.
+           Returning after resetting it would leave the next frame waiting forever. */
+        framebufferResized_ = true;
+        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) return;
+        /* SUBOPTIMAL still returns a valid image index, so continue this frame and recreate after present. */
+    } else if (acquired != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForge",
+            "Vulkan image acquisition failed: VkResult %d", int(acquired));
+        return;
+    }
+    if (imageIndex >= swapFramebuffers_.size() || imageIndex >= renderFinished_.size()) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForge",
+            "Vulkan acquired invalid image index %u (framebuffers=%zu semaphores=%zu)",
+            imageIndex, swapFramebuffers_.size(), renderFinished_.size());
         framebufferResized_ = true;
         return;
     }
-    if (acquired == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
     vkResetFences(device_, 1, &inFlight_[frameIndex_]);
 
     updateScene(deltaSeconds);
@@ -3085,7 +3126,24 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult submitResult = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
+    if (submitResult != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForge",
+            "Vulkan queue submit failed: VkResult %d", int(submitResult));
+        /* The fence was reset but no work was submitted to signal it. Replace it with a signaled
+           fence so a recoverable submit failure cannot deadlock the render loop. */
+        vkDestroyFence(device_, inFlight_[frameIndex_], nullptr);
+        VkFenceCreateInfo recoveryFence{};
+        recoveryFence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        recoveryFence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        inFlight_[frameIndex_] = VK_NULL_HANDLE;
+        if (vkCreateFence(device_, &recoveryFence, nullptr, &inFlight_[frameIndex_]) != VK_SUCCESS) {
+            __android_log_print(ANDROID_LOG_ERROR, "AvatarForge",
+                "Failed to recreate Vulkan frame fence after submit failure");
+            framebufferResized_ = true;
+        }
+        return;
+    }
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -3095,7 +3153,13 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
+        framebufferResized_ = true;
+    } else if (presented != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForge",
+            "Vulkan queue present failed: VkResult %d", int(presented));
+        framebufferResized_ = true;
+    }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 
