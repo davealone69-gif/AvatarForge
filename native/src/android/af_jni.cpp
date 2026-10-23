@@ -1011,10 +1011,11 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
                                   float(stats.textureBytes) / (1024.0f * 1024.0f)};
         env->SetFloatArrayRegion(outFloats, 0, 4, values);
     }
-    if (outInts && env->GetArrayLength(outInts) >= 7) {
-        const jint values[7] = {stats.drawCalls, stats.triangles, stats.vertices, stats.shadowMapSize,
-                                stats.msaaSamples, stats.bloomLevels, stats.qualityLevel};
-        env->SetIntArrayRegion(outInts, 0, 7, values);
+    if (outInts && env->GetArrayLength(outInts) >= 9) {
+        const jint values[9] = {stats.drawCalls, stats.triangles, stats.vertices, stats.shadowMapSize,
+                                stats.msaaSamples, stats.bloomLevels, stats.qualityLevel,
+                                stats.lastVkResult, stats.frameFatal ? 1 : 0};
+        env->SetIntArrayRegion(outInts, 0, 9, values);
     }
     return AF_OK;
 }
