@@ -43,6 +43,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <android/log.h>
 
 #ifndef GL_COMPRESSED_RGBA_ASTC_6x6_KHR
 #define GL_COMPRESSED_RGBA_ASTC_6x6_KHR 0x93B4
@@ -1137,6 +1138,18 @@ void GlRenderer::drawForwardPass() {
     }
 
     /* ---- the avatar: one draw per submesh so each gets its own material block ---- */
+    const bool hasEngine = engine_ != nullptr;
+    const bool hasVertices = vertexCount_ > 0;
+    const bool hasIndices = indexCount_ > 0;
+    if ((!avatarVisible_ || !hasEngine || !hasVertices || !hasIndices) && stats_.frames % 120 == 0) {
+        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRender",
+                            "Avatar draw skipped: visible=%d engine=%d uploadedVerts=%d uploadedIndices=%d "
+                            "engineVerts=%d engineIndices=%d lod=%d lodLevels=%d sceneHasModel=%d",
+                            avatarVisible_ ? 1 : 0, hasEngine ? 1 : 0, vertexCount_, indexCount_,
+                            hasEngine ? af_engine_vertex_count(engine_) : 0,
+                            hasEngine ? af_engine_index_count(engine_) : 0,
+                            activeLod_, avatarLods_.levelCount(), scene_.hasModel ? 1 : 0);
+    }
     if (avatarVisible_ && engine_ && vertexCount_ > 0 && indexCount_ > 0) {
         glUseProgram(forwardProgram_);
         glBindVertexArray(avatarVao_);
@@ -1166,7 +1179,23 @@ void GlRenderer::drawForwardPass() {
             if (count > 0) {
                 glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT,
                                reinterpret_cast<const void*>(size_t(offset) * sizeof(uint32_t)));
+                const GLenum drawError = glGetError();
+                if (drawError != GL_NO_ERROR) {
+                    GLint boundVao = 0, boundElementBuffer = 0;
+                    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &boundVao);
+                    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &boundElementBuffer);
+                    __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                        "glDrawElements failed: error=0x%x count=%d offset=%u vao=%d ebo=%d",
+                                        static_cast<unsigned int>(drawError), count, offset,
+                                        boundVao, boundElementBuffer);
+                }
                 ++drawCalls_;
+            } else if (stats_.frames % 120 == 0) {
+                __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRender",
+                                    "Avatar submesh has no drawable indices: slot=%d count=%d offset=%u "
+                                    "lod=%d lodIndexCount=%zu submeshCount=%d",
+                                    i, static_cast<int>(count), offset, activeLod_,
+                                    haveLods ? lod.indexCount : size_t(0), n);
             }
         }
         triangles_ = haveLods ? static_cast<int>(lod.indexCount / 3)
