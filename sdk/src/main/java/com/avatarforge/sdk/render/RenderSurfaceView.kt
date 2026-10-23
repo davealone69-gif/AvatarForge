@@ -573,10 +573,10 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        activeSurface = null
         synchronized(lifecycleLock) { refreshFrameLoopStateLocked("surface-destroyed") }
         stalledFrames = 0
         restartedAfterStall = false
-        activeSurface = null
         surfaceWidth = 0
         surfaceHeight = 0
         /* The renderer must be gone before Android invalidates the Surface. No timeout is safe:
@@ -651,8 +651,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
-        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("detached") }
         super.onDetachedFromWindow()
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("detached") }
     }
 
     private companion object {
