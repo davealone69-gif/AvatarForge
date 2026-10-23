@@ -398,7 +398,9 @@ private:
     bool avatarVisible_ = false;
     FrameScene scene_{};
     EnvironmentParams env_{};
+    EnvironmentParams projectedEnv_{};
     ShGlobal sh_{};
+    bool shProjectionValid_ = false;
     bool meshDirty_ = true;
     bool atlasDirty_ = true;
     int highlightRegion_ = -1;
@@ -2418,7 +2420,24 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     env_.turbidity = options_.turbidity;
     env_.groundAlbedo = options_.groundAlbedo;
     env_.intensity = options_.environmentIntensity;
-    projectToSh(env_, &sh_, 1024);
+
+    /* SH projection samples the analytic sky and performs expensive transcendental work.
+       The environment is independent of the camera and avatar pose, so recomputing it on every
+       frame wastes CPU and can starve animation/render submission on mobile. Reproject only when
+       one of the six actual lighting inputs changes. Exact comparisons are intentional here:
+       these are UI/config values, not accumulated simulation state. */
+    const bool environmentChanged = !shProjectionValid_ ||
+        env_.sunAzimuthDeg != projectedEnv_.sunAzimuthDeg ||
+        env_.sunElevationDeg != projectedEnv_.sunElevationDeg ||
+        env_.sunIntensity != projectedEnv_.sunIntensity ||
+        env_.turbidity != projectedEnv_.turbidity ||
+        env_.groundAlbedo != projectedEnv_.groundAlbedo ||
+        env_.intensity != projectedEnv_.intensity;
+    if (environmentChanged) {
+        projectToSh(env_, &sh_, 1024);
+        projectedEnv_ = env_;
+        shProjectionValid_ = true;
+    }
 
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
     buildCameraUbo(&scene_, camera_, options_, env_, sh_, int(swapExtent_.width), int(swapExtent_.height), true);
