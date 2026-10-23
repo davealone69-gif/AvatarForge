@@ -13,7 +13,8 @@
 namespace af {
 namespace {
 
-constexpr float kLodFractions[2] = {0.55f, 0.25f};
+/* Mobile-first LODs: the renderer selects the finest level at or below 100k triangles. */
+constexpr float kLodFractions[2] = {0.18f, 0.08f};
 constexpr uint32_t kInvalidIndex = std::numeric_limits<uint32_t>::max();
 
 struct EdgeKey {
