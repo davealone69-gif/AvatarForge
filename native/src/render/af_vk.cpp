@@ -651,10 +651,28 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     AF_VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps));
 
     uint32_t formatCount = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, nullptr);
-    std::vector<VkSurfaceFormatKHR> formats(formatCount ? formatCount : 1);
-    if (formatCount) vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, formats.data());
-    else formats[0] = {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+    VkResult formatResult = vkGetPhysicalDeviceSurfaceFormatsKHR(
+        phys_, surface_, &formatCount, nullptr);
+    if (formatResult != VK_SUCCESS) {
+        setError(error, "vkGetPhysicalDeviceSurfaceFormatsKHR(count)", formatResult);
+        return false;
+    }
+    /* Never invent a swapchain format when the driver reports none. That can turn a
+       backend initialization fault into a black screen on vendor/translation stacks. */
+    if (formatCount == 0) {
+        if (error) *error = "Vulkan surface reports zero supported swapchain formats";
+        return false;
+    }
+    std::vector<VkSurfaceFormatKHR> formats(formatCount);
+    formatResult = vkGetPhysicalDeviceSurfaceFormatsKHR(
+        phys_, surface_, &formatCount, formats.data());
+    if (formatResult != VK_SUCCESS || formatCount == 0) {
+        setError(error, "vkGetPhysicalDeviceSurfaceFormatsKHR(list)", formatResult);
+        if (formatResult == VK_SUCCESS && error)
+            *error = "Vulkan surface format list became empty during enumeration";
+        return false;
+    }
+    formats.resize(formatCount);
 
     VkSurfaceFormatKHR chosen = formats[0];
     for (const VkSurfaceFormatKHR& f : formats) {
