@@ -28,6 +28,13 @@ Priority order:
 3. Avatar geometry/lighting defects and existing app functionality.
 4. Branch audit, integration, and safe retirement of redundant work.
 
+## Perfetto tracing setup
+
+- `986ea7b0fe6a8b16941d7d3cd61ef9d49a487c4a`: added Android trace slices around the render loop, camera submission, native renderer call, and telemetry collection in `RenderSurfaceView.kt`.
+- `fac5ecbc2eaf0232efcc56cd3f790c30287f8c4a`: enabled shell profiling with `<profileable android:shell="true" />` in the app manifest.
+- `7dc93a1b08cb031ad4cc0f4ad81ddee51e513d69`: added `docs/PERFETTO_PROFILING.md` with phone/Android Studio/ADB capture steps and interpretation guidance.
+- These commits are on the existing `work/android-engine-dev` branch. Perfetto capture and build validation are not yet confirmed. Trace slices measure CPU-side sections, not proof of GPU completion or display.
+
 ## Latest known renderer commits
 
 On `work/android-engine-dev`, prior session reported these commits:
@@ -89,6 +96,7 @@ Branch deletion capability was not available through the GitHub connector in the
 - Previous work: renderer GL rollback logging/minimal-target fallback and Kotlin zero-frame watchdog were committed to `work/android-engine-dev` (SHAs above).
 - Previous work: PR #7 and #9 were closed without merging; branches were preserved. Branch audit/consolidation remains incomplete.
 - 2026-10-23: Added an explicit ongoing GitHub Actions quality/build monitoring rule: check exact-SHA results after pushes, inspect failures, fix and rerun, recheck PR heads before merge, and log the last verified SHA/run/device status. Current live build status has not yet been confirmed in this update.
+- 2026-10-23: Set up Perfetto source instrumentation and profiling instructions on `work/android-engine-dev`. Exact commits are listed under Perfetto tracing setup. Build and device trace remain pending; check Actions for the latest branch head before treating this as build-verified.
 
 ## Next exact task
 
