@@ -1,0 +1,31 @@
+language: en-US
+early_access: false
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: "**/*.{cpp,cc,c,h,hpp}"
+      instructions: |
+        Prioritize memory safety, ownership/lifetime, undefined behavior, thread safety,
+        Vulkan object lifetime, synchronization, swapchain recreation, failed acquire/present
+        handling, device/surface loss recovery, and Android NDK portability. Do not accept
+        flag-only recovery when the current frame must be abandoned.
+    - path: "**/*.kt"
+      instructions: |
+        Check Android lifecycle, coroutine cancellation, main-thread blocking, JNI boundaries,
+        resource cleanup, configuration changes, and user-visible error handling.
+    - path: "**/*.gradle.kts"
+      instructions: |
+        Check reproducible builds, pinned toolchains, dependency safety, release signing
+        secrets, ABI packaging, and debug/release variant differences.
+  tools:
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+chat:
+  auto_reply: false
