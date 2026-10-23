@@ -137,6 +137,27 @@ AvatarCullResult AvatarCuller::update(const float modelMin[3], const float model
     if (result.visible) {
         result.lod = impl_->visibility.draws.front().lod;
         result.triangleCount = impl_->visibility.totalTriangles;
+
+        /* Prefer a <=50k-triangle LOD on mobile, even when the camera is close. The count is
+           checked against the generated index streams, never the requested simplification ratio.
+           If no generated LOD meets the target, use the coarsest valid level rather than
+           hiding the avatar; callers must treat that as a degraded budget result. */
+        constexpr int kMobileTriangleBudget = 50000;
+        if (counts[0] / 3 > kMobileTriangleBudget) {
+            int budgetLod = -1;
+            for (int level = 0; level < available; ++level) {
+                if (counts[level] > 0 && counts[level] / 3 <= kMobileTriangleBudget) {
+                    budgetLod = level;
+                    break;
+                }
+            }
+            if (budgetLod < 0) {
+                budgetLod = available - 1;
+                result.triangleBudgetExceeded = counts[budgetLod] / 3 > kMobileTriangleBudget;
+            }
+            result.lod = budgetLod;
+            result.triangleCount = counts[budgetLod] / 3;
+        }
     }
     return result;
 }

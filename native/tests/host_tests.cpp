@@ -1551,6 +1551,21 @@ static void testAvatarCuller() {
     CHECK(farLod.visible && farLod.lod == 2 && farLod.triangleCount == 10,
           "renderer culler selects the available coarse LOD at distance (%d, %d triangles)",
           farLod.lod, farLod.triangleCount);
+
+    const int highPolyIndices[3] = {1226016, 147120, 61440};
+    const AvatarCullResult mobileBudget = culler.update(modelMin, modelMax, true,
+        highPolyIndices, 3, camera, 1080, 1920, 1.0f, 1.0f);
+    CHECK(mobileBudget.visible && mobileBudget.lod == 1 && mobileBudget.triangleCount == 49040 &&
+              !mobileBudget.triangleBudgetExceeded,
+          "mobile culler selects the finest available LOD at or below the 50k triangle target (%d, %d tris)",
+          mobileBudget.lod, mobileBudget.triangleCount);
+
+    const int degradedBudgetIndices[3] = {1226016, 300000, 180000};
+    const AvatarCullResult degradedBudget = culler.update(modelMin, modelMax, true,
+        degradedBudgetIndices, 3, camera, 1080, 1920, 1.0f, 1.0f);
+    CHECK(degradedBudget.visible && degradedBudget.lod == 2 && degradedBudget.triangleCount == 60000 &&
+              degradedBudget.triangleBudgetExceeded,
+          "when no generated LOD meets 50k, culler keeps the avatar visible and selects the coarsest available level");
     CameraState lowQualityCamera = camera;
     lowQualityCamera.distance = 3.0f;
     const AvatarCullResult lowQualityLod = culler.update(modelMin, modelMax, true, lodIndices, 3,
@@ -1652,6 +1667,16 @@ static void testAvatarLodSet() {
     CHECK(!rejected.build(vertices.data(), vertices.size(), indices.data(), indices.size(), &malformed, 1) &&
               rejected.levelCount() == 0,
           "malformed source ranges are rejected instead of generating unsafe GPU indices");
+
+    std::vector<uint32_t> outOfRangeIndices = indices;
+    outOfRangeIndices[0] = static_cast<uint32_t>(vertices.size());
+    CHECK(!rejected.build(vertices.data(), vertices.size(), outOfRangeIndices.data(),
+                          outOfRangeIndices.size(), &submesh, 1) && rejected.levelCount() == 0,
+          "out-of-range vertex references are rejected and leave no partial LOD state");
+
+    CHECK(!rejected.build(vertices.data(), vertices.size(), indices.data(), indices.size() - 1,
+                          &submesh, 1) && rejected.levelCount() == 0,
+          "truncated/non-triangle index streams are rejected and leave no partial LOD state");
 }
 
 /* ------------------------------------------ parallel work error propagation -------------------- */

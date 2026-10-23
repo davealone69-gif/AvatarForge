@@ -104,6 +104,8 @@ Not yet chosen. Add a `LICENSE` before publishing this repository.
 
 ## Download and install the Android APK
 
+**Quick links:** [Download builds from GitHub Actions](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) · [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases) · [Current Vulkan recovery PR #14](https://github.com/davealone69-gif/AvatarForge/pull/14)
+
 **Fastest route:** open the [Android APK workflow](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) and open the latest successful run. Under **Artifacts**, download `AvatarForge-Android-<commit>` and extract the ZIP. Install `AvatarForge-debug-arm64.apk` for testing on a modern ARM64 Android phone.
 
 For a versioned, easy-to-find download, open [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases). Pushing a version tag such as `v0.10.0` runs the same build and attaches the debug APK, release APK, and SDK AAR to that release.

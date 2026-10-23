@@ -52,6 +52,10 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
+    /** Last Vulkan result code; zero is VK_SUCCESS. GLES reports zero. */
+    val lastVkResult: Int = 0,
+    /** True only when the Vulkan backend stopped after an unrecoverable failure. */
+    val frameFatal: Boolean = false,
 ) {
     val meetsTarget: Boolean get() = fps >= 30f
 }
@@ -135,12 +139,12 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     fun stats(): RendererStats {
         val floats = FloatArray(4)
-        val ints = IntArray(7)
+        val ints = IntArray(9)
         NativeBridge.rendererStats(handle, floats, ints)
         return RendererStats(
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
-            msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
+            msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6], lastVkResult = ints[7], frameFatal = ints[8] != 0,
         )
     }
 

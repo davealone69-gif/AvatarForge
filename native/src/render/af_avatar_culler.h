@@ -19,6 +19,7 @@ struct AvatarCullResult {
     int lod = -1;
     int triangleCount = 0;
     int culledInstances = 0;
+    bool triangleBudgetExceeded = false; /* true when even the coarsest available LOD exceeds the mobile target */
 };
 
 /*
