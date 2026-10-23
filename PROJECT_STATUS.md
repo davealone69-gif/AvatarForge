@@ -1,0 +1,89 @@
+# AvatarForge Project Checkpoint
+
+Last updated: 2026-10-23
+Repository: https://github.com/davealone69-gif/AvatarForge
+
+## Resume here first
+
+**Canonical working branch:** `work/android-engine-dev`  
+**Protected destination:** `main`  
+**Current rule:** Reuse existing work. Do not start a duplicate fix or create a new branch unless necessary. If a new branch is genuinely required, identify an obsolete branch to retire in the same workflow. Preserve unique commits before closing/deleting anything.
+
+At the start of every new session:
+1. Read this file and check the live branch heads, open PRs, recent commits, and CI results.
+2. Verify the exact commit SHA before editing. This file is a checkpoint, not proof that the remote repository has not changed.
+3. Compare the reported bug against current code and other branches before implementing anything.
+4. Continue from the last incomplete task. Update this checkpoint after meaningful changes and before stopping.
+5. Never claim a build is green unless required checks passed for the exact commit. Never claim device verification unless the APK was installed and tested on a physical device.
+
+## Current objective
+
+Consolidate already-existing AvatarForge fixes into a coherent Android-first renderer/engine line. Do not merge wholesale from diverged branches just because their names sound relevant. Inspect actual diffs, identify what is already present, selectively integrate unique valuable changes, resolve conflicts, and verify.
+
+Priority order:
+1. Renderer/frame-loop stability, EGL/Vulkan surface and swapchain recovery.
+2. Android build and native regression checks.
+3. Avatar geometry/lighting defects and existing app functionality.
+4. Branch audit, integration, and safe retirement of redundant work.
+
+## Latest known renderer commits
+
+On `work/android-engine-dev`, prior session reported these commits:
+- `1397b4c91391ffdfcf01b7ca206f57e604c11543`: GL render-target rollback logging and minimal-target fallback in `native/src/render/af_gl.cpp`.
+- `d6f554533249d26b92247ee68df057631462a98c`: Kotlin render watchdog/recovery in `sdk/src/main/java/com/avatarforge/sdk/render/RenderSurfaceView.kt`.
+
+Re-check the live branch head and source before assuming these commits remain current or sufficient.
+
+## Verification truth
+
+- A prior report said Android Actions run #185 passed for commit `d6f554533249d26b92247ee68df057631462a98c`. Re-check the live run and exact head before relying on that result.
+- Physical Samsung Galaxy S24 runtime verification is **OUTSTANDING** unless a newer verified record proves otherwise.
+- CI success is not installed-device verification. A successful renderer initialization is not proof of visible frames. Zero FPS/zero triangles is inconclusive/failure evidence, not a pass.
+- Do not label the app production-ready without the required CI checks and installed-device runtime verification.
+
+## Known open PRs at last checkpoint
+
+Re-check state and head SHAs on resume:
+- [#4 Android engine/rendering update](https://github.com/davealone69-gif/AvatarForge/pull/4), `work/android-engine-dev` → `main`.
+- [#8 latest Dropbox ZIP fixes](https://github.com/davealone69-gif/AvatarForge/pull/8), targeting `work/android-engine-dev`.
+- [#10 avatar head/hands geometry pass](https://github.com/davealone69-gif/AvatarForge/pull/10).
+- [#11 invalid zero-frame diagnostics](https://github.com/davealone69-gif/AvatarForge/pull/11).
+- [#12 renderer frame-loop/resize recovery](https://github.com/davealone69-gif/AvatarForge/pull/12).
+- [#13 audited branch integration](https://github.com/davealone69-gif/AvatarForge/pull/13).
+- [#14 Vulkan frame/swapchain recovery](https://github.com/davealone69-gif/AvatarForge/pull/14).
+- [#15 Android/static-analysis quality gates](https://github.com/davealone69-gif/AvatarForge/pull/15).
+
+Prior session closed PRs #7 and #9 without merging; that did **not** delete their branches. Verify their current state. PR #1 closure was not confirmed. Do not infer branch deletion from PR closure.
+
+## Branch audit inventory
+
+Last observed branch list:
+- `chore/apply-dropbox-update-2026-10-21`
+- `chore/quality-gates-ai-review`
+- `feat/avatar-realism-upgrade`
+- `feat/json-asset-registry`
+- `feat/repo-wide-engine-consolidation`
+- `fix/avatar-head-hands-geometry-pass1`
+- `fix/avatarforge-overexposed-render`
+- `fix/diagnostics-invalid-render-telemetry`
+- `fix/renderer-frame-loop-resize-recovery`
+- `fix/renderer-recovery-2026-10-21`
+- `fix/restore-self-test-menu-phase4`
+- `fix/vulkan-frame-recovery`
+- `integrate/audited-branch-work`
+- `main`
+- `work/android-engine-dev`
+
+Earlier comparisons showed significant divergence and unique work on several branches, especially `fix/vulkan-frame-recovery`, `fix/renderer-frame-loop-resize-recovery`, `fix/diagnostics-invalid-render-telemetry`, `fix/avatar-head-hands-geometry-pass1`, `chore/apply-dropbox-update-2026-10-21`, and `integrate/audited-branch-work`. Do **not** delete these blindly. Compare each against the canonical branch and inspect per-file patches/commit history. A branch may contain a fix already applied in another form, plus other unique fixes.
+
+Branch deletion capability was not available through the GitHub connector in the prior session. Do not claim a branch was deleted unless the remote branch is confirmed absent.
+
+## Work log
+
+- 2026-10-23: Created this persistent checkpoint so a new chat can resume from repository state instead of relying on conversation memory.
+- Previous work: renderer GL rollback logging/minimal-target fallback and Kotlin zero-frame watchdog were committed to `work/android-engine-dev` (SHAs above).
+- Previous work: PR #7 and #9 were closed without merging; branches were preserved. Branch audit/consolidation remains incomplete.
+
+## Next exact task
+
+Resume the branch audit from live GitHub state. For each branch, compare against `work/android-engine-dev`, identify changes already present vs unique changes, and record a disposition: **already integrated**, **selectively port**, **keep for later**, or **safe to retire**. Prioritize renderer/Vulkan fixes. Do not close/delete a branch with unique unpreserved work. Then run checks on the exact resulting commit and update this file.
