@@ -151,7 +151,10 @@ AvatarCullResult AvatarCuller::update(const float modelMin[3], const float model
                     break;
                 }
             }
-            if (budgetLod < 0) budgetLod = available - 1;
+            if (budgetLod < 0) {
+                budgetLod = available - 1;
+                result.triangleBudgetExceeded = counts[budgetLod] / 3 > kMobileTriangleBudget;
+            }
             result.lod = budgetLod;
             result.triangleCount = counts[budgetLod] / 3;
         }
