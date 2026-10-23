@@ -697,13 +697,35 @@ void GlRenderer::ensureGeometryBuffers() {
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
     if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+    if (vertexVbo_ == 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                            "Vertex buffer allocation failed: glGenBuffers returned 0");
+        return;
+    }
     if (vbytes > vertexCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbytes + vbytes / 4), nullptr, GL_DYNAMIC_DRAW);
-        vertexCapacity_ = vbytes + vbytes / 4;
+        const GLint64 capacity = vbytes + vbytes / 4;
+        while (glGetError() != GL_NO_ERROR) {}
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(capacity), nullptr, GL_DYNAMIC_DRAW);
+        const GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                "Vertex buffer allocation failed: error=0x%x bytes=%lld",
+                                static_cast<unsigned int>(err), static_cast<long long>(capacity));
+            return;
+        }
+        vertexCapacity_ = capacity;
         vertexCount_ = 0;   /* force a full upload below */
     }
     if (meshDirty_ || vertexCount_ != vcount) {
+        while (glGetError() != GL_NO_ERROR) {}
         glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), verts);
+        const GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                "Vertex upload failed: error=0x%x bytes=%lld sourceVerts=%d",
+                                static_cast<unsigned int>(err), static_cast<long long>(vbytes), vcount);
+            return;
+        }
         vertexCount_ = vcount;
     }
 
@@ -713,17 +735,44 @@ void GlRenderer::ensureGeometryBuffers() {
     if (icount > 0 && indices) {
         const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
         if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
+        if (indexIbo_ == 0) {
+            __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                "Index buffer allocation failed: glGenBuffers returned 0");
+            return;
+        }
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
         if (ibytes > indexCapacity_) {
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibytes + ibytes / 4), nullptr, GL_STATIC_DRAW);
-            indexCapacity_ = ibytes + ibytes / 4;
+            const GLint64 capacity = ibytes + ibytes / 4;
+            while (glGetError() != GL_NO_ERROR) {}
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(capacity), nullptr, GL_STATIC_DRAW);
+            const GLenum err = glGetError();
+            if (err != GL_NO_ERROR) {
+                __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                    "Index buffer allocation failed: error=0x%x bytes=%lld",
+                                    static_cast<unsigned int>(err), static_cast<long long>(capacity));
+                return;
+            }
+            indexCapacity_ = capacity;
             indexCount_ = 0;
         }
         if (indexDirty_ || indexCount_ != icount) {
+            while (glGetError() != GL_NO_ERROR) {}
             glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
+            const GLenum err = glGetError();
+            if (err != GL_NO_ERROR) {
+                __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                                    "Index upload failed: error=0x%x bytes=%lld sourceIndices=%d",
+                                    static_cast<unsigned int>(err), static_cast<long long>(ibytes), icount);
+                return;
+            }
             indexCount_ = icount;
             indexDirty_ = false;
         }
+    } else {
+        indexCount_ = 0;
+        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRender",
+                            "No source indices available for upload: engineIndices=%d lodIndices=%zu",
+                            sourceIndexCount, lodIndices.size());
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     meshDirty_ = false;
