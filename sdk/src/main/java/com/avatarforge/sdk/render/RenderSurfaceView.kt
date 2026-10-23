@@ -81,6 +81,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Accessed only on the render thread. */
     private var renderer: AvatarRenderer? = null
     @Volatile private var activeSurface: Surface? = null
+    /** Render-thread watchdog state for a renderer that returns without counting frames. */
+    private var stalledFrames = 0
+    private var restartedAfterStall = false
     @Volatile private var surfaceWidth = 0
     @Volatile private var surfaceHeight = 0
     private var performanceHintSession: PerformanceHintManager.Session? = null
@@ -306,8 +309,13 @@ class RenderSurfaceView @JvmOverloads constructor(
             try {
                 r.setCamera(camera)
                 r.frame(delta.coerceIn(0f, 0.1f))
-                _stats.value = r.stats()
+                val st = r.stats()
+                _stats.value = st
                 reportFrameWorkDuration(System.nanoTime() - frameStartNs)
+                /* An empty scene still counts frames. Zero FPS plus zero triangles for a full
+                   second therefore points to a renderer that is returning before drawing. */
+                if (st.fps <= 0f && st.triangles == 0) stalledFrames++ else stalledFrames = 0
+                if (stalledFrames >= STALL_FRAMES) handleRendererStall()
             } catch (t: Throwable) {
                 closePerformanceHints()
                 _error.value = t.message ?: t.javaClass.simpleName
@@ -327,6 +335,29 @@ class RenderSurfaceView @JvmOverloads constructor(
                 val delayMs = (remainingNs + 999_999L) / 1_000_000L
                 handler.postDelayed(this, delayMs)
             }
+        }
+    }
+
+    /** One-shot recovery for a renderer stuck at zero frames; all work runs on the render thread. */
+    private fun handleRendererStall() {
+        stalledFrames = 0
+        val surface = activeSurface
+        if (!restartedAfterStall && surface?.isValid == true && !released) {
+            restartedAfterStall = true
+            android.util.Log.e("AvatarForge", "renderer produced no frames; rebuilding once")
+            try {
+                createRendererOnRenderThread(surface)
+                if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
+                _error.value = "Renderer stalled; restarted once. Checking for frames."
+            } catch (t: Throwable) {
+                runCatching { renderer?.destroy() }
+                renderer = null
+                _rendererInfo.value = null
+                _error.value = "Renderer recovery failed: ${t.message ?: t.javaClass.simpleName}. Check logcat -s AvatarForge."
+            }
+        } else {
+            _error.value = "Renderer produced no frames after recovery. Check logcat -s AvatarForge."
+            android.util.Log.e("AvatarForge", _error.value ?: "renderer stalled")
         }
     }
 
@@ -436,6 +467,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         val surface: Surface = holder.surface
         activeSurface = surface
+        stalledFrames = 0
+        restartedAfterStall = false
         onRenderThread {
             try {
                 createRendererOnRenderThread(surface)
@@ -489,6 +522,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        stalledFrames = 0
+        restartedAfterStall = false
         activeSurface = null
         surfaceWidth = 0
         surfaceHeight = 0
@@ -557,5 +592,6 @@ class RenderSurfaceView @JvmOverloads constructor(
         const val FRAME_INTERVAL_NS = 16_666_667L
         const val FRAME_RETRY_MS = 16L
         const val FRAME_ERROR_RETRY_MS = 1000L
+        const val STALL_FRAMES = 60
     }
 }
