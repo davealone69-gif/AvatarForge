@@ -104,3 +104,57 @@ Branch deletion capability was not available through the GitHub connector in the
 2. If a build is running, wait/check again; if failed, inspect job logs, fix on the existing branch, push, and verify the new SHA.
 3. Resume the branch audit. For each branch, compare against `work/android-engine-dev`, identify changes already present vs unique changes, and record a disposition: **already integrated**, **selectively port**, **keep for later**, or **safe to retire**.
 4. Do not close/delete a branch with unique unpreserved work. Run checks on the exact resulting commit and update this file.
+
+## AvatarForge renderer review notes — 2026-10-24
+
+### User-visible symptoms and primary diagnosis target
+
+- The most important unresolved symptom is the renderer self-test reporting **0 FPS, 0 draw calls, and 0 triangles/vertices** during a 15-second sample, despite the GPU surface/backend appearing initialized.
+- Treat this as **invalid/inconclusive rendering evidence**, not as a performance result and not as proof the adaptive-quality controller works.
+- A second reported symptom is the avatar disappearing after sustained low frame rates and returning after leaving/re-entering the app.
+- The key investigation is to trace the complete frame path: model loaded and retained → visible scene/geometry selected → vertex/index data available → draw commands recorded → native submission attempted → queue submission accepted → presentation accepted → valid frame and geometry telemetry. Log each stage distinctly; do not equate accepted presentation with GPU completion or proof of visible pixels.
+- Check the Kotlin render-loop callback lifecycle, resize/surface failure handling, native renderer return values, buffer/target creation, shader/pipeline failures, and Vulkan fence/semaphore/swapchain recovery. Ensure failure cannot silently cancel the only frame callback forever.
+- The self-test must return `INCONCLUSIVE` when no valid frame/timing sample exists. An initialized GPU backend is not equivalent to valid telemetry or a visible avatar.
+
+### Relevant pull requests observed during this review
+
+These PRs were returned by the live GitHub PR search on 2026-10-24. This is a search snapshot, not a fresh verification of their current head SHAs or CI status. Recheck each PR and Actions before relying on it.
+
+- [PR #12 — Recover renderer frame loop after transient surface resize failure](https://github.com/davealone69-gif/AvatarForge/pull/12): recorded changes keep the visible frame loop alive after transient resize failure, retain errors until a successful frame, restore self-test/diagnostics menu, and improve Vulkan failure recovery. Its description explicitly says latest native commits require CI rechecking and physical S24 rendering remains unverified.
+- [PR #11 — Reject invalid zero-frame renderer evidence](https://github.com/davealone69-gif/AvatarForge/pull/11): changes zero-only test samples to `INCONCLUSIVE` and distinguishes initialized GPU backend from valid frame telemetry. This improves diagnostic honesty but does not repair the underlying renderer.
+- [PR #14 — Fix Vulkan frame and swapchain recovery](https://github.com/davealone69-gif/AvatarForge/pull/14): records checks for fence waits, image acquisition, command-buffer operations, queue submission, presentation, surface recreation and swapchain recovery; adds attempt/submission/present counters, last VkResult and fatal-state logging. The PR description reported its Android workflow pending at the time observed. No physical-device verification was claimed.
+- [PR #13 — Integrate audited branch work before renderer verification](https://github.com/davealone69-gif/AvatarForge/pull/13): selectively integrates asset registry/schema and renderer recovery documentation; does not claim all assets are wired into UI or S24 verification.
+- [PR #10 — Fix avatar head silhouette and hand proportions (pass 1)](https://github.com/davealone69-gif/AvatarForge/pull/10): incremental procedural geometry edits only; not a full replacement model and not visually device-verified.
+- [PR #15 — Add Android and static-analysis quality gates](https://github.com/davealone69-gif/AvatarForge/pull/15): proposed Android unit tests, lint, debug APK artifact and scheduled/change-triggered Semgrep checks. Its description said workflows had not run yet at the time observed; do not call the gate green without checking.
+- [PR #4 — Apply AvatarForge Android engine and rendering update](https://github.com/davealone69-gif/AvatarForge/pull/4): proposed promotion of the engine branch to main, including Android lifecycle, renderer/GPU profiles, culling/LOD, texture compression and tests. CI must pass before merge; S24 runtime remained outstanding in its description.
+- [PR #8 — Apply latest Dropbox ZIP fixes to Android engine branch](https://github.com/davealone69-gif/AvatarForge/pull/8): earlier integration target; inspect actual current diff and CI before deciding whether it is redundant or still has unique work.
+
+### Repository status document and verification caveats
+
+The live `main` branch `STATUS.md` and `README.md` fetched on 2026-10-24 describe an earlier 0.10.1 build/test pass. They report host harness checks, Kotlin/JVM tests, Rust checks, Android native builds, debug/release APK builds, shader validation, and static APK checks. Those are historical repository claims and do **not** establish that the latest renderer PR heads build or that the renderer works on the S24. The status document itself says device/GPU execution remains outstanding. It also reports a Rust end-to-end test assertion still red and that the release APK uses a fallback debug certificate if no release keystore is supplied.
+
+The README links to a [renderer recovery note](https://github.com/davealone69-gif/AvatarForge/blob/main/docs/RENDERER_RECOVERY_2026-10-21.md). It describes a retest candidate, not a verified fix. It documents checksums for the APK/AAR from a supplied bundle; verify actual downloaded files against those checksums before installation. It states that GitHub Release binary assets were missing at the time that note was written.
+
+### Other outstanding functional/quality items
+
+- The incremental head/hands geometry changes are not a complete realistic replacement. Inspect actual mesh generation and the viewer/export path before claiming the model has been replaced.
+- The previously reported thermal postponement uses threshold level 3 (Severe) or higher in the remembered design: 0 none, 1 light, 2 moderate, 3 severe, 4 critical, 5 emergency, 6 shutdown. Verify the actual current source and avoid changing the safety threshold without reviewing thermal behavior and generation reliability.
+- Verify that the self-test/diagnostics menu is present and usable in the current app; PR #12 says it restores it, but source/installed-device verification is still required.
+- Verify that asset registry/schema entries are connected to real UI and engine paths before describing them as implemented features.
+- The project’s desired rendering backends are custom Vulkan primary and OpenGL ES 3.1 fallback. Rust and Kotlin are intended to interface with the same native C ABI. Do not introduce a third-party engine or assert both backends work on hardware without evidence.
+
+### Status labels at this checkpoint
+
+- **PARTIAL:** code-level renderer recovery changes exist in PRs and prior branch commits.
+- **UNVERIFIED:** current PR heads and their latest Actions results have not been rechecked in this note; latest build status for exact SHAs is not established.
+- **UNVERIFIED:** installed-device rendering, live non-zero frame telemetry, actual avatar visibility, generation, export, resize/background recovery and thermal soak on the Samsung Galaxy S24.
+- **MISSING from this review:** a current exact-head Actions/run URL + result and a physical-device test report proving visible avatar geometry and valid frame telemetry.
+
+### Next actions, in order
+
+1. Fetch current `work/android-engine-dev` HEAD SHA, current PR #11/#12/#14 head SHAs, and the latest Actions/check runs for those exact SHAs. Inspect failed/cancelled job logs; do not rely on stale runs.
+2. Inspect the current source around `RenderSurfaceView`, `AvatarRenderer.resize()`, native frame recording/submission/presentation and telemetry counters. Confirm whether the proposed fixes are actually present on the canonical branch or only on PR branches.
+3. Run the relevant host/native tests and Android build against the exact chosen commit. Record exact command, SHA, workflow URL and outcome.
+4. Publish a direct, verified APK artifact link from a successful workflow/release. Do not invent a link or claim a binary is the latest build if its commit cannot be tied to the source.
+5. On the S24, install that exact APK and test visible geometry/non-zero frames, initial surface creation, resize/rotation, background/foreground, renderer restart, real generation, GLB export/import, airplane-mode behavior and a sustained thermal/performance soak. Record measured results and logs.
+6. Only then classify the renderer fix as **REAL + VERIFIED**. Until then, keep the device status **UNVERIFIED** and do not merge or announce production readiness prematurely.
