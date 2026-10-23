@@ -137,6 +137,23 @@ AvatarCullResult AvatarCuller::update(const float modelMin[3], const float model
     if (result.visible) {
         result.lod = impl_->visibility.draws.front().lod;
         result.triangleCount = impl_->visibility.totalTriangles;
+
+        /* Keep high-poly imported assets inside a predictable mobile triangle budget even when
+           the camera is close. Choose the finest available LOD <= 100k triangles; if the
+           simplifier cannot reach the budget, choose the coarsest available level. */
+        constexpr int kMobileTriangleBudget = 100000;
+        if (counts[0] / 3 > kMobileTriangleBudget) {
+            int budgetLod = -1;
+            for (int level = 0; level < available; ++level) {
+                if (counts[level] > 0 && counts[level] / 3 <= kMobileTriangleBudget) {
+                    budgetLod = level;
+                    break;
+                }
+            }
+            if (budgetLod < 0) budgetLod = available - 1;
+            result.lod = budgetLod;
+            result.triangleCount = counts[budgetLod] / 3;
+        }
     }
     return result;
 }
