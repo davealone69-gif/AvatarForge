@@ -1551,6 +1551,13 @@ static void testAvatarCuller() {
     CHECK(farLod.visible && farLod.lod == 2 && farLod.triangleCount == 10,
           "renderer culler selects the available coarse LOD at distance (%d, %d triangles)",
           farLod.lod, farLod.triangleCount);
+
+    const int highPolyIndices[3] = {1226016, 220320, 97920};
+    const AvatarCullResult mobileBudget = culler.update(modelMin, modelMax, true,
+        highPolyIndices, 3, camera, 1080, 1920, 1.0f, 1.0f);
+    CHECK(mobileBudget.visible && mobileBudget.lod == 1 && mobileBudget.triangleCount == 73440,
+          "mobile culler keeps a 408k-triangle avatar under the 100k budget using its finest safe LOD (%d, %d tris)",
+          mobileBudget.lod, mobileBudget.triangleCount);
     CameraState lowQualityCamera = camera;
     lowQualityCamera.distance = 3.0f;
     const AvatarCullResult lowQualityLod = culler.update(modelMin, modelMax, true, lodIndices, 3,
