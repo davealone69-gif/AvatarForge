@@ -48,6 +48,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <android/log.h>
 #include <vector>
 
 namespace af {
@@ -2840,6 +2841,21 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     }
 
     /* ---- the avatar --------------------------------------------------------------------------- */
+    const bool hasEngine = engine_ != nullptr;
+    const bool hasVertexBuffer = vertexBuffer_ != VK_NULL_HANDLE;
+    const bool hasIndexBuffer = indexBuffer_ != VK_NULL_HANDLE;
+    if ((!avatarVisible_ || !hasEngine || vertexCount_ <= 0 || !hasVertexBuffer ||
+         indexCount_ <= 0 || !hasIndexBuffer) && stats_.frames % 120 == 0) {
+        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRender",
+                            "Vulkan avatar draw skipped: visible=%d engine=%d uploadedVerts=%d uploadedIndices=%d "
+                            "vertexBuffer=%d indexBuffer=%d engineVerts=%d engineIndices=%d lod=%d lodLevels=%d "
+                            "sceneHasModel=%d",
+                            avatarVisible_ ? 1 : 0, hasEngine ? 1 : 0, vertexCount_, indexCount_,
+                            hasVertexBuffer ? 1 : 0, hasIndexBuffer ? 1 : 0,
+                            hasEngine ? af_engine_vertex_count(engine_) : 0,
+                            hasEngine ? af_engine_index_count(engine_) : 0,
+                            activeLod_, avatarLods_.levelCount(), scene_.hasModel ? 1 : 0);
+    }
     if (avatarVisible_ && engine_ && vertexCount_ > 0 &&
         vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
