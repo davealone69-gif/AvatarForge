@@ -29,6 +29,7 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <android/log.h>
 
 namespace af {
 
@@ -180,7 +181,13 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
     std::string vulkanError = "the Vulkan backend is switched off in the viewer settings";
     Renderer* backend = nullptr;
     if (options.preferVulkan) backend = createVulkanRenderer(window, options, &vulkanError);
-    if (backend) return new BudgetRenderer(backend, options);
+    if (backend) {
+        __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRender", "Vulkan backend initialized successfully");
+        return new BudgetRenderer(backend, options);
+    }
+    __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
+                        "Vulkan backend failed; falling back to GLES. preferVulkan=%d reason=%s",
+                        options.preferVulkan ? 1 : 0, vulkanError.c_str());
 
     std::string glError = "not attempted";
     backend = createGlRenderer(window, options, &glError);
