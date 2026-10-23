@@ -30,6 +30,7 @@ import android.os.PerformanceHintManager
 import android.os.Process
 import android.os.Trace
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -93,7 +94,10 @@ class RenderSurfaceView @JvmOverloads constructor(
     val thermalStatusFlow: StateFlow<Int?> = _thermalStatusFlow.asStateFlow()
     @Volatile private var thermalStatus: Int? = null
     private val thermalExecutor = Executor { command -> handler.post(command) }
+    /** Host intent and Android's effective visibility are separate states. */
+    @Volatile private var frameLoopRequested = false
     @Volatile private var visible = false
+    private var frameLoopCount = 0L
 
     init {
         registerThermalListener()
@@ -278,14 +282,31 @@ class RenderSurfaceView @JvmOverloads constructor(
         return current.pickRegion(handle, viewX, viewY, viewWidth, viewHeight, camera)
     }
 
-    /** Starts/stops the frame loop. Called from the host lifecycle. */
+    /** Host intent to render. Effective scheduling also requires the view and Surface to be visible. */
     fun setFrameLoopEnabled(enabled: Boolean) {
         synchronized(lifecycleLock) {
             if (released) return
-            visible = enabled
-            handler.removeCallbacks(frameLoop)
-            frameLoop.resetClock()
-            if (enabled) handler.post(frameLoop)
+            frameLoopRequested = enabled
+            refreshFrameLoopStateLocked("host-request")
+        }
+    }
+
+    /** Must be called under lifecycleLock. Never let an ancestor's visibility overwrite host intent. */
+    private fun refreshFrameLoopStateLocked(reason: String) {
+        val surfaceReady = activeSurface?.isValid == true
+        val shouldRun = frameLoopRequested && isShown && windowVisibility == VISIBLE && surfaceReady && !released
+        if (visible == shouldRun) return
+        visible = shouldRun
+        Log.i(
+            TAG,
+            "frameLoop state=$visible requested=$frameLoopRequested shown=$isShown " +
+                "windowVisibility=$windowVisibility surfaceValid=$surfaceReady reason=$reason",
+        )
+        handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
+        if (shouldRun && !handler.post(frameLoop)) {
+            visible = false
+            Log.e(TAG, "failed to enqueue frameLoop")
         }
     }
 
@@ -297,6 +318,10 @@ class RenderSurfaceView @JvmOverloads constructor(
         fun resetClock() { lastNs = 0L }
 
         override fun run() {
+            frameLoopCount++
+            if (frameLoopCount == 1L || frameLoopCount % LOG_FRAME_INTERVAL == 0L) {
+                Log.d(TAG, "frameLoop.run #$frameLoopCount visible=$visible requested=$frameLoopRequested rendererReady=${renderer != null} surfaceValid=${activeSurface?.isValid == true}")
+            }
             val r = renderer
             if (r == null) {
                 resetClock()
@@ -317,7 +342,13 @@ class RenderSurfaceView @JvmOverloads constructor(
                 }
                 Trace.beginSection("AvatarForge.renderer.frame")
                 try {
+                    if (frameLoopCount == 1L || frameLoopCount % LOG_FRAME_INTERVAL == 0L) {
+                        Log.d(TAG, "native frame call BEGIN #$frameLoopCount")
+                    }
                     r.frame(delta.coerceIn(0f, 0.1f))
+                    if (frameLoopCount == 1L || frameLoopCount % LOG_FRAME_INTERVAL == 0L) {
+                        Log.d(TAG, "native frame call END #$frameLoopCount")
+                    }
                 } finally {
                     Trace.endSection()
                 }
@@ -486,6 +517,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         val surface: Surface = holder.surface
         activeSurface = surface
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("surface-created") }
         stalledFrames = 0
         restartedAfterStall = false
         onRenderThread {
@@ -541,6 +573,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("surface-destroyed") }
         stalledFrames = 0
         restartedAfterStall = false
         activeSurface = null
@@ -598,13 +631,33 @@ class RenderSurfaceView @JvmOverloads constructor(
         this.engine = engine
     }
 
-    /** Set once in XML/inflation; kept for parity with View's own visibility semantics. */
+    /** Called for this view and ancestor visibility changes. Keep host intent independent. */
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
-        setFrameLoopEnabled(visibility == VISIBLE)
+        synchronized(lifecycleLock) {
+            Log.d(TAG, "onVisibilityChanged changedView=${changedView.javaClass.simpleName} visibility=$visibility shown=$isShown")
+            refreshFrameLoopStateLocked("view-visibility")
+        }
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("window-visibility") }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("attached") }
+    }
+
+    override fun onDetachedFromWindow() {
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked("detached") }
+        super.onDetachedFromWindow()
     }
 
     private companion object {
+        const val TAG = "AvatarForge"
+        const val LOG_FRAME_INTERVAL = 60L
         /* 60 Hz target. The kernel's own budget controller steps quality down if frames take too
            long, so this interval is a ceiling on CPU submissions, not a promise the GPU will
            keep - the honest number is in RendererStats.fps. */
