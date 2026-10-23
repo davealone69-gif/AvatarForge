@@ -533,6 +533,8 @@ private fun SystemCheckPanel(
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", when {
         rendererError != null -> rendererError
+        stats.frameFatal -> "FATAL: Vulkan renderer stopped (VkResult ${stats.lastVkResult})"
+        stats.lastVkResult != 0 -> "Vulkan recovery/result code ${stats.lastVkResult}; inspect renderer logs"
         info != null -> "render loop active; no current reported error"
         result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
         else -> "waiting for renderer initialisation"
