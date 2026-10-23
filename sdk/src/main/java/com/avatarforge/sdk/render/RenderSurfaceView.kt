@@ -28,6 +28,7 @@ import android.os.Looper
 import android.os.Build
 import android.os.PerformanceHintManager
 import android.os.Process
+import android.os.Trace
 import android.util.AttributeSet
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -306,16 +307,32 @@ class RenderSurfaceView @JvmOverloads constructor(
             val delta = if (lastNs == 0L) 1f / 60f
                         else ((frameStartNs - lastNs) / 1_000_000_000.0).toFloat()
             lastNs = frameStartNs
+            Trace.beginSection("AvatarForge.frame")
             try {
-                r.setCamera(camera)
-                r.frame(delta.coerceIn(0f, 0.1f))
-                val st = r.stats()
-                _stats.value = st
-                reportFrameWorkDuration(System.nanoTime() - frameStartNs)
-                /* An empty scene still counts frames. Zero FPS plus zero triangles for a full
-                   second therefore points to a renderer that is returning before drawing. */
-                if (st.fps <= 0f && st.triangles == 0) stalledFrames++ else stalledFrames = 0
-                if (stalledFrames >= STALL_FRAMES) handleRendererStall()
+                Trace.beginSection("AvatarForge.camera")
+                try {
+                    r.setCamera(camera)
+                } finally {
+                    Trace.endSection()
+                }
+                Trace.beginSection("AvatarForge.renderer.frame")
+                try {
+                    r.frame(delta.coerceIn(0f, 0.1f))
+                } finally {
+                    Trace.endSection()
+                }
+                Trace.beginSection("AvatarForge.renderer.stats")
+                try {
+                    val st = r.stats()
+                    _stats.value = st
+                    reportFrameWorkDuration(System.nanoTime() - frameStartNs)
+                    /* An empty scene still counts frames. Zero FPS plus zero triangles for a full
+                       second therefore points to a renderer that is returning before drawing. */
+                    if (st.fps <= 0f && st.triangles == 0) stalledFrames++ else stalledFrames = 0
+                    if (stalledFrames >= STALL_FRAMES) handleRendererStall()
+                } finally {
+                    Trace.endSection()
+                }
             } catch (t: Throwable) {
                 closePerformanceHints()
                 _error.value = t.message ?: t.javaClass.simpleName
@@ -324,6 +341,8 @@ class RenderSurfaceView @JvmOverloads constructor(
                    the view remains visible. A successful frame clears the stale error below. */
                 if (visible) handler.postDelayed(this, FRAME_ERROR_RETRY_MS)
                 return
+            } finally {
+                Trace.endSection()
             }
             if (_error.value != null) _error.value = null
             if (visible) {
