@@ -52,6 +52,8 @@
 #define GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR 0x93D4
 #endif
 
+#define AF_GL_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "AvatarForge", __VA_ARGS__)
+
 namespace af {
 namespace {
 
@@ -1340,15 +1342,24 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         if (createTargets(&error)) {
             activeTargetOptions_ = options_;
         } else {
-            /* A quality transition is never allowed to turn a valid frame into an empty stage.
-               Clean partial allocations and reconstruct the last known-good target set in the same
-               frame. Only a lost EGL context may stop drawing. */
+            AF_GL_LOGE("render targets failed (%s); rolling back", error.c_str());
+            /* Keep the last known-good target set if a quality transition fails. */
             destroyTargets();
             options_ = rollback;
             std::string rollbackError;
             if (!createTargets(&rollbackError)) {
-                contextLost_ = true;
-                return;
+                AF_GL_LOGE("rollback targets failed (%s); trying minimal targets", rollbackError.c_str());
+                destroyTargets();
+                options_.msaaSamples = 1;
+                options_.enableShadows = false;
+                options_.enableBloom = false;
+                options_.bloomLevels = 0;
+                std::string minimalError;
+                if (!createTargets(&minimalError)) {
+                    AF_GL_LOGE("minimal targets failed (%s); renderer stopped", minimalError.c_str());
+                    contextLost_ = true;
+                    return;
+                }
             }
             activeTargetOptions_ = options_;
         }
@@ -1369,7 +1380,10 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     eglQuerySurface(display_, surface_, EGL_WIDTH, &w);
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &h);
     if (w > 0 && h > 0 && (w != surfaceWidth_ || h != surfaceHeight_)) {
-        if (!resize(w, h)) return;
+        if (!resize(w, h)) {
+            AF_GL_LOGE("resize to %dx%d failed; frame skipped", w, h);
+            return;
+        }
     }
 
     updateScene(deltaSeconds);
@@ -1385,6 +1399,7 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         /* A lost context cannot be recovered by this backend: report it and stop drawing rather
            than rendering into nothing. AvatarEngine.health() surfaces the flag. */
         const EGLint err = eglGetError();
+        AF_GL_LOGE("eglSwapBuffers failed (egl error 0x%x)", unsigned(err));
         if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) contextLost_ = true;
     }
 
