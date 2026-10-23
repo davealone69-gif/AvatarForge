@@ -415,6 +415,7 @@ private:
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     int drawCallsThisFrame_ = 0;
     int trianglesThisFrame_ = 0;
+    bool lodBudgetWarningLogged_ = false;
 };
 
 /* ============================================================================================
@@ -2458,6 +2459,12 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     avatarVisible_ = cull.visible;
     activeLod_ = std::max(0, cull.lod);
     trianglesThisFrame_ = cull.triangleCount;
+    if (cull.triangleBudgetExceeded && !lodBudgetWarningLogged_) {
+        std::fprintf(stderr,
+                     "AvatarForge: mobile triangle target unmet; selected coarsest available LOD (%d triangles, target 50000).\n",
+                     cull.triangleCount);
+        lodBudgetWarningLogged_ = true;
+    }
 
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
@@ -3380,6 +3387,7 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
     meshDirty_ = true;
     indexDirty_ = true;
     activeLod_ = 0;
+    lodBudgetWarningLogged_ = false;
     indirectCommandCount_ = 0;
     atlasUploaded_ = false;
     materialUboSize_ = 0;
@@ -3401,7 +3409,10 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
     }
 }
 
-void VulkanRenderer::invalidateMesh() { meshDirty_ = true; }
+void VulkanRenderer::invalidateMesh() {
+    meshDirty_ = true;
+    lodBudgetWarningLogged_ = false;
+}
 
 void VulkanRenderer::setCamera(const CameraState& camera) { camera_ = camera; }
 
