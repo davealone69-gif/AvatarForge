@@ -37,7 +37,12 @@ AGP 8.x needs JDK 17, the renderer links `vulkan`/`EGL`/`GLESv3`/`android`/`log`
 sysroot, and the kernel needs only zlib (provided by the Android platform, `-lz` on a host).
 
 Hardware: this project is developed and verified on a 2 vCPU / 2 GB container. Configure Gradle
-accordingly (`gradle.properties` already does: no daemon, no parallel module builds, 1.5 GB heap).
+accordingly (`gradle.properties` already does: no daemon, no parallel module builds, 1024 MB heap
+and a 384 MB metaspace cap, with the Kotlin compiler running in-process). The CI runner has 7 GB
+and overrides only the JVM args via `-Dorg.gradle.jvmargs` (`GRADLE_JVMARGS` in the workflow:
+same 1024 MB heap, 768 MB metaspace) because the `maven-publish` plugin plus in-process Kotlin
+compilation exceed the 384 MB metaspace cap; the low-RAM local defaults are intentionally left
+unchanged.
 
 ---
 

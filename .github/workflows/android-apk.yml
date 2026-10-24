@@ -20,6 +20,12 @@ jobs:
     name: Build and verify Android packages
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      # gradle.properties caps JVM metaspace at 384m for 2 GB local build containers. The hosted
+      # runner has 7 GB; the maven-publish plugin plus in-process Kotlin compilation exceed that
+      # cap (OutOfMemoryError: Metaspace, run 40101913345). Widen only the CI JVM so the verified
+      # low-RAM local tuning in gradle.properties stays untouched.
+      GRADLE_JVMARGS: -Xmx1024m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -73,7 +79,8 @@ jobs:
           ./gradlew --no-daemon --stacktrace --console=plain \
             :app:assembleDebug :app:assembleRelease :sdk:assembleRelease :sdk:testDebugUnitTest \
             -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" 2>&1 | tee build-log.txt
+            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" 2>&1 | tee build-log.txt
           rc=${PIPESTATUS[0]}
           if [ "$rc" != "0" ]; then
             # Surface compiler/Gradle errors as check annotations so they are readable
@@ -87,7 +94,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon --console=plain :sdk:generatePomFileForReleasePublication
+          ./gradlew --no-daemon --console=plain \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" :sdk:generatePomFileForReleasePublication
           POM="$(find sdk/build/publications/release -name 'pom-default.xml' | head -1)"
           test -s "$POM"
           # The POM must identify the module and carry the transitive dependencies so a Maven
@@ -124,7 +132,8 @@ jobs:
       - name: Publish SDK to the local Maven repo and stage it as an artifact
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --console=plain :sdk:publishReleasePublicationToMavenLocal
+          ./gradlew --no-daemon --console=plain \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" :sdk:publishReleasePublicationToMavenLocal
           mkdir -p dist/maven-repo
           # Maven layout keeps the group path: maven-repo/avatarforge/avatarforge-sdk/<version>/...
           cp -r "$HOME/.m2/repository/com/avatarforge" dist/maven-repo/
