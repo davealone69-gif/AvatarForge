@@ -1240,6 +1240,10 @@ static void testShaderTables() {
         {"line", AF_STAGE_VERT},    {"line", AF_STAGE_FRAG},
         {"fullscreen", AF_STAGE_VERT},
         {"bloom_down", AF_STAGE_FRAG}, {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
+        /* Clustered forward+ light culling compute pass, required by the Vulkan backend
+           (af_vk.cpp). Was missing from this list since the stage shipped, so the harness
+           neither counted nor validated it; adding it extends coverage to all 13 entries. */
+        {"forward_plus", AF_STAGE_COMP},
     };
     const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
     CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",
