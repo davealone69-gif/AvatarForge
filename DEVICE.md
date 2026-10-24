@@ -1,6 +1,6 @@
 # AvatarForge — on-device verification sheet
 
-Everything in this repository has been verified on the host: the kernel harness runs **386 checks with
+Everything in this repository has been verified on the host: the kernel harness runs **405 checks with
 0 failures**, the arm64 native libraries link against NDK r26, and both the debug APK and the SDK AAR
 are built and inspected (manifest, permissions, FileProvider, stripped natives, dex contents).
 `tools/abi_conformance.py` passes for the C++ kernel (47/47) and reports the Rust core's progress

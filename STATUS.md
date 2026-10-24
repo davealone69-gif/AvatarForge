@@ -68,7 +68,7 @@ Two decisions that shape all four phases:
 
 | Claim | Evidence |
 |---|---|
-| Kernel host harness passes | `tools/build_host.sh test` → **All 386 checks complete: 0 failure(s)** (`build-host/host_tests_run.txt`) |
+| Kernel host harness passes | `tools/build_host.sh test` → **All 405 checks complete: 0 failure(s)** (`build-host/host_tests_run.txt`) |
 | GLB import into a live engine | harness `[16]`: the export loads back through the ABI into an empty engine (285 657 vertices / 382 388 triangles, exactly what was generated), regions survive, the file's skeleton is refused (joint count 0, clip playback rejected), a second import is idempotent, and a hostile buffer leaves vertices, triangles and rig untouched |
 | GLB round trip | harness `[14]`: the exporter's own 34 MB file imports back — 10 primitives sharing **one** vertex pool (266 797 unique vertices instead of 2 134 376), 71 joints, inverse bind matrices, 52 morph targets, 5 PNGs decoded; 45 hostile inputs (truncation, bit flips, cyclic graphs, out-of-range accessors) rejected cleanly |
 | Scene, culling, LOD, profiling | harness `[15]`: transform composition, conservative sphere culling, monotone LOD in distance, deterministic light order, profiler exact against a synthetic clock and reporting **−1** (not 0) for GPU timings the device cannot measure |
@@ -144,7 +144,7 @@ Phase 1 is *reliable rendering, GLB loading, crash-free lifecycle and profiling*
    Host test `[12]` locks this down: REST is exact, repeat playback is bit-identical, and a smile
    applied while walking survives the pose change.
 2. **Host test `[12]` added** (16 checks) plus `tools/pose_probe.cpp` for interactive debugging. The
-   harness grew from 259 to 275 checks at that point (it is 386 now).
+   harness grew from 259 to 275 checks at that point (it is 405 now).
 3. **Three Kotlin warnings that were hiding two real bugs are gone:**
    * `exportGlbBytes` took both an `EngineResult` and an `AvatarSpec`; the result's own spec is the
      one that matters, so the redundant parameter (and the unused one) is dropped.
@@ -220,7 +220,7 @@ native/include/afcore.h     the public C ABI (ABI version 1) - the contract ever
 native/src/                 kernel: anatomy, SDF field, isosurface, UV, PBR bake, rig, clips, GLB
 native/src/render/          the renderer: af_render.h contract, af_vk.cpp, af_gl.cpp, shaders/
 native/src/android/         af_jni.cpp - the only translation unit that includes <jni.h>
-native/tests/host_tests.cpp 386-check host harness (no device needed)
+native/tests/host_tests.cpp 405-check host harness (no device needed)
 native/src/af_glb_read.cpp    glTF 2.0 importer (GLB load)
 native/src/af_json.cpp        bounded JSON reader for the importer
 native/src/af_png_decode.cpp  PNG decoder (inflate) for embedded textures
@@ -239,7 +239,7 @@ DEVICE.md                   the on-device verification sheet
 
 ```bash
 tools/bootstrap_toolchain.sh                  # JDK 17, Gradle 8.9, SDK 34, NDK 26b, Kotlin, Rust
-tools/build_host.sh test                      # kernel + 386-check harness (no device, no Android SDK)
+tools/build_host.sh test                      # kernel + 405-check harness (no device, no Android SDK)
 tools/verify.sh                               # every host-side check, including the APK audit
 tools/build_android.sh                        # arm64 natives -> prebuilt/arm64-v8a
 tools/build_gradle.sh :app:assembleDebug -Paf.abIs=arm64-v8a -Paf.prebuiltJni=$PWD/prebuilt

@@ -49,6 +49,7 @@ deliberately deferred with tracked entries, not silently dropped.
 | `docs/audit/REMEDIATION_PLAN.md` | delivered vs queued work in mandated priority order |
 | `docs/audit/VERIFICATION_RESULTS.md` | evidence ledger: CI results, local checks, explicit UNVERIFIED/BLOCKED lists |
 | `docs/audit/RELEASE_CHECKLIST.md` | gated release process; signing currently BLOCKED |
+| `docs/SDK_INTEGRATION.md` | embedding the SDK in a host app: requirements, Maven/AAR/source consumption, API quick start, acceptance checklist |
 
 ## Top risks, honestly ranked
 

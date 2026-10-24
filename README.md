@@ -20,11 +20,14 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The host test harness passes **386 checks
-with 0 failures**; the C++ kernel implements **47/47** ABI symbols, and the Rust core implements
-15/47 against the same ABI with byte-identical results on everything it covers. **Nothing in this
-repository has been run on a physical Android device yet** — there is no phone and no GPU in the
-build environment — so the honest claim is *implemented and host-verified*, not *device-proven*.
+The kernel, renderer, SDK and app are written and build. The host test harness passes **405 checks
+with 0 failures** in CI; the C++ kernel implements **47/47** ABI symbols, and the Rust core
+implements 15/47 against the same ABI with byte-identical results on everything it covers. The
+build environment has no phone or GPU, and CI has no device runner, so the honest claim is
+*implemented and host/CI-verified*, not *device-proven*; one user-supplied physical-device report
+exists (Galaxy S24 / Xclipse 940, see `docs/VULKAN_MIP_FIX_2026-10-24.md`) and the full device
+backlog lives in `docs/audit/TEST_MATRIX.md`. To embed the engine in another app see
+`docs/SDK_INTEGRATION.md`.
 `DEVICE.md` is the ordered sheet a human runs on hardware, and `tools/device_check.sh` collects the
 evidence in one command. `STATUS.md` keeps the per-phase state and the list of what is deliberately
 still missing.
@@ -51,7 +54,7 @@ still missing.
 ```bash
 tools/bootstrap_toolchain.sh          # SDK + NDK + CMake + Gradle + JDK 17 + Rust (once)
 
-tools/build_host.sh test              # kernel + 386-check host harness (no device, no Android SDK)
+tools/build_host.sh test              # kernel + 405-check host harness (no device, no Android SDK)
 tools/build_android.sh                # arm64 native libraries into prebuilt/
 tools/build_gradle.sh :app:assembleDebug :sdk:assembleRelease
 ```
@@ -64,7 +67,7 @@ Every one of these is a gate that fails loudly; none of them needs a device.
 
 ```bash
 tools/verify.sh                       # everything below, in one run
-tools/build_host.sh test              # 386 checks: geometry, rig, bake, ABI, GLB round trip, scene
+tools/build_host.sh test              # 405 checks: geometry, rig, bake, ABI, GLB round trip, scene
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
 python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so
@@ -102,6 +105,8 @@ Not yet chosen. Add a `LICENSE` before publishing this repository.
 **Fastest route:** open the [Android APK workflow](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) and open the latest successful run. Under **Artifacts**, download `AvatarForge-Android-<commit>` and extract the ZIP. Install `AvatarForge-debug-arm64.apk` for testing on a modern ARM64 Android phone.
 
 For a versioned, easy-to-find download, open [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases). Pushing a version tag such as `v0.10.0` runs the same build and attaches the debug APK, release APK, and SDK AAR to that release.
+
+To embed the engine in another Android app (Maven coordinates `com.avatarforge:avatarforge-sdk`, host requirements, API quick start), read the [SDK integration guide](docs/SDK_INTEGRATION.md). Each CI artifact bundle also contains a file-backed `maven-repo/` and a POM so the SDK's dependencies resolve transitively.
 
 The release APK currently uses the repository's fallback debug signing certificate unless `keystore.properties` is supplied to a local build. It is suitable for testing, not a production signing identity. Never commit a release keystore or its passwords.
 
