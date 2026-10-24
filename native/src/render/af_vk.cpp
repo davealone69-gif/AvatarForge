@@ -204,6 +204,10 @@ private:
     uint32_t queueFamily_ = 0;
     VkPhysicalDeviceMemoryProperties memProps_{};
     uint32_t uboAlignment_ = 256;
+    /* Per-frame stride of the double-buffered camera UBO: sizeof(CameraUbo) rounded up to the
+       driver alignment. The old stride used uboAlignment_ itself, which is below 448 bytes on the
+       common 16/64/256 alignments and let frame 1 read/write past the buffer (AF-020). */
+    uint32_t cameraSlotSize_ = 512;
     bool deviceSupportsCompareSamplerLinear_ = false;
 
     /* swapchain */
@@ -380,6 +384,7 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(phys_, &props);
     uboAlignment_ = props.limits.minUniformBufferOffsetAlignment ? props.limits.minUniformBufferOffsetAlignment : 256;
+    cameraSlotSize_ = afRoundUp(uint32_t(sizeof(CameraUbo)), uboAlignment_);
 
     /* Sample count: clamp to what the device allows for both colour and depth. */
     VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
@@ -725,7 +730,7 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
 
         /* Camera uniform buffer: one slice per frame in flight, bound with a dynamic offset. The
            two slices are what keep frame N+1 from overwriting the camera frame N is still using. */
-        const uint64_t camSize = uint64_t(uboAlignment_) * kFramesInFlight;
+        const uint64_t camSize = uint64_t(cameraSlotSize_) * kFramesInFlight;
         if (!createBuffer(camSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &cameraUbos_.emplace_back(), &cameraUboMem_.emplace_back(),
@@ -2171,7 +2176,7 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     scene_.camera.envFlags[0] = options_.enableShadows ? 1.0f : 0.0f;
 
     if (!cameraUboMapped_.empty() && cameraUboMapped_[0])
-        std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * uboAlignment_,
+        std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * cameraSlotSize_,
                     &scene_.camera, sizeof(CameraUbo));
 
     /* ---- post-process slices ------------------------------------------------------------------ */
@@ -2492,7 +2497,7 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
         vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         const VkDescriptorSet set = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
         if (set != VK_NULL_HANDLE) {
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSlotSize_, uint32_t(2 * bloomLevels_) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1, &set, 2, offsets);
         }
         const af_submesh* submeshes = af_engine_submeshes(engine_);
@@ -2536,7 +2541,7 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdSetScissor(cmd, 0, 1, &sc);
 
     const VkDescriptorSet set0 = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
-    const uint32_t offsets0[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+    const uint32_t offsets0[2] = {frameIndex_ * cameraSlotSize_, uint32_t(2 * bloomLevels_) * uboAlignment_};
 
     /* ---- studio ground ------------------------------------------------------------------------ */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
@@ -2616,7 +2621,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
        the explicit barrier keeps the result ordered before any fragment stage consumes it. */
     if (forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusPipeline_);
-        const uint32_t cameraOffset = frameIndex_ * uboAlignment_;
+        const uint32_t cameraOffset = frameIndex_ * cameraSlotSize_;
         VkDescriptorSet sets[3] = {cameraSets_[0], materialSet_, forwardPlusSet_};
         const uint32_t dynamicOffsets[2] = {cameraOffset, 0};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusLayout_, 0, 3,
@@ -2656,7 +2661,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomDownPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSlotSize_, uint32_t(i) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomDownSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2676,7 +2681,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomUpPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(bloomLevels_ + i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSlotSize_, uint32_t(bloomLevels_ + i) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomUpSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2698,7 +2703,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
-        const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+        const uint32_t offsets[2] = {frameIndex_ * cameraSlotSize_, uint32_t(2 * bloomLevels_) * uboAlignment_};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                 &compositeSet_, 2, offsets);
         vkCmdDraw(cmd, 3, 1, 0, 0);

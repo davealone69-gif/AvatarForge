@@ -118,6 +118,11 @@ private:
     int surfaceWidth_ = 0;
     int surfaceHeight_ = 0;
     uint32_t uboAlignment_ = 256;
+    /* Stride of one double-buffered camera UBO slot: sizeof(CameraUbo) rounded up to the
+       driver's UBO offset alignment. The old code used uboAlignment_ itself as the stride, which
+       is smaller than the 448-byte CameraUbo on every common alignment and let frame 1 overrun
+       the buffer (AF-020). */
+    GLsizeiptr cameraSlotSize_ = 512;
 
     /* ---- programs and uniform locations ---- */
     GLuint forwardProgram_ = 0, shadowProgram_ = 0, groundProgram_ = 0, lineProgram_ = 0;
@@ -278,6 +283,7 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     GLint align = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     uboAlignment_ = uint32_t(align > 0 ? align : 256);
+    cameraSlotSize_ = GLsizeiptr(afRoundUp(uint32_t(sizeof(CameraUbo)), uboAlignment_));
 
     /* Floating-point colour attachments: ES 3.2 has them in core, ES 3.0/3.1 need the extension. */
     bool floatColour = (major > 3 || (major == 3 && minor >= 2));
@@ -586,7 +592,9 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
 
     glGenBuffers(1, &cameraUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
-    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 2, nullptr, GL_DYNAMIC_DRAW);
+    /* Two correctly padded slots; the previous uboAlignment_*2 sizing could not hold a second
+       448-byte CameraUbo when the alignment was below 448 (the common 16..256 cases). */
+    glBufferData(GL_UNIFORM_BUFFER, cameraSlotSize_ * 2, nullptr, GL_DYNAMIC_DRAW);
     glGenBuffers(1, &postUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 16, nullptr, GL_DYNAMIC_DRAW);
@@ -824,7 +832,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
 
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     const int frame = int(stats_.frames % 2);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo), &scene_.camera);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraSlotSize_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
@@ -926,7 +934,7 @@ void GlRenderer::drawForwardPass() {
     glClearColor(0.055f, 0.075f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo));
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraSlotSize_, sizeof(CameraUbo));
 
     /* ---- studio ground ---- */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
