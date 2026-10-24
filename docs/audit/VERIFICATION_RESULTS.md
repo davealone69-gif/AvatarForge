@@ -90,10 +90,14 @@ arithmetic itself is pure constexpr maths and IS host-verified by harness sectio
 
 CI: run `40115970765` on commits `1944aee` + `5c63996` — all three jobs **success**, so the
 GLES and Vulkan renderer TUs compile under the NDK on every ABI, the host job passes, and the
-APK/AAR still assemble. Sandbox log downloads remain blocked, so the CI harness's exact
-"439 checks" line is not directly observable here; the 439/0 result is attested by the local
-full run, and CI green attests the job exited 0. Any device-level claim about the full-screen
-atlas stays UNVERIFIED regardless of CI colour — see the device backlog step 11.
+APK/AAR still assemble. The NDK job's automatic prebuilt refresh (`354cc53`,
+`libafrender.so` rebuilt from the new sources, +536 bytes) triggered one `action_required`
+pull-request run (`40116059252`) under GitHub's bot-commit approval gate; it was superseded by
+run `40116499207` on the combined tip (`eacf2ce`), again all three jobs **success** — that is
+the authoritative green run for the branch tip. Sandbox log downloads remain blocked, so the CI
+harness's exact "439 checks" line is not directly observable here; the 439/0 result is attested
+by the local full run, and CI green attests the job exited 0. Any device-level claim about the
+full-screen atlas stays UNVERIFIED regardless of CI colour — see the device backlog step 11.
 
 ## 3. Local verification actually performed
 
