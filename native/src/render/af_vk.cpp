@@ -156,6 +156,7 @@ private:
     bool createView(VkImage image, VkFormat format, VkImageAspectFlags aspect, VkImageView* view,
                     uint32_t levels = 1);
     VkFormat pickHdrFormat() const;
+    VkFormat pickDepthFormat() const;
     bool createFallbackAtlas(std::string* error);
     void rebuildMaterialBlocks();
     void buildSkeletonLines();
@@ -377,6 +378,10 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     }
     options_.msaaSamples = int(chosen);
     info_.supportsMsaa = counts != 0;
+
+    /* Choose a depth format the driver actually supports before allocating the depth and
+       shadow targets, instead of assuming the optional D32_SFLOAT format. */
+    depthFormat_ = pickDepthFormat();
 
     if (!createSwapchain(error, 0, 0)) return false;
     if (!createShadowTarget(error)) return false;
@@ -795,6 +800,33 @@ VkFormat VulkanRenderer::pickHdrFormat() const {
         if ((fp.optimalTilingFeatures & need) == need) return f;
     }
     return VK_FORMAT_R8G8B8A8_UNORM;
+}
+
+VkFormat VulkanRenderer::pickDepthFormat() const {
+    /* VK_FORMAT_D32_SFLOAT is not a mandatory Vulkan 1.0 format - the only required depth
+       format is D16_UNORM - so a strict driver may refuse vkCreateImage for the depth and
+       shadow targets. Probe best-first for a format that supports BOTH the depth/stencil
+       attachment use and sampled use (the shadow map is read through a comparison sampler),
+       so backend initialisation cannot fail on the hard-coded D32 format a device lacks. */
+    const VkFormat candidates[4] = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D16_UNORM,
+    };
+    const VkFormatFeatureFlags need =
+        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    for (VkFormat f : candidates) {
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(phys_, f, &fp);
+        if ((fp.optimalTilingFeatures & need) == need) return f;
+    }
+    /* Last resort: every conformant Vulkan 1.0 device supports D16 as an attachment. */
+    VkFormatProperties d16{};
+    vkGetPhysicalDeviceFormatProperties(phys_, VK_FORMAT_D16_UNORM, &d16);
+    if (d16.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+        return VK_FORMAT_D16_UNORM;
+    return VK_FORMAT_D32_SFLOAT;  /* nothing usable reported: keep the legacy behaviour */
 }
 
 bool VulkanRenderer::createHdrTargets(std::string* error) {

@@ -185,6 +185,17 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     if (display_ == EGL_NO_DISPLAY) { *error = "eglGetDisplay failed"; return false; }
     if (!eglInitialize(display_, nullptr, nullptr)) { *error = "eglInitialize failed"; return false; }
 
+    /* Select the client API explicitly. Android defaults to OpenGLES, but ANGLE (the GLES
+       driver some Samsung builds route through, including the Xclipse 940 report) does not
+       treat the default as guaranteed - an explicit bind is cheap and removes the ambiguity. */
+    if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+        EGLint ec = eglGetError();
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "eglBindAPI(EGL_OPENGL_ES_API) failed (EGL error 0x%x)", unsigned(ec));
+        *error = buf;
+        return false;
+    }
+
     /* Require ES 3.1: ES3_BIT_KHR with a 3.x context, plus a depth buffer for the shadow pass and
        a window surface that EGL itself considers RGB-capable. Multisampling is done with
        renderbuffers (the window surface is only ever blitted to), so no MSAA config is needed. */
@@ -201,12 +212,49 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
         return false;
     }
 
+    /* The native window's buffer geometry has to match the chosen EGL config's native visual.
+       A freshly created SurfaceView window keeps its default format; lenient legacy drivers
+       accept the mismatch, but strict implementations - ANGLE on the Samsung Xclipse 940 is
+       the reported case - reject eglCreateWindowSurface below with EGL_BAD_MATCH, which left
+       the whole viewer stuck on "initialising GPU" at 0 FPS. This is the standard Android EGL
+       sequence (EGL_NATIVE_VISUAL_ID -> ANativeWindow_setBuffersGeometry). */
+    EGLint nativeVisual = 0;
+    if (!eglGetConfigAttrib(display_, config_, EGL_NATIVE_VISUAL_ID, &nativeVisual) || nativeVisual == 0) {
+        EGLint ec = eglGetError();
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "eglGetConfigAttrib(EGL_NATIVE_VISUAL_ID) failed (EGL error 0x%x)",
+                      unsigned(ec));
+        *error = buf;
+        return false;
+    }
+    int32_t geometryRc = ANativeWindow_setBuffersGeometry(window, 0, 0, nativeVisual);
+    if (geometryRc != 0) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "ANativeWindow_setBuffersGeometry(nativeVisual=0x%x) failed: %d",
+                      unsigned(nativeVisual), geometryRc);
+        *error = buf;
+        return false;
+    }
+
     const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
     context_ = eglCreateContext(display_, config_, EGL_NO_CONTEXT, contextAttribs);
-    if (context_ == EGL_NO_CONTEXT) { *error = "eglCreateContext(ES3) failed"; return false; }
+    if (context_ == EGL_NO_CONTEXT) {
+        EGLint ec = eglGetError();
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "eglCreateContext(ES3) failed (EGL error 0x%x)", unsigned(ec));
+        *error = buf;
+        return false;
+    }
 
     surface_ = eglCreateWindowSurface(display_, config_, window, nullptr);
-    if (surface_ == EGL_NO_SURFACE) { *error = "eglCreateWindowSurface failed"; return false; }
+    if (surface_ == EGL_NO_SURFACE) {
+        EGLint ec = eglGetError();
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "eglCreateWindowSurface failed (EGL error 0x%x)", unsigned(ec));
+        *error = buf;
+        return false;
+    }
 
     if (!eglMakeCurrent(display_, surface_, surface_, context_)) {
         *error = "eglMakeCurrent failed";

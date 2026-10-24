@@ -251,6 +251,7 @@ class MainActivity : ComponentActivity() {
                         result = finished,
                         engine = engine,
                         rendererError = rendererError,
+                        onRetryRenderer = { surfaceView?.restart() },
                         onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,

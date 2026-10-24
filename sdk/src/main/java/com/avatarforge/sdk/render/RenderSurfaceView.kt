@@ -63,6 +63,13 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile var attachedEngineHandle: Long = 0L
         private set
 
+    /** Last Surface handed to surfaceCreated; retained so a failed create can be retried. */
+    @Volatile private var activeSurface: Surface? = null
+
+    /** Create attempts made for the current surface; bounded by MAX_CREATE_ATTEMPTS.
+     *  Written from surfaceCreated (main thread) and read on the render thread. */
+    @Volatile private var createAttempts = 0
+
     private var renderer: AvatarRenderer? = null
     private var visible = false
 
@@ -167,30 +174,89 @@ class RenderSurfaceView @JvmOverloads constructor(
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        val surface: Surface = holder.surface
+        activeSurface = holder.surface
+        createAttempts = 0
+        handler.removeCallbacks(retryCreate)
+        handler.post { attemptCreate() }
+    }
+
+    /**
+     * Re-runs the bounded create sequence for the current surface. The viewer's Retry action
+     * calls this after the automatic attempts have been exhausted.
+     */
+    fun restart() {
+        handler.removeCallbacks(retryCreate)
         handler.post {
-            try {
-                renderer?.destroy()
-                renderer = AvatarRenderer.create(surface, settings)
-                _rendererInfo.value = renderer?.info()
-                _error.value = null
-                renderer?.setCamera(camera)
-                renderer?.applyOptions(settings)
-                if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
-                /*
-                 * The view can become visible before Android creates its Surface. In that order,
-                 * frameLoop exits because renderer is null and never schedules itself again.
-                 * Restart it only after the renderer and Surface are both ready.
-                 */
-                handler.removeCallbacks(frameLoop)
-                if (visible) handler.post(frameLoop)
-            } catch (t: Throwable) {
-                renderer = null
-                _rendererInfo.value = null
+            createAttempts = 0
+            attemptCreate()
+        }
+    }
+
+    /**
+     * One renderer create attempt on the render thread. A failed create used to leave the viewer
+     * permanently on "initialising GPU..." at 0 FPS: the frame loop only re-posts itself while
+     * the renderer is null and nothing ever re-ran creation. The recovery here is bounded:
+     *
+     *   1. create with the user's settings (Vulkan preferred by default);
+     *   2. if that fails, retry with Vulkan switched off so GLES 3.1 gets a clean attempt
+     *      instead of inheriting state from a failed Vulkan initialisation;
+     *   3. one delayed retry in case the Surface was not fully ready;
+     *
+     * after which the error card (with its Retry action) stays up and no more attempts run.
+     */
+    private fun attemptCreate() {
+        val surface = activeSurface
+        if (surface == null) {
+            _error.value = "the render surface is gone"
+            return
+        }
+        val forceGl = createAttempts >= 1
+        val attemptSettings = if (forceGl) settings.copy(preferVulkan = false) else settings
+        try {
+            renderer?.destroy()
+            renderer = null
+            _rendererInfo.value = null
+            val created = AvatarRenderer.create(surface, attemptSettings)
+            renderer = created
+            _rendererInfo.value = created.info()
+            _error.value = null
+            created.setCamera(camera)
+            /* Re-apply the user's real settings: the GLES-forced attempt only swapped the
+               backend preference for creation, the viewer's own toggle must stay authoritative. */
+            created.applyOptions(settings)
+            if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            createAttempts = 0
+            /*
+             * The view can become visible before Android creates its Surface. In that order,
+             * frameLoop exits because renderer is null and never schedules itself again.
+             * Restart it only after the renderer and Surface are both ready.
+             */
+            handler.removeCallbacks(frameLoop)
+            if (visible) handler.post(frameLoop)
+        } catch (t: Throwable) {
+            renderer = null
+            _rendererInfo.value = null
+            createAttempts++
+            if (createAttempts < MAX_CREATE_ATTEMPTS) {
+                val reason = t.message ?: t.javaClass.simpleName
+                _error.value = if (forceGl)
+                    "GPU initialisation failed ($reason); retrying..."
+                else
+                    "Vulkan backend unavailable ($reason); trying OpenGL ES 3.1..."
+                /* The final automatic attempt is delayed so a not-yet-ready Surface can settle. */
+                handler.removeCallbacks(retryCreate)
+                if (createAttempts == MAX_CREATE_ATTEMPTS - 1) {
+                    handler.postDelayed(retryCreate, CREATE_RETRY_DELAY_MS)
+                } else {
+                    handler.post(retryCreate)
+                }
+            } else {
                 _error.value = t.message ?: t.javaClass.simpleName
             }
         }
     }
+
+    private val retryCreate = Runnable { attemptCreate() }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         handler.post {
@@ -207,6 +273,8 @@ class RenderSurfaceView @JvmOverloads constructor(
            next frame draws into a dead native window. */
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
+            activeSurface = null
+            handler.removeCallbacks(retryCreate)
             renderer?.destroy()
             renderer = null
             rendererInfoValueReset()
@@ -224,6 +292,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Call from the host's onDestroy: stops the thread and frees the GPU objects. */
     fun release() {
         setFrameLoopEnabled(false)
+        handler.removeCallbacks(retryCreate)
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
             renderer?.destroy()
@@ -253,5 +322,8 @@ class RenderSurfaceView @JvmOverloads constructor(
            keep - the honest number is in RendererStats.fps. */
         const val FRAME_INTERVAL_NS = 16_666_667L
         const val FRAME_RETRY_MS = 16L
+        /* Three create attempts per surface: as-configured, GLES-forced, then one delayed. */
+        const val MAX_CREATE_ATTEMPTS = 3
+        const val CREATE_RETRY_DELAY_MS = 250L
     }
 }

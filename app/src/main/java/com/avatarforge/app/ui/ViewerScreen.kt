@@ -56,6 +56,7 @@ import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.Quality
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
@@ -68,6 +69,7 @@ fun ViewerScreen(
     result: EngineResult,
     engine: AvatarEngine,
     rendererError: String?,
+    onRetryRenderer: () -> Unit,
     onBack: () -> Unit,
     rendererInfo: RendererInfo?,
     stats: RendererStats,
@@ -131,7 +133,7 @@ fun ViewerScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
-            Header(result, rendererInfo, stats)
+            Header(result, rendererInfo, stats, settings.quality)
             if (rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -139,6 +141,9 @@ fun ViewerScreen(
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("3D viewer failed to start", fontWeight = FontWeight.SemiBold)
                         Text(rendererError, style = MaterialTheme.typography.bodySmall)
+                        /* Without this the only recovery was leaving the viewer and regenerating
+                           the avatar; this re-runs the bounded Vulkan -> GLES create sequence. */
+                        TextButton(onClick = onRetryRenderer) { Text("Retry renderer") }
                     }
                 }
             }
@@ -188,18 +193,24 @@ fun ViewerScreen(
 }
 
 @Composable
-private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats) {
+private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, quality: Quality) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
         Column(Modifier.padding(10.dp)) {
             Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
             val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
+            /* Before the first frame exists, 0 FPS is not a performance verdict - do not show a
+               red "below target" warning for a renderer that is still starting up. */
+            val status = when {
+                info == null -> "waiting for the first frame"
+                stats.meetsTarget -> "on target"
+                quality == Quality.AUTO -> "below 30 FPS - auto quality will step down"
+                else -> "below 30 FPS - fixed ${quality.name.lowercase()} preset, emergency step-down only"
+            }
             Text(
-                "$backend · %.0f FPS (%.1f ms) · %s".format(
-                    stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
-                ),
+                "$backend · %.0f FPS (%.1f ms) · %s".format(stats.fps, stats.frameMs, status),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (info == null || stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
             )
             Text(
                 "%.0f s to build · %d tris on screen".format(
