@@ -45,7 +45,7 @@ class AdultSafetyTest {
 
     @Test
     fun `minor markers use word boundaries`() {
-        val spec = AvatarSpec(outfit = Outfit.NONE, ageYears = 22f)
+        val spec = AvatarSpec(outfit = Outfit.NONE, ageYears = 22f, adultModeConfirmed = true)
         assertSame(spec, spec.requireGeneratable("adult woman with her girlfriend"))
     }
 }
