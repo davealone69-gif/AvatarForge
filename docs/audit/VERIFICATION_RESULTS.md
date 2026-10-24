@@ -80,6 +80,16 @@ Status: REAL + VERIFIED in CI — the first five classes were green from run `40
 the full 28-test set (six classes) is green on run `40107047136`, after one red run
 (`40106628640`, cross-module smart cast) caught and fixed in `d5e397a`.
 
+### 2.6 AF-020 camera-UBO slot fix (host-verified; CI/device pending)
+
+The fix touches the two renderer translation units (`af_gl.cpp`, `af_vk.cpp`), a new
+dependency-free header `native/src/render/af_align.h`, and the host harness. The sandbox has no
+EGL/Vulkan headers, so renderer-TU compilation is verified only by the CI NDK jobs; the slot
+arithmetic itself is pure constexpr maths and IS host-verified by harness section [17]
+(34 new checks, 439 total, 0 failures locally). CI run IDs for this change set are recorded here
+after the push completes; until then CI status is UNVERIFIED, and any device-level claim about
+the full-screen atlas stays UNVERIFIED regardless of CI colour.
+
 ## 3. Local verification actually performed
 
 | Check | Command / method | Result |
@@ -95,10 +105,12 @@ the full 28-test set (six classes) is green on run `40107047136`, after one red 
 | Manifest XML well-formed after VIEW filter removal | `xml.dom.minidom.parse` | REAL + VERIFIED |
 | CI commands map to existing tools/inputs | inspected `build_host.sh`, validator `main()`s, referenced paths | REAL + VERIFIED |
 | Field-existence claims (`qualityLevel`, `Quality.of`, `ImageRole` shape) | grep against `AvatarRenderer.kt`, `AvatarSpec.kt` | source-level REAL + VERIFIED; type correctness confirmed by the CI APK compile |
+| AF-020 UBO slot arithmetic (host, no NDK available) | g++ host build of `host_tests.cpp` with the repo's Node-shipped zlib header + versioned `libz.so.1` (canonical `tools/build_host.sh` unchanged; CI uses `zlib1g-dev`) | REAL + VERIFIED: `All 439 checks complete: 0 failure(s)`, section [17] green; renderer TUs themselves not host-compilable (EGL/Vulkan) |
+| AF-020 visual evidence | PIL/numpy pixel accounting on the four archived screenshots + GLB texture extraction | REAL + VERIFIED as image characterisation (65.1 % atlas gray vs 1.4 % clear colour); mechanism remains PARTIAL — see FINDINGS AF-020 |
 
 ## 4. What CI green will and will not prove
 
-CI green proves: native sources compile under NDK; the kernel harness passes its full 405-check
+CI green proves: native sources compile under NDK; the kernel harness passes its full 439-check
 suite on a Linux x86_64 host; the ABI manifest matches the header and the host library conforms
 (47/47); the sample GLB and customization contracts validate; the SDK compiles against Android
 stubs and the 28 JVM tests pass; debug/release APK and release AAR assemble from prebuilt
@@ -130,8 +142,13 @@ the report does not record its own source commit, so build identity stays UNVERI
 
 - The Vulkan mip-chain fix (AF-010): the native Vulkan backend did not initialise; GLES/ANGLE
   rendered instead. Visual rippling under either backend needs eyes-on confirmation; numeric
-  diagnostics cannot see pixels.
-- The white head cap (AF-014): likewise a pixel-level question, still a hypothesis.
+  diagnostics cannot see pixels. The 2026-10-25 screenshots add a second blocker: current
+  GLES/ANGLE builds show the AF-020 full-screen atlas rather than the body.
+- The white head cap (AF-014): likewise a pixel-level question, still a hypothesis; visible only
+  on the older Vulkan-labelled frame and likewise blocked on AF-020 for any current build.
+- The AF-020 full-screen atlas: CONFIRMED visually and characterised by pixel analysis, but no
+  build containing the camera-UBO fix has run on a device, and the fix's causal link to the
+  atlas image is unproven. The shipped-controls localization ladder is the next device step.
 - AF-003/AF-004 UI/persistence and AF-002's "open with" absence: viewer-only report; not
   exercised. Device backlog steps 3, 5, 10 remain open.
 - Why native Vulkan was declined: not observable — see AF-018; the Kotlin-side fallback row
@@ -157,7 +174,8 @@ Highest-value items for this change set:
 | AF-007 three phantom workflow registrations | BLOCKED | repo admin deletes server-side registrations |
 | AF-009 signed AAB/APK | BLOCKED | release keystore + secrets, see RELEASE_CHECKLIST |
 | AF-012 instrumented tests | MISSING | emulator runner in CI, plan item 7 |
-| AF-014 white head cap | hypothesis | device re-screenshot on a build containing the mip fix |
+| AF-014 white head cap | hypothesis, blocked by AF-020 on current builds | device re-screenshot once a body is visible again |
+| AF-020 full-screen atlas (GLES/ANGLE) | visual defect CONFIRMED; camera UBO overflow FIXED in code + host test (439/439 local), CI pending, device UNVERIFIED; atlas mechanism PARTIAL | CI green on this change set, then device backlog step 11 (ladder in `artifacts/audits/device-evidence-atlas-2026-10-25.md`) |
 | AF-015 GLB import | feature-tracked; VIEW filter intentionally absent | plan item 4 ships the handler first |
 | Prompt/photo persistence (AF-004 remainder) | deferred | plan item 9, scoped storage with auto-purge |
 | ADPF thermal integration (AF-008 remainder) | queued | plan item 3 |

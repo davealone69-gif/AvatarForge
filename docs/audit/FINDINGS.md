@@ -18,12 +18,13 @@ Fixes land as focused commits referenced from this register.
 | AF-017 | low | diagnostics | Frame-loop restart hint over-warns on benign reschedules | FIXED + 3 JVM tests, CI-green on run 40107047136; device re-observation pending |
 | AF-018 | low | diagnostics | Silent Vulkan→GLES fallback: "Vulkan preferred: OK" beside a gles31 backend, reason invisible | PARTIAL: Kotlin-side fallback row FIXED + 4 JVM tests, CI-green 40107047136; native reason surfacing QUEUED (needs renderer ABI work, see AF-019) |
 | AF-019 | low | native/ABI | Renderer C API (`af_render_capi.cpp`) has no public header, manifest or conformance gate | CONFIRMED, deferred; blocks the native half of AF-018 |
+| AF-020 | high | renderer/gles | GLES/ANGLE frames show the packed base-color texture atlas full-screen instead of the skinned 3D scene; double-buffered camera UBO also overruns its buffer | CONFIRMED visually; one concrete code defect (camera UBO overflow) FIXED in code + host test, CI/device UNVERIFIED; full-screen-atlas mechanism still PARTIAL — see section |
 | AF-009 | medium | release | No AAB; release APK uses debug certificate | BLOCKED (credentials) |
-| AF-010 | — (historical) | renderer/vulkan | Mip-chain image-layout spec violation caused surface rippling | FIXED in code; device evidence 2026-10-24: GLES/ANGLE path healthy, but Vulkan path not initialised so the mip fix itself remains UNVERIFIED visually |
+| AF-010 | — (historical) | renderer/vulkan | Mip-chain image-layout spec violation caused surface rippling | FIXED in code; UNVERIFIED visually — Vulkan path not initialised on current builds, and all GLES/ANGLE frames are blocked by AF-020 |
 | AF-011 | — (historical) | diagnostics | Counter shadowing, red-card strobe, redundant resizes | FIXED (commits `9b0af6d`/`bac2168`) |
 | AF-012 | low | test strategy | No instrumented/device tests exist | CONFIRMED, roadmap |
 | AF-013 | low | deps | No version catalog; dependency coordinates hardcoded | CONFIRMED, deferred |
-| AF-014 | low | renderer | White head cap in device screenshot | UNVERIFIED hypothesis |
+| AF-014 | low | renderer | White head cap in device screenshot | UNVERIFIED hypothesis; only visible on the older Vulkan-labelled build — every newer GLES/ANGLE build is blocked by AF-020 |
 | AF-015 | medium | feature | GLB import/open is not wired into the app | MISSING (filter removed; feature planned) |
 
 ---
@@ -139,6 +140,9 @@ Fixes land as focused commits referenced from this register.
   UNVERIFIED; a visual check for rippling on this session's build and any future Vulkan-active
   session is still required. The EGL surface-format/geometry half of the renderer recovery is
   positively exercised (context + window surface + first frame succeeded).
+- 2026-10-25 update: every subsequent GLES/ANGLE screenshot shows the full-screen atlas defect
+  AF-020 rather than the avatar, so the rippling cannot be re-observed on current builds either.
+  AF-010 remains UNVERIFIED and is blocked on AF-020 being resolved (or a Vulkan-active session).
 
 ## AF-011 — Diagnostics/telemetry defects (historical, fixed)
 
@@ -167,6 +171,9 @@ Fixes land as focused commits referenced from this register.
   change is justified before the next device report.
 - 2026-10-24 status: the numeric report cannot see pixels, so the cap is not resolved or
   disproven; still needs a fresh screenshot from a current build.
+- 2026-10-25 status: the cap is still visible on the same older Vulkan-labelled frame, but all
+  three newer GLES/ANGLE builds display only the texture atlas (AF-020), so no current build can
+  confirm or refute the cap. Stays UNVERIFIED, blocked behind AF-020; no code change justified.
 
 ## AF-016 — Shader-table harness drift: forward_plus compute stage unvalidated (medium, fixed)
 
@@ -236,6 +243,72 @@ Fixes land as focused commits referenced from this register.
   unguarded struct; a layout mismatch between native and JNI would fail only on a device.
 - Recommendation: extract a public `native/include/afrender.h`, extend the manifest generator
   (or add a sibling manifest + conformance job) before extending the renderer info struct.
+
+## AF-020 — Full-screen texture atlas on GLES/ANGLE instead of the skinned scene (high, CONFIRMED visually; mechanism PARTIAL)
+
+- Detected from: four 1080×2340 device screenshots taken 2026-10-24/25 on the SM-S921B
+  (Xclipse 940, ANGLE 256.4 / `9fe6623ec0db` on Vulkan 1.3.304), archived under
+  `artifacts/audits/screenshots/` with a per-file ledger in
+  `artifacts/audits/device-evidence-atlas-2026-10-25.md`.
+- What is on screen (confirmed by pixel analysis, not eyeballing): on the three newer GLES
+  builds (`230452`, `000636`, `000843`) the render area is the generated avatar's packed
+  base-color atlas stretched over the whole surface. In `000843`, 65.1 % of render-area pixels
+  are the atlas packer's neutral gray (mean RGB ≈ 124,123,123) while only 1.4 % match the
+  configured clear colour (14,19,28) — a rasterised mesh on a cleared background cannot produce
+  that. The five baked textures were extracted from `artifacts/avatarforge-sample.glb`; the
+  baseColor PNG (2048², gray packer background, hair-dot band, armour/cloth islands) matches the
+  screen content structurally. The frame stats still report 15 draw calls / ~417–426 k tris, so
+  geometry is *submitted*; the displayed image is texture content regardless.
+- Scope: present at both adaptive quality tiers 2 and 1, so the `targetsDirty_` rebuild cycle is
+  not the trigger. The older `191611` build (renderer card labelled "vulkan", 18 s generation)
+  shows the proper 3D body instead — the defect is specific to the GLES/ANGLE execution path
+  (all rendering on this device is in fact GLES31/ANGLE; the card label is recorded verbatim).
+  Commit `8dab4d1` made the GLES path initialise on ANGLE for the first time, so a long-standing
+  latent GLES defect only became reachable then; the commit itself does not touch the draw, UBO
+  or texture paths.
+- Concrete code defect found and fixed this session — double-buffered camera UBO overrun
+  (confirmed by arithmetic; its causal link to the atlas image is **unproven**, do not call it
+  the fix for the visual defect):
+  - `CameraUbo` is 448 bytes (`af_render_common.h:135` static_assert). The GLES camera buffer was
+    allocated `uboAlignment_ * 2` (512 bytes at the common 256-byte alignment) while each frame
+    slot used `frame * uboAlignment_` as its stride. Frame 1 therefore uploaded/bound the range
+    [256, 704) inside a 512-byte buffer — 192 bytes out of range at both `glBufferSubData`
+    (`af_gl.cpp`, `updateScene`) and `glBindBufferRange` (`drawForwardPass`). Strict GLES raises
+    GL errors and an invalid binding rather than corrupting adjacent memory.
+  - The Vulkan backend had the same latent pattern (`camSize = uboAlignment_ * kFramesInFlight`,
+    memcpy and seven dynamic-offset sites); it rendered acceptably only because the camera
+    matrices are the block's first members and stay inside slot 0.
+  - Fix: new `af::afRoundUp()` helper in the dependency-free `native/src/render/af_align.h`;
+    each backend computes `cameraSlotSize_ = afRoundUp(sizeof(CameraUbo), uboAlignment_)`,
+    allocates two padded slots (1024 bytes at 256 alignment) and uses the slot stride everywhere
+    a frame offset is consumed. Host harness section [17] (34 checks) pins the helper, the
+    alignment table 16..4096 and the exact old-overrun bound; local host run green. CI and an
+    on-device re-observation are still required (host cannot compile EGL/Vulkan TUs).
+- Ruled out by source trace this/previous sessions (do not re-pursue without new evidence):
+  intentional atlas/debug screen (no such path; overlays are skeleton/flat/highlight only);
+  vertex-attribute or UV swap (locations, offsets and the 88-byte stride match across
+  `forward.vert`, `af_gl.cpp`, `af_render_common.h`, `afcore.h` and `af_vk.cpp`); GLES embedded
+  shader location stripping (qualifiers retained in `af_shaders_gl.h`); sampler-unit collision
+  (five atlas textures use units 0–4, post uses 6/7); composite wrong-texture binding
+  (`drawComposite` binds `hdrTexture_`); FBO/texture name aliasing in
+  `makeFramebufferWithTexture`; tier-change target rebuild; VBO upload (straight
+  `af_engine_vertices` copy, same source the Vulkan path renders correctly).
+- Remaining hypotheses, ranked, for the next instrumented device session: (H1) the failed
+  camera-buffer binding on odd frames puts ANGLE into an error state that changes later draw
+  semantics — the fixed UBO bug is the only current candidate, hence the fix; (H2) the MSAA
+  resolve blit or HDR target format behaves differently under ANGLE, leaving the composite
+  fullscreen triangle sampling undefined/atlas-named storage; (H3) an ANGLE-specific descriptor
+  or program state issue outside the code paths traced so far. No GL error log is obtainable
+  from the current build, so H1–H3 cannot be discriminated from source alone.
+- Next-device deterministic ladder (uses only shipped controls; details and expected
+  discriminations in `artifacts/audits/device-evidence-atlas-2026-10-25.md`): move the Exposure
+  slider, toggle Ground plane / Shadows / Bloom / SSS, move the Sun sliders, toggle Prefer
+  Vulkan, and screenshot each state. Whether the atlas image responds to composite-only vs
+  forward-only controls localises the fault without any new build.
+- Latent neighbour risk noted, not changed: post-process slices (`PostUbo`, 32 bytes) use the
+  raw `uboAlignment_` stride in both backends; a driver ever reporting an alignment below 32
+  would overlap slices. Android devices in the field report 64–256 today; revisit together with
+  any post-process defect rather than speculatively.
 
 ## AF-015 — GLB import feature missing (medium)
 

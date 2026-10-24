@@ -10,7 +10,7 @@ UNVERIFIED rather than implied by CI.
 | Static: ABI contract | `tools/abi_manifest.py` regeneration vs `abi/afcore.abi.json` | local Python + new CI `host-tests` job | manual only | CI-gated; local run showed no diff |
 | Static: GLB validity | `tools/validate_glb.py` against sample export | local Python + CI `host-tests` | manual only | CI-gated; local run passes |
 | Static: customization contracts | `tools/validate_custom_inputs.py` | manual | manual | added to CI `host-tests` |
-| Native kernel (host) | `native/tests/host_tests.cpp` (405 checks: anatomy, SDF, isosurface, rig, blendshapes, GLB round trip, malformed GLB, shaders incl. all 13 baked table entries) | `tools/build_host.sh test` (g++, zlib) | one-off record 2026-10-18; not in CI | CI-gated via `host-tests`; first gated run exposed AF-016, now fixed; local 405/405 and run 40098617172 green |
+| Native kernel (host) | `native/tests/host_tests.cpp` (439 checks: anatomy, SDF, isosurface, rig, blendshapes, GLB round trip, malformed GLB, shaders incl. all 13 baked table entries, and section [17] camera-UBO slot layout for AF-020) | `tools/build_host.sh test` (g++, zlib) | one-off record 2026-10-18; not in CI | CI-gated via `host-tests`; first gated run exposed AF-016, now fixed; 405 checks at run 40098617172, 439/439 local after the AF-020 addition |
 | Native ABI conformance | `tools/abi_conformance.py` (symbols/layout/behaviour vs manifest) | Python+ctypes against a built lib | manual | wired into `host-tests` against the host build |
 | Kotlin/JVM SDK | JUnit 4, 28 tests in 6 classes under `sdk/src/test` (adult safety, analysis packing, analysis notes, settings codec, diagnostics report, diagnostic-note rules) | `:sdk:testDebugUnitTest` | not run by any workflow | added to APK job; 21-test set green on 40097344731, full 28-test set green on 40107047136 |
 | Kotlin/Native integration | engine lifecycle through JNI | requires device/emulator | MISSING | MISSING (AF-012) |
@@ -28,6 +28,7 @@ UNVERIFIED rather than implied by CI.
 | `DiagnosticsReportTest` (structure/worst-status/plain-text) | diagnostics drift between panel and clipboard | pure JVM JUnit |
 | CI `host-tests` job | AF-001 tests never executing | workflow gate |
 | CI `:sdk:testDebugUnitTest` | AF-001 | workflow gate |
+| `testCameraUboSlotLayout` — harness section [17], 34 checks over `af::afRoundUp`, the 16–4096 alignment table and the frame-1 containment bound | AF-020 camera UBO double-buffer overrun (GLES + latent Vulkan) | host C++ (pure layout maths; renderer TUs themselves remain NDK/CI-only) |
 
 ## 3. Device test backlog (exact procedures; SM-S921B evidence dated 2026-10-24)
 
@@ -46,6 +47,8 @@ report, so even observed rows describe the device, not a specific commit.
    absent (AF-010 retest), surface counters non-zero, depth format recorded.
    **[device 2026-10-24]** counters non-zero and healthy at 58 FPS via GLES/ANGLE; ripple check
    is visual and still open, and the Vulkan mip path was not initialised (AF-018).
+   **[device 2026-10-25]** blocked: all newer GLES/ANGLE frames show the full-screen atlas
+   defect AF-020 instead of the body, so ripples cannot be re-observed on current builds.
 5. Kill the app in background with the viewer open; relaunch — render settings must be restored
    (AF-004); prompt/photos resetting is the documented remaining gap.
 6. Rotate/background/foreground 10×; expect zero or explained surface recreate counts and no
@@ -61,6 +64,11 @@ report, so even observed rows describe the device, not a specific commit.
    the toggle); the explicit-toggle flow itself remains untested.
 10. Attempt to open a `.glb` with the app from a file manager: the dead entry must no longer
     appear (AF-002); when import ships (AF-015), this becomes a positive test.
+11. AF-020 regression + localization: install a build containing the camera-UBO slot fix,
+    regenerate, and confirm a 3D body is visible instead of the full-screen atlas. If the atlas
+    persists, run the seven-step shipped-controls ladder (exposure, ground plane, shadows, sun,
+    bloom, SSS, Vulkan retry) in `artifacts/audits/device-evidence-atlas-2026-10-25.md` §6,
+    screenshotting each state; only then re-score AF-010 and AF-014.
 
 ## 4. Rules for future tests
 

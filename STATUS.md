@@ -9,6 +9,24 @@ arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the 
 statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
 what that means and what is outstanding.
 
+### 2026-10-25 continuation status
+
+- New high-severity finding **AF-020**: every GLES/ANGLE frame from the current builds shows the
+  packed base-color texture atlas full-screen instead of the skinned 3D scene (pixel-verified:
+  65.1 % atlas packer gray vs 1.4 % clear-colour pixels; present at both quality tiers). Evidence
+  pack and screenshot ledger: `artifacts/audits/device-evidence-atlas-2026-10-25.md`,
+  `artifacts/audits/screenshots/`. The visual mechanism is only PARTIAL-localised; see
+  `docs/audit/FINDINGS.md` AF-020 for ruled-out paths and ranked hypotheses.
+- One concrete GLES defect fixed and the matching latent Vulkan pattern removed: the
+  double-buffered camera UBO used the driver alignment (≤256 B) as a per-frame stride for a
+  448-byte `CameraUbo`, so frame 1 overran the buffer. New `af::afRoundUp` helper
+  (`native/src/render/af_align.h`); slot stride is now `afRoundUp(sizeof(CameraUbo), alignment)`.
+  Host harness section [17] adds 34 checks (**439 total, 0 failures locally**). Renderer TUs need
+  the NDK, so their compile and any device effect remain CI/device-UNVERIFIED; the fix is not
+  claimed to resolve the atlas image without on-device evidence.
+- AF-010 (mip rippling) and AF-014 (white head cap) stay UNVERIFIED: visible only on the older
+  Vulkan-labelled frame, and blocked on AF-020 for every current GLES/ANGLE build.
+
 ### 2026-10-18 continuation status
 
 - The complete 28-float image-analysis wire format and 1–4 record regressions pass. The full native
@@ -68,7 +86,7 @@ Two decisions that shape all four phases:
 
 | Claim | Evidence |
 |---|---|
-| Kernel host harness passes | `tools/build_host.sh test` → **All 405 checks complete: 0 failure(s)** (`build-host/host_tests_run.txt`) |
+| Kernel host harness passes | `tools/build_host.sh test` → **All 439 checks complete: 0 failure(s)** locally (405 before the 2026-10-25 AF-020 slot tests; `build-host/` is gitignored) |
 | GLB import into a live engine | harness `[16]`: the export loads back through the ABI into an empty engine (285 657 vertices / 382 388 triangles, exactly what was generated), regions survive, the file's skeleton is refused (joint count 0, clip playback rejected), a second import is idempotent, and a hostile buffer leaves vertices, triangles and rig untouched |
 | GLB round trip | harness `[14]`: the exporter's own 34 MB file imports back — 10 primitives sharing **one** vertex pool (266 797 unique vertices instead of 2 134 376), 71 joints, inverse bind matrices, 52 morph targets, 5 PNGs decoded; 45 hostile inputs (truncation, bit flips, cyclic graphs, out-of-range accessors) rejected cleanly |
 | Scene, culling, LOD, profiling | harness `[15]`: transform composition, conservative sphere culling, monotone LOD in distance, deterministic light order, profiler exact against a synthetic clock and reporting **−1** (not 0) for GPU timings the device cannot measure |
@@ -144,7 +162,7 @@ Phase 1 is *reliable rendering, GLB loading, crash-free lifecycle and profiling*
    Host test `[12]` locks this down: REST is exact, repeat playback is bit-identical, and a smile
    applied while walking survives the pose change.
 2. **Host test `[12]` added** (16 checks) plus `tools/pose_probe.cpp` for interactive debugging. The
-   harness grew from 259 to 275 checks at that point (it is 405 now).
+   harness grew from 259 to 275 checks at that point (405 at the 2026-10 audit, 439 as of 2026-10-25).
 3. **Three Kotlin warnings that were hiding two real bugs are gone:**
    * `exportGlbBytes` took both an `EngineResult` and an `AvatarSpec`; the result's own spec is the
      one that matters, so the redundant parameter (and the unused one) is dropped.
@@ -220,7 +238,7 @@ native/include/afcore.h     the public C ABI (ABI version 1) - the contract ever
 native/src/                 kernel: anatomy, SDF field, isosurface, UV, PBR bake, rig, clips, GLB
 native/src/render/          the renderer: af_render.h contract, af_vk.cpp, af_gl.cpp, shaders/
 native/src/android/         af_jni.cpp - the only translation unit that includes <jni.h>
-native/tests/host_tests.cpp 405-check host harness (no device needed)
+native/tests/host_tests.cpp 439-check host harness (no device needed)
 native/src/af_glb_read.cpp    glTF 2.0 importer (GLB load)
 native/src/af_json.cpp        bounded JSON reader for the importer
 native/src/af_png_decode.cpp  PNG decoder (inflate) for embedded textures
@@ -239,7 +257,7 @@ DEVICE.md                   the on-device verification sheet
 
 ```bash
 tools/bootstrap_toolchain.sh                  # JDK 17, Gradle 8.9, SDK 34, NDK 26b, Kotlin, Rust
-tools/build_host.sh test                      # kernel + 405-check harness (no device, no Android SDK)
+tools/build_host.sh test                      # kernel + 439-check harness (no device, no Android SDK)
 tools/verify.sh                               # every host-side check, including the APK audit
 tools/build_android.sh                        # arm64 natives -> prebuilt/arm64-v8a
 tools/build_gradle.sh :app:assembleDebug -Paf.abIs=arm64-v8a -Paf.prebuiltJni=$PWD/prebuilt

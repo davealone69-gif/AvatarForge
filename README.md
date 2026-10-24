@@ -20,8 +20,8 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The host test harness passes **405 checks
-with 0 failures** in CI; the C++ kernel implements **47/47** ABI symbols, and the Rust core
+The kernel, renderer, SDK and app are written and build. The host test harness passes **439 checks
+with 0 failures** locally (405 in the latest recorded CI run; the AF-020 addition awaits CI); the C++ kernel implements **47/47** ABI symbols, and the Rust core
 implements 15/47 against the same ABI with byte-identical results on everything it covers. The
 build environment has no phone or GPU, and CI has no device runner, so the honest claim is
 *implemented and host/CI-verified*, not *device-proven*; one user-supplied physical-device report
@@ -54,7 +54,7 @@ still missing.
 ```bash
 tools/bootstrap_toolchain.sh          # SDK + NDK + CMake + Gradle + JDK 17 + Rust (once)
 
-tools/build_host.sh test              # kernel + 405-check host harness (no device, no Android SDK)
+tools/build_host.sh test              # kernel + 439-check host harness (no device, no Android SDK)
 tools/build_android.sh                # arm64 native libraries into prebuilt/
 tools/build_gradle.sh :app:assembleDebug :sdk:assembleRelease
 ```
@@ -67,7 +67,7 @@ Every one of these is a gate that fails loudly; none of them needs a device.
 
 ```bash
 tools/verify.sh                       # everything below, in one run
-tools/build_host.sh test              # 405 checks: geometry, rig, bake, ABI, GLB round trip, scene
+tools/build_host.sh test              # 439 checks: geometry, rig, bake, ABI, GLB round trip, scene, UBO slot layout
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
 python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so

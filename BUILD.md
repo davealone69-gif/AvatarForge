@@ -49,7 +49,7 @@ unchanged.
 ## 1. Kernel + host test harness (no device, no Android toolchain)
 
 ```bash
-tools/build_host.sh test     # builds build-host/libafcore.so and runs the 405-check harness
+tools/build_host.sh test     # builds build-host/libafcore.so and runs the 439-check harness
 tools/build_host.sh kernel   # library only
 tools/build_host.sh all      # library + harness binary, do not run
 ```
@@ -57,7 +57,7 @@ tools/build_host.sh all      # library + harness binary, do not run
 Expected output ends with:
 
 ```
-All 405 checks complete: 0 failure(s)
+All 439 checks complete: 0 failure(s)
 ```
 
 The harness covers anthropometry (waist/hip/crotch exactness against tape measurements), signed
@@ -237,7 +237,7 @@ installed but Python.
 tools/verify.sh
 ```
 
-Five sections, non-zero exit on the first failure: the kernel harness (405 checks), the shader tables
+Five sections, non-zero exit on the first failure: the kernel harness (439 checks), the shader tables
 against their sources, the structural validation of an exported `.glb`, and an audit of the built
 artifacts - including the one claim that must never regress, **no `INTERNET` permission in any APK**.
 

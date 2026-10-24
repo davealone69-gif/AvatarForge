@@ -18,36 +18,43 @@ the branch; the rest are queued with explicit unblock conditions.
 | 8 | AF-017 restart hint over-warning | `RendererDiagnosticNotes.frameLoopRestartHint`: benign-vs-churn split driven by surface counters | 3 JVM tests (`RendererDiagnosticNotesTest`), CI-green run 40107047136 |
 | 9 | AF-018 invisible Vulkan fallback | `RendererDiagnosticNotes.backendFallbackItem`: explicit INFO row when Vulkan preferred but GLES active; reason marked unknown, never guessed | 4 JVM tests, CI-green 40107047136; native reason surfacing queued |
 | 10 | — device evidence 2026-10-24 | raw report archived; AF-010/014 visual checks stay open because the Vulkan path did not initialise | `artifacts/audits/device-report-SM-S921B-2026-10-24.txt` |
+| 11 | AF-020 camera UBO overrun (GLES confirmed, Vulkan latent) | `af::afRoundUp` slot sizing in new `af_align.h`; `cameraSlotSize_` stride in both backends; post-UBO latent risk documented only | host harness [17], 34 new checks (439 total), 0 failures local; NDK compile + device effect CI/device-UNVERIFIED |
+| 12 | AF-020 full-screen atlas (visual) | evidence pack, screenshot ledger and shipped-controls localization ladder; no fix claim — mechanism PARTIAL | `artifacts/audits/device-evidence-atlas-2026-10-25.md` + `screenshots/` |
 
 ## Queued — next sessions (priority order)
 
-1. **AF-009 release integrity (medium, BLOCKED on credentials).** Add `:app:bundleRelease` to
+1. **AF-020 device confirmation (high).** Ship a build containing the camera-UBO slot fix and
+   run device backlog step 11 (TEST_MATRIX §3): body visible vs atlas persists; if it persists,
+   execute the seven-step shipped-controls ladder in the evidence pack §6 and, if still
+   ambiguous, add a `KHR_debug`/`glGetError` surfacing path AFTER the AF-019 renderer C-API gate
+   exists. Do not claim the UBO fix resolves the atlas without on-device evidence.
+2. **AF-009 release integrity (medium, BLOCKED on credentials).** Add `:app:bundleRelease` to
    CI once a release keystore is supplied via encrypted secret; document AAB verification
    (apksigner, bundletool). Unblock: maintainer adds `keystore.properties` secrets.
-2. **SEC-1/SEC-2 workflow hardening (low).** Move `contents: write` into the refresh-only
+3. **SEC-1/SEC-2 workflow hardening (low).** Move `contents: write` into the refresh-only
    workflow; SHA-pin third-party actions.
-3. **AF-008 ADPF (medium).** `PerformanceHintManager` session on the render thread (API 31+),
+4. **AF-008 ADPF (medium).** `PerformanceHintManager` session on the render thread (API 31+),
    `getThermalHeadroom` ≤1 poll/10 s with NaN handling, feeding `DeviceResourceGovernor`;
    diagnostics must distinguish unsupported from safe.
-4. **AF-019 + AF-018 native half (low/medium).** Extract `native/include/afrender.h`, give the
+5. **AF-019 + AF-018 native half (low/medium).** Extract `native/include/afrender.h`, give the
    renderer C API its own manifest/conformance gate (today 0 of its symbols are in
    `afcore.abi.json`), then extend `af_render_info` with the retained Vulkan rejection reason and
    wire it through JNI so the fallback row can show the actual cause.
-5. **AF-015 GLB import (medium feature).** JNI wrapper over the existing `af_glb_read`,
+6. **AF-015 GLB import (medium feature).** JNI wrapper over the existing `af_glb_read`,
    SAF-open contract, scene attachment into the renderer; restore the VIEW filter only when the
    handler exists; add malformed-file JNI tests and the device open-flow test (TEST_MATRIX #10).
-6. **Renderer diagnostic stages (renderer audit §5).** C ABI flag for the eight deterministic
+7. **Renderer diagnostic stages (renderer audit §5).** C ABI flag for the eight deterministic
    scenes; device-gated verification; this replaces guesswork in any future "zero render" bug.
-7. **PERF-1 GPU timing.** VK timestamp queries / GL timer queries into `RendererStats.cpuMs`
+8. **PERF-1 GPU timing.** VK timestamp queries / GL timer queries into `RendererStats.cpuMs`
    counterpart; then benchmark per PERFORMANCE_BASELINE §5.
-8. **AF-012 instrumented tests.** `androidTest` smoke + export round trip on an emulator runner.
-9. **SEC-3 fuzzing.** Expand the GLB/PNG corpus; run under ASan in a scheduled (non-gating) job.
-10. **AF-004 remainder.** Persist prompt/spec and reference thumbnails (scoped, auto-purged).
-11. **AF-005/AF-006/AF-013 hygiene.** Decide `engine/` fate; add cargo test job or mark Rust
+9. **AF-012 instrumented tests.** `androidTest` smoke + export round trip on an emulator runner.
+10. **SEC-3 fuzzing.** Expand the GLB/PNG corpus; run under ASan in a scheduled (non-gating) job.
+11. **AF-004 remainder.** Persist prompt/spec and reference thumbnails (scoped, auto-purged).
+12. **AF-005/AF-006/AF-013 hygiene.** Decide `engine/` fate; add cargo test job or mark Rust
     reference-only; introduce `libs.versions.toml`.
-12. **AF-007 phantom workflows.** Maintainer deletes the three orphan registrations (token-blocked
+13. **AF-007 phantom workflows.** Maintainer deletes the three orphan registrations (token-blocked
     here).
-13. **AF-014 white head cap.** Re-screenshot on a build containing the mip fix; only then decide
+14. **AF-014 white head cap.** Re-screenshot on a build containing the mip fix; only then decide
     whether a material/bake defect exists.
 
 ## Standing constraints on all future work
