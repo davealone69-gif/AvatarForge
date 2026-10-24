@@ -63,6 +63,10 @@ tools/build_gradle.sh :app:assembleDebug :sdk:assembleRelease
 
 Full details, including the 2 GB container recipe and JDK/SDK paths, are in **`BUILD.md`**.
 
+## Troubleshooting
+
+Start with [DIY Fault-Finding](docs/DIY_FAULT_FINDING.md), a plain-language checklist tied to the status and measurements shown in the app. For black viewer / zero-FPS diagnosis and the evidence required before calling a renderer fix verified, see [Renderer Recovery and Verification](docs/RENDERER_FIX.md).
+
 ## Verification
 
 Every one of these is a gate that fails loudly; none of them needs a device.
