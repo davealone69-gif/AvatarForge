@@ -1796,11 +1796,20 @@ static void testPoseComposition() {
     af_engine* e = nullptr;
     CHECK(af_engine_create(&spec, nullptr, &e) == AF_OK && e != nullptr, "engine created through the public ABI");
     if (!e) return;
-    CHECK(af_engine_run_all(e) == AF_OK, "full pipeline ran (%s)", af_engine_last_error(e));
+    const int32_t buildRc = af_engine_run_all(e);
+    CHECK(buildRc == AF_OK, "full pipeline ran (%s)", af_engine_last_error(e));
+    if (buildRc != AF_OK) {
+        af_engine_destroy(e);
+        return;
+    }
 
     const int32_t n = af_engine_vertex_count(e);
     const af_vertex* verts = af_engine_vertices(e);
     CHECK(n > 10000 && verts != nullptr, "%d vertices addressable through the ABI", n);
+    if (n <= 10000 || verts == nullptr) {
+        af_engine_destroy(e);
+        return;
+    }
 
     std::vector<af_vertex> bind(static_cast<size_t>(n)), walkA(static_cast<size_t>(n)),
                            restAfter(static_cast<size_t>(n)), walkB(static_cast<size_t>(n));
@@ -1829,18 +1838,37 @@ static void testPoseComposition() {
 
     /* 1. the bind pose is where the avatar starts */
     const int32_t joints = af_engine_joint_count(e);
+    CHECK(joints > 0, "pose composition has a positive joint count (%d)", joints);
+    if (joints <= 0) {
+        af_engine_destroy(e);
+        return;
+    }
     std::vector<float> identityQuats(static_cast<size_t>(joints) * 4u, 0.0f);
     for (int32_t j = 0; j < joints; ++j) identityQuats[static_cast<size_t>(j) * 4u + 3u] = 1.0f;
     af_pose identity{identityQuats.data(), joints};
-    CHECK(af_engine_apply_pose(e, &identity) == AF_OK, "an identity pose is accepted (x y z w, w=1)");
+    const int32_t identityRc = af_engine_apply_pose(e, &identity);
+    CHECK(identityRc == AF_OK, "an identity pose is accepted (x y z w, w=1)");
+    const af_vertex* identityVerts = af_engine_vertices(e);
+    if (identityRc != AF_OK || identityVerts == nullptr) {
+        CHECK(false, "identity pose result buffer is valid before copying");
+        af_engine_destroy(e);
+        return;
+    }
     std::vector<af_vertex> afterPose0(static_cast<size_t>(n));
-    std::memcpy(afterPose0.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
+    std::memcpy(afterPose0.data(), identityVerts, sizeof(af_vertex) * static_cast<size_t>(n));
     CHECK(nearest(bind, afterPose0) < 1e-5f, "a zero pose reproduces the bind pose (max %.2e m)",
           (double)nearest(bind, afterPose0));
 
     /* 2. a clip moves real geometry */
-    CHECK(af_engine_apply_clip(e, AF_CLIP_WALK, 0.35f) == AF_OK, "AF_CLIP_WALK sampled at t=0.35");
-    std::memcpy(walkA.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
+    const int32_t walkRc = af_engine_apply_clip(e, AF_CLIP_WALK, 0.35f);
+    CHECK(walkRc == AF_OK, "AF_CLIP_WALK sampled at t=0.35");
+    const af_vertex* walkVerts = af_engine_vertices(e);
+    if (walkRc != AF_OK || walkVerts == nullptr) {
+        CHECK(false, "walk clip result buffer is valid before copying");
+        af_engine_destroy(e);
+        return;
+    }
+    std::memcpy(walkA.data(), walkVerts, sizeof(af_vertex) * static_cast<size_t>(n));
     const size_t walkMoved = movedCount(bind, walkA);
     CHECK(walkMoved > static_cast<size_t>(n) / 4, "the walk poses most of the body (%zu of %d verts)", walkMoved, n);
     CHECK(nearest(bind, walkA) > 0.05f, "walk displacement is macroscopic (max %.3f m)",
@@ -1863,14 +1891,28 @@ static void testPoseComposition() {
     }
 
     /* 4. AF_CLIP_REST restores the bind pose exactly */
-    CHECK(af_engine_apply_clip(e, AF_CLIP_REST, 0.0f) == AF_OK, "AF_CLIP_REST accepted");
-    std::memcpy(restAfter.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
+    const int32_t restRc = af_engine_apply_clip(e, AF_CLIP_REST, 0.0f);
+    CHECK(restRc == AF_OK, "AF_CLIP_REST accepted");
+    const af_vertex* restVerts = af_engine_vertices(e);
+    if (restRc != AF_OK || restVerts == nullptr) {
+        CHECK(false, "REST result buffer is valid before copying");
+        af_engine_destroy(e);
+        return;
+    }
+    std::memcpy(restAfter.data(), restVerts, sizeof(af_vertex) * static_cast<size_t>(n));
     CHECK(movedCount(bind, restAfter) == 0, "REST restores the bind pose exactly (%zu verts off)",
           movedCount(bind, restAfter));
 
     /* 5. returning to the same frame of the same clip is bit-exact (no accumulation) */
-    CHECK(af_engine_apply_clip(e, AF_CLIP_WALK, 0.35f) == AF_OK, "AF_CLIP_WALK re-sampled at t=0.35");
-    std::memcpy(walkB.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
+    const int32_t walkAgainRc = af_engine_apply_clip(e, AF_CLIP_WALK, 0.35f);
+    CHECK(walkAgainRc == AF_OK, "AF_CLIP_WALK re-sampled at t=0.35");
+    const af_vertex* walkAgainVerts = af_engine_vertices(e);
+    if (walkAgainRc != AF_OK || walkAgainVerts == nullptr) {
+        CHECK(false, "re-sampled walk result buffer is valid before copying");
+        af_engine_destroy(e);
+        return;
+    }
+    std::memcpy(walkB.data(), walkAgainVerts, sizeof(af_vertex) * static_cast<size_t>(n));
     CHECK(movedCount(walkA, walkB) == 0, "walk -> REST -> walk is not cumulative (%zu verts differ)",
           movedCount(walkA, walkB));
 
@@ -1879,6 +1921,9 @@ static void testPoseComposition() {
         char names[64][64];
         const int32_t channels = af_engine_blendshape_names(names, 64);
         CHECK(channels == 52, "52 ARKit channels exposed (%d)", channels);
+        if (channels <= 0 || channels > 64) {
+            CHECK(false, "blendshape channel count is valid before indexing or allocating");
+        } else {
         std::vector<float> w(static_cast<size_t>(channels), 0.0f);
         int32_t smile = -1;
         for (int32_t c = 0; c < channels; ++c) if (std::strcmp(names[c], "mouthSmileLeft") == 0) smile = c;
@@ -1909,6 +1954,7 @@ static void testPoseComposition() {
                   (double)faceDelta);
             std::vector<float> zero(static_cast<size_t>(channels), 0.0f);
             af_engine_apply_blendshapes(e, zero.data(), channels);
+        }
         }
     }
     af_engine_destroy(e);
