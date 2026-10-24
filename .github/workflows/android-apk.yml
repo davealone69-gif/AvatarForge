@@ -187,10 +187,10 @@ jobs:
             echo "Committed prebuilts already match the source rebuild; nothing to do."
             exit 0
           fi
-          # Loop guard: a refresh commit triggers another PR run; on that run the previous
-          # commit is already a refresh, so never commit a second time.
-          if git log -1 --pretty=%s | grep -q "^Refresh prebuilt arm64"; then
-            echo "Previous commit is already a prebuilt refresh; skipping to avoid a loop."
+          # Loop guard: a refresh commit triggers another PR run; if a refresh already exists in
+          # the last few commits (a docs/CI commit may sit on top), never commit a second time.
+          if git log -3 --pretty=%s | grep -q "^Refresh prebuilt arm64"; then
+            echo "A prebuilt refresh is already among the last 3 commits; skipping to avoid a loop."
             exit 0
           fi
           git config user.name "avatarforge-ci"
