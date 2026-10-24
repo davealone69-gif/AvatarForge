@@ -164,13 +164,17 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
     view->valid = true;
 
     const json::Json& bvRef = acc["bufferView"];
-    if (!bvRef.isNumber()) {
+    if (!acc.find("bufferView")) {
         if (!acc["sparse"].isObject()) {
             if (error) *error = "glTF: accessor without a bufferView must have sparse data";
             return AF_ERR_INVALID_ARG;
         }
         view->base = nullptr;
         return AF_OK;
+    }
+    if (!bvRef.isNumber()) {
+        if (error) *error = "glTF: accessor bufferView reference is not an integer";
+        return AF_ERR_INVALID_ARG;
     }
     const int bvIndex = bvRef.asInt(-1);
     if (bvIndex < 0) {
@@ -221,6 +225,7 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         !checkedAdd(lastOffset, elementBytes, &span) ||
         !checkedRange(byteOffset, span, bvLength) ||
         !checkedAdd(bvOffset, byteOffset, &absoluteStart) ||
+        (absoluteStart % static_cast<size_t>(csize)) != 0 ||
         !checkedRange(absoluteStart, span, binSize)) {
         if (error) *error = "glTF: accessor offset/span overflows or exceeds its bufferView";
         return AF_ERR_INVALID_ARG;
