@@ -2680,7 +2680,12 @@ static void testEngineImport() {
     af_engine* e = nullptr;
     CHECK(af_engine_create(&spec, nullptr, &e) == AF_OK && e != nullptr, "import: engine created");
     if (!e) return;
-    CHECK(af_engine_run_all(e) == AF_OK, "import: a model was generated first (%s)", af_engine_last_error(e));
+    const int32_t buildRc = af_engine_run_all(e);
+    CHECK(buildRc == AF_OK, "import: a model was generated first (%s)", af_engine_last_error(e));
+    if (buildRc != AF_OK) {
+        af_engine_destroy(e);
+        return;
+    }
 
     const int32_t generatedVerts = af_engine_vertex_count(e);
     const int32_t generatedTris = af_engine_index_count(e) / 3;
