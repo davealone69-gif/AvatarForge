@@ -190,6 +190,7 @@ mod tests {
     #[test]
     fn nude_anatomical_base_is_adult_only() {
         let mut s = AfSpec::defaulted();
+        s.outfit = AF_OUTFIT_NONE;
         s.age_years = 17.0;
         assert_eq!(s.validate(), Err("adult_nude_age"));
 
