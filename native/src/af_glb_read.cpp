@@ -676,14 +676,17 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
     const uint8_t* binChunk = nullptr;
     size_t binSize = 0;
     size_t pos = 12;
-    while (pos + 8 <= fileSize) {
+    while (pos <= fileSize && fileSize - pos >= 8) {
         const uint32_t chunkLen = rd32(data + pos);
         const uint32_t chunkType = rd32(data + pos + 4);
-        if (pos + 8 + static_cast<size_t>(chunkLen) > fileSize) {
-            if (error) *error = "GLB: chunk length exceeds the file";
+        size_t payloadStart = 0, nextPos = 0;
+        if (!checkedAdd(pos, 8, &payloadStart) ||
+            !checkedRange(payloadStart, static_cast<size_t>(chunkLen), fileSize) ||
+            !checkedAdd(payloadStart, static_cast<size_t>(chunkLen), &nextPos)) {
+            if (error) *error = "GLB: chunk length overflows or exceeds the file";
             return AF_ERR_INVALID_ARG;
         }
-        const uint8_t* payload = data + pos + 8;
+        const uint8_t* payload = data + payloadStart;
         if (chunkType == CHUNK_JSON && !jsonChunk) {
             jsonChunk = payload;
             jsonSize = chunkLen;
@@ -692,7 +695,11 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
             binSize = chunkLen;
         }
         /* Unknown chunk types must be skipped, per spec. */
-        pos += 8 + static_cast<size_t>(chunkLen);
+        pos = nextPos;
+    }
+    if (pos != fileSize) {
+        if (error) *error = "GLB: trailing bytes do not form a complete chunk header";
+        return AF_ERR_INVALID_ARG;
     }
     if (!jsonChunk) {
         if (error) *error = "GLB: no JSON chunk";
@@ -880,7 +887,7 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         size_t bvOffset = 0, bvLength = 0;
         bv["byteOffset"].asIndex(&bvOffset);
         bv["byteLength"].asIndex(&bvLength);
-        if (bvOffset + bvLength > binSize) {
+        if (!checkedRange(bvOffset, bvLength, binSize)) {
             out->warnings.push_back({"image bufferView exceeds the binary chunk", "skipped"});
             out->textures.push_back(std::move(tex));
             continue;
