@@ -294,8 +294,8 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
     AccessorView view;
     const int rc = resolveAccessor(bin, binSize, doc, accessorIndex, &view, error);
     if (rc != AF_OK) return rc;
-    if (view.components < components) {
-        if (error) *error = "glTF: accessor has fewer components than the attribute needs";
+    if (view.components != components) {
+        if (error) *error = "glTF: accessor component count does not match the requested attribute type";
         return AF_ERR_INVALID_ARG;
     }
     out->assign(view.count * static_cast<size_t>(components), 0.0f);
@@ -462,11 +462,28 @@ int buildPrimitive(const uint8_t* bin, size_t binSize, const json::Json& doc, co
             (*pool)[i].uv[1] = scratch[i * 2 + 1];
         }
     }
-    present = readVec("COLOR_0", 4, &scratch);
-    if (present < 0) return present;
-    if (present == 0) {
-        for (size_t i = 0; i < vertexCount; ++i) {
-            for (int c = 0; c < 4; ++c) (*pool)[i].color[c] = scratch[i * 4 + static_cast<size_t>(c)];
+    {
+        int colorIndex = -1;
+        if (attribute(prim, "COLOR_0", &colorIndex)) {
+            const json::Json& colorAccessor = doc["accessors"].atOrNull(static_cast<size_t>(colorIndex));
+            const std::string colorType = colorAccessor["type"].stringOr("");
+            const int colorComponents = colorType == "VEC3" ? 3 : colorType == "VEC4" ? 4 : 0;
+            if (colorComponents == 0) {
+                if (error) *error = "glTF: COLOR_0 accessor must be VEC3 or VEC4";
+                return AF_ERR_INVALID_ARG;
+            }
+            size_t n = 0;
+            const int colorRc = readAccessorFloats(bin, binSize, doc, colorIndex, colorComponents, &scratch, &n, error);
+            if (colorRc != AF_OK) return colorRc;
+            if (n != vertexCount) {
+                if (error) *error = "glTF: COLOR_0 count differs from POSITION count";
+                return AF_ERR_INVALID_ARG;
+            }
+            for (size_t i = 0; i < vertexCount; ++i) {
+                for (int c = 0; c < colorComponents; ++c)
+                    (*pool)[i].color[c] = scratch[i * static_cast<size_t>(colorComponents) + static_cast<size_t>(c)];
+                if (colorComponents == 3) (*pool)[i].color[3] = 1.0f;
+            }
         }
     }
     present = readVec("JOINTS_0", 4, &scratch);
@@ -864,45 +881,80 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         for (const auto& ch : a["channels"].items()) {
             ImportedAnimationChannel chan;
             size_t nodeIndex = 0;
-            if (!ch["target"]["node"].asIndex(&nodeIndex) || nodeIndex >= out->nodes.size()) continue;
+            if (!ch["target"]["node"].asIndex(&nodeIndex) || nodeIndex >= out->nodes.size()) {
+                if (error) *error = "glTF: animation channel target node is missing or out of range";
+                return AF_ERR_INVALID_ARG;
+            }
             chan.node = static_cast<int>(nodeIndex);
             const std::string path = ch["target"]["path"].stringOr("");
             if (path == "translation") chan.path = 0;
             else if (path == "rotation") chan.path = 1;
             else if (path == "scale") chan.path = 2;
-            else continue;   /* "weights" is not used by this engine's rig */
-            const json::Json& sampler = a["samplers"].atOrNull(static_cast<size_t>(ch["sampler"].asInt(-1)));
-            if (sampler.isNull()) continue;
+            else {
+                if (path == "weights") continue; /* morph weights are outside this channel format */
+                if (error) *error = "glTF: unsupported animation target path";
+                return AF_ERR_UNSUPPORTED;
+            }
+            size_t samplerIndex = 0;
+            if (!ch["sampler"].asIndex(&samplerIndex)) {
+                if (error) *error = "glTF: animation channel has an invalid sampler index";
+                return AF_ERR_INVALID_ARG;
+            }
+            const json::Json& sampler = a["samplers"].atOrNull(samplerIndex);
+            if (sampler.isNull()) {
+                if (error) *error = "glTF: animation channel sampler is out of range";
+                return AF_ERR_INVALID_ARG;
+            }
             const std::string interp = sampler["interpolation"].stringOr("LINEAR");
+            if (interp != "LINEAR" && interp != "STEP" && interp != "CUBICSPLINE") {
+                if (error) *error = "glTF: unsupported animation interpolation";
+                return AF_ERR_UNSUPPORTED;
+            }
             chan.interpolation = (interp == "STEP") ? 1 : (interp == "CUBICSPLINE") ? 2 : 0;
 
             std::vector<float> times;
             size_t timeCount = 0;
-            if (readAccessorFloats(binChunk, binSize, doc, sampler["input"].asInt(-1), 1, &times, &timeCount, error) != AF_OK) continue;
+            const int inputRc = readAccessorFloats(binChunk, binSize, doc, sampler["input"].asInt(-1), 1, &times, &timeCount, error);
+            if (inputRc != AF_OK) return inputRc;
             std::vector<float> values;
             size_t valueCount = 0;
-            const int comps = 4;   /* vec4 covers translation, rotation and scale */
-            if (readAccessorFloats(binChunk, binSize, doc, sampler["output"].asInt(-1), comps, &values, &valueCount, error) != AF_OK) continue;
+            const int comps = chan.path == 1 ? 4 : 3; /* rotation is VEC4; translation/scale are VEC3 */
+            const int outputRc = readAccessorFloats(binChunk, binSize, doc, sampler["output"].asInt(-1), comps, &values, &valueCount, error);
+            if (outputRc != AF_OK) return outputRc;
+            if (timeCount == 0 || valueCount != timeCount * static_cast<size_t>(comps) *
+                    static_cast<size_t>(chan.interpolation == 2 ? 3 : 1)) {
+                if (error) *error = "glTF: animation sampler input/output key counts do not match target path";
+                return AF_ERR_INVALID_ARG;
+            }
+            for (size_t i = 0; i < times.size(); ++i) {
+                if (!std::isfinite(times[i]) || times[i] < 0.0f || (i > 0 && times[i] <= times[i - 1])) {
+                    if (error) *error = "glTF: animation input times must be finite, non-negative and strictly increasing";
+                    return AF_ERR_INVALID_ARG;
+                }
+            }
 
             chan.times.assign(times.begin(), times.end());
             if (chan.interpolation == 2) {
-                /* CUBICSPLINE stores three vec4/vec3 values per key: in-tangent, value, out. */
-                const size_t keys = valueCount / 3;
+                /* CUBICSPLINE stores in-tangent, value, out-tangent for each key. */
+                const size_t keys = timeCount;
                 chan.values.resize(keys);
                 chan.inTangents.resize(keys);
                 chan.outTangents.resize(keys);
                 for (size_t k = 0; k < keys; ++k) {
-                    chan.inTangents[k] = Vec4(values[(k * 3 + 0) * 4], values[(k * 3 + 0) * 4 + 1],
-                                              values[(k * 3 + 0) * 4 + 2], values[(k * 3 + 0) * 4 + 3]);
-                    chan.values[k] = Vec4(values[(k * 3 + 1) * 4], values[(k * 3 + 1) * 4 + 1],
-                                          values[(k * 3 + 1) * 4 + 2], values[(k * 3 + 1) * 4 + 3]);
-                    chan.outTangents[k] = Vec4(values[(k * 3 + 2) * 4], values[(k * 3 + 2) * 4 + 1],
-                                               values[(k * 3 + 2) * 4 + 2], values[(k * 3 + 2) * 4 + 3]);
+                    auto readValue = [&](size_t index) {
+                        const size_t base = index * static_cast<size_t>(comps);
+                        return Vec4(values[base], values[base + 1], values[base + 2], comps == 4 ? values[base + 3] : 0.0f);
+                    };
+                    chan.inTangents[k] = readValue(k * 3 + 0);
+                    chan.values[k] = readValue(k * 3 + 1);
+                    chan.outTangents[k] = readValue(k * 3 + 2);
                 }
             } else {
-                chan.values.resize(valueCount);
-                for (size_t k = 0; k < valueCount; ++k) {
-                    chan.values[k] = Vec4(values[k * 4], values[k * 4 + 1], values[k * 4 + 2], values[k * 4 + 3]);
+                chan.values.resize(timeCount);
+                for (size_t k = 0; k < timeCount; ++k) {
+                    const size_t base = k * static_cast<size_t>(comps);
+                    chan.values[k] = Vec4(values[base], values[base + 1], values[base + 2],
+                                           comps == 4 ? values[base + 3] : 0.0f);
                 }
             }
             if (!chan.times.empty()) anim.duration = chan.times.back() > anim.duration ? chan.times.back() : anim.duration;
@@ -913,6 +965,21 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
 
     /* ---- world transforms, with a cycle check ---- */
     if (!resolveWorldTransforms(out, error)) return AF_ERR_INVALID_ARG;
+
+    /* This engine currently flattens imported geometry into vertex pools and does not apply
+       per-node matrices at draw time. Refuse transformed mesh nodes rather than silently rendering
+       geometry in the wrong place. Identity transforms remain supported. */
+    for (const auto& primitive : out->primitives) {
+        if (primitive.node < 0 || static_cast<size_t>(primitive.node) >= out->nodes.size()) continue;
+        const Mat4& world = out->nodes[static_cast<size_t>(primitive.node)].world;
+        for (size_t i = 0; i < 16; ++i) {
+            const float expected = (i == 0 || i == 5 || i == 10 || i == 15) ? 1.0f : 0.0f;
+            if (!std::isfinite(world.m[i]) || std::fabs(world.m[i] - expected) > 1e-5f) {
+                if (error) *error = "glTF: transformed mesh nodes are unsupported by the flattened engine importer";
+                return AF_ERR_UNSUPPORTED;
+            }
+        }
+    }
     return AF_OK;
 }
 
