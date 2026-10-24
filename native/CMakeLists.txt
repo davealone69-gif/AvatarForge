@@ -75,6 +75,27 @@ target_link_libraries(afcore PRIVATE z)
 # The kernel is used from Java/Kotlin and from the Rust crates; a versioned soname would only get
 # in the way, so it is fixed.
 set_target_properties(afcore PROPERTIES VERSION "" SOVERSION "" PREFIX "lib")
+# ----------------------------------------------------------------------------------------------
+# Optional hostile-input fuzz target. Configure with Clang and
+# -DAF_BUILD_GLB_FUZZ=ON; the importer, JSON parser, and PNG decoder are instrumented together.
+# The regular Android build does not include or link this target.
+# ----------------------------------------------------------------------------------------------
+option(AF_BUILD_GLB_FUZZ "Build the GLB libFuzzer target (Clang only)" OFF)
+if(AF_BUILD_GLB_FUZZ)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "AF_BUILD_GLB_FUZZ requires Clang/libFuzzer")
+    endif()
+    add_executable(af_glb_fuzz EXCLUDE_FROM_ALL
+        tests/fuzz_glb_import.cpp
+        src/af_glb_read.cpp
+        src/af_json.cpp
+        src/af_png_decode.cpp)
+    target_include_directories(af_glb_fuzz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_options(af_glb_fuzz PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -Wall -Wextra)
+    target_link_options(af_glb_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+    target_link_libraries(af_glb_fuzz PRIVATE afcore z)
+endif()
+
 
 # ----------------------------------------------------------------------------------------------
 #  Renderer
