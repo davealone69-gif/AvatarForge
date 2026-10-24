@@ -8,9 +8,14 @@ entry point and never carries a claim that lacks a backing document._
 - **Build integrity:** REAL + VERIFIED in CI. Run `40097344731` proved the new test gate works
   by failing on a real pre-existing defect (AF-016, unvalidated shader stage); after the fix,
   runs `40098617172` and `40102483374` are fully green: NDK native compile, host kernel harness
-  (405/405), ABI conformance (47/47), asset validators, 21 JVM unit tests, APK/AAR assembly,
-  and a self-verifying Maven publication (POM with transitive dependencies + file-backed
-  `maven-repo/` artifact). Per-job evidence: `docs/audit/VERIFICATION_RESULTS.md`.
+  (405/405), ABI conformance (47/47), asset validators, 28 JVM unit tests (latest green run
+  `40107047136`), APK/AAR assembly, and a self-verifying Maven publication (POM with
+  transitive dependencies + file-backed `maven-repo/` artifact). Per-job evidence:
+  `docs/audit/VERIFICATION_RESULTS.md`.
+- **First current physical-device evidence** (SM-S921B, 2026-10-24): healthy GLES/ANGLE render
+  at 58 FPS, no failures; it also exposed diagnostics wording gaps AF-017/AF-018 (fixed,
+  CI-green) and the unguarded renderer C-API gap AF-019 (queued). The Vulkan mip fix and the
+  white-head-cap hypothesis remain UNVERIFIED because that session did not initialise Vulkan.
 - **SDK embeddability:** build-level REAL + VERIFIED (publication, POM content gates, AAR);
   integration into an actual third-party app remains UNVERIFIED — see
   `docs/SDK_INTEGRATION.md` and its acceptance checklist.

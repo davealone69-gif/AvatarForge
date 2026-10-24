@@ -57,7 +57,15 @@ runner); the verified low-RAM local defaults in `gradle.properties` are unchange
 download remains blocked from this sandbox, so the POM file's contents are attested by the
 passing grep/assertion steps, not by a downloaded copy.
 
-### 2.4 JVM unit tests covered by `:sdk:testDebugUnitTest` (21 total)
+### 2.4 Runs for the device-evidence diagnostics work (AF-017 / AF-018)
+
+| Run | Head | Outcome | Evidence |
+|---|---|---|---|
+| `40106628640` | `30409e6` | build-apk **failure** at `:sdk:compileDebugUnitTestKotlin` | annotation: smart cast to `String` impossible for the cross-module `item.hint` property — a compile-only error the JDK-less sandbox cannot produce locally |
+| `d5e397a` follow-up | — | test binds the value to a local val | fix commit `d5e397a` |
+| `40107047136` | `d5e397a` | **all three jobs success**, zero failure annotations | APK step (incl. `:sdk:testDebugUnitTest`) green: the full 28-test set passed; host-tests 405/405; NDK green; POM publication steps green |
+
+### 2.5 JVM unit tests covered by `:sdk:testDebugUnitTest` (28 total as of run 40107047136)
 
 | Test class | Tests | Defect covered |
 |---|---|---|
@@ -66,9 +74,11 @@ passing grep/assertion steps, not by a downloaded copy.
 | `ImageAnalysisNotesTest` | 4 new | AF-003: failure / empty / measured / null-pending wording |
 | `RenderSettingsCodecTest` | 6 new | AF-004: round trip, corrupt ints/floats/enums, unknown-key tolerance |
 | `DiagnosticsReportTest` | 4 new | diagnostics structure, worst-status roll-up, tier line in plain text |
+| `RendererDiagnosticNotesTest` | 7 new | AF-017 benign-vs-churn restart hints (3); AF-018 Vulkan→GLES fallback row rules (4) |
 
-Status: REAL + VERIFIED in CI — the APK job is success on both runs and the five classes are
-identical at `af09371`.
+Status: REAL + VERIFIED in CI — the first five classes were green from run `40097344731`;
+the full 28-test set (six classes) is green on run `40107047136`, after one red run
+(`40106628640`, cross-module smart cast) caught and fixed in `d5e397a`.
 
 ## 3. Local verification actually performed
 
@@ -91,7 +101,7 @@ identical at `af09371`.
 CI green proves: native sources compile under NDK; the kernel harness passes its full 405-check
 suite on a Linux x86_64 host; the ABI manifest matches the header and the host library conforms
 (47/47); the sample GLB and customization contracts validate; the SDK compiles against Android
-stubs and the 21 JVM tests pass; debug/release APK and release AAR assemble from prebuilt
+stubs and the 28 JVM tests pass; debug/release APK and release AAR assemble from prebuilt
 libraries.
 
 CI green does **not** prove: any frame is rendered on a device; Vulkan/GLES swapchain behaviour;

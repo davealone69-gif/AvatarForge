@@ -15,8 +15,8 @@ Fixes land as focused commits referenced from this register.
 | AF-007 | low | CI hygiene | Three "active" GitHub workflows have no YAML in any branch | BLOCKED (repo-admin) |
 | AF-008 | medium | renderer | Adaptive quality changes are not explainable; no ADPF | PARTIAL: tier-transition telemetry FIXED (4 JVM tests CI-green; device display UNVERIFIED); ADPF queued |
 | AF-016 | medium | native/test | Shader-table harness expected 12 stages; forward_plus compute stage shipped unvalidated | FIXED (`af09371`); gate proved its worth on first run |
-| AF-017 | low | diagnostics | Frame-loop restart hint over-warns on benign reschedules | FIXED in code + 3 JVM tests; wording now split by surface churn, CI to confirm |
-| AF-018 | low | diagnostics | Silent Vulkan→GLES fallback: "Vulkan preferred: OK" beside a gles31 backend, reason invisible | PARTIAL: Kotlin-side fallback row FIXED + 4 JVM tests; native reason surfacing QUEUED (needs renderer ABI work, see AF-019) |
+| AF-017 | low | diagnostics | Frame-loop restart hint over-warns on benign reschedules | FIXED + 3 JVM tests, CI-green on run 40107047136; device re-observation pending |
+| AF-018 | low | diagnostics | Silent Vulkan→GLES fallback: "Vulkan preferred: OK" beside a gles31 backend, reason invisible | PARTIAL: Kotlin-side fallback row FIXED + 4 JVM tests, CI-green 40107047136; native reason surfacing QUEUED (needs renderer ABI work, see AF-019) |
 | AF-019 | low | native/ABI | Renderer C API (`af_render_capi.cpp`) has no public header, manifest or conformance gate | CONFIRMED, deferred; blocks the native half of AF-018 |
 | AF-009 | medium | release | No AAB; release APK uses debug certificate | BLOCKED (credentials) |
 | AF-010 | — (historical) | renderer/vulkan | Mip-chain image-layout spec violation caused surface rippling | FIXED in code; device evidence 2026-10-24: GLES/ANGLE path healthy, but Vulkan path not initialised so the mip fix itself remains UNVERIFIED visually |
@@ -41,7 +41,8 @@ Fixes land as focused commits referenced from this register.
   zlib, runs `tools/build_host.sh test`, regenerates the ABI manifest and fails on drift, and
   re-validates the sample GLB.
 - Regression test: the workflow itself; this session's new JVM tests execute there (21 tests
-  total as of this audit). The gate found a real defect on its first run — AF-016.
+  at the first green run, 28 as of run `40107047136`). The gate found a real defect on its
+  first run — AF-016.
 - Evidence: run `40097344731` (APK + NDK jobs green; host-tests red on AF-016) and run
   `40098617172` after the harness fix (see VERIFICATION_RESULTS.md for conclusions).
 
@@ -202,8 +203,9 @@ Fixes land as focused commits referenced from this register.
 - Fix: pure-Kotlin `RendererDiagnosticNotes.frameLoopRestartHint` distinguishes a stable
   surface (0 destroys, ≤1 create, ≤1 attempt → benign explanation) from real churn (flashing
   warning retained). Wording locked by 3 JVM tests in `RendererDiagnosticNotesTest`.
-- Verification: JVM tests to run in the next CI; device re-observation of the new wording on a
-  clean open remains UNVERIFIED.
+- Verification: 3 JVM tests green in CI on run `40107047136` (a compile-only smart-cast error
+  first failed run `40106628640`, fixed in `d5e397a`); device re-observation of the new wording
+  on a clean open remains UNVERIFIED.
 
 ## AF-018 — Silent Vulkan→GLES fallback makes "Vulkan preferred: OK" misleading (low, PARTIAL)
 

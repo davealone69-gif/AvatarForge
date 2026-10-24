@@ -12,7 +12,7 @@ UNVERIFIED rather than implied by CI.
 | Static: customization contracts | `tools/validate_custom_inputs.py` | manual | manual | added to CI `host-tests` |
 | Native kernel (host) | `native/tests/host_tests.cpp` (405 checks: anatomy, SDF, isosurface, rig, blendshapes, GLB round trip, malformed GLB, shaders incl. all 13 baked table entries) | `tools/build_host.sh test` (g++, zlib) | one-off record 2026-10-18; not in CI | CI-gated via `host-tests`; first gated run exposed AF-016, now fixed; local 405/405 and run 40098617172 green |
 | Native ABI conformance | `tools/abi_conformance.py` (symbols/layout/behaviour vs manifest) | Python+ctypes against a built lib | manual | wired into `host-tests` against the host build |
-| Kotlin/JVM SDK | JUnit 4, 21 tests in 5 classes under `sdk/src/test` (adult safety, analysis packing, analysis notes, settings codec, diagnostics report) | `:sdk:testDebugUnitTest` | not run by any workflow | added to APK job and green on run 40097344731 |
+| Kotlin/JVM SDK | JUnit 4, 28 tests in 6 classes under `sdk/src/test` (adult safety, analysis packing, analysis notes, settings codec, diagnostics report, diagnostic-note rules) | `:sdk:testDebugUnitTest` | not run by any workflow | added to APK job; 21-test set green on 40097344731, full 28-test set green on 40107047136 |
 | Kotlin/Native integration | engine lifecycle through JNI | requires device/emulator | MISSING | MISSING (AF-012) |
 | Renderer | device frame/swapchain behaviour | requires device | UNVERIFIED except one manual report | unchanged; manual checklist in RENDERER_AUDIT |
 | UI/flows | Compose screens, intents, SAF export | requires device | MISSING | MISSING (AF-012) |

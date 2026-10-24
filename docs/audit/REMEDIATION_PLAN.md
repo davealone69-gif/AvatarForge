@@ -15,8 +15,8 @@ the branch; the rest are queued with explicit unblock conditions.
 | 5 | AF-008 invisible quality changes | tier transitions captured into `RendererDiagnostics` from stats (no ABI change), shown in report/panel | compile + `DiagnosticsReportTest` (4 tests), CI-green |
 | 6 | — report drift | structured report test locks worst-status and plain-text behaviour | `DiagnosticsReportTest` |
 | 7 | AF-016 shader-table harness drift | add the shipped `forward_plus` compute stage to the harness `want[]` so all 13 table entries are validated | local 405/405 pass; host-tests job on run 40098617172 |
-| 8 | AF-017 restart hint over-warning | `RendererDiagnosticNotes.frameLoopRestartHint`: benign-vs-churn split driven by surface counters | 3 JVM tests (`RendererDiagnosticNotesTest`), CI to confirm |
-| 9 | AF-018 invisible Vulkan fallback | `RendererDiagnosticNotes.backendFallbackItem`: explicit INFO row when Vulkan preferred but GLES active; reason marked unknown, never guessed | 4 JVM tests, CI to confirm; native reason surfacing queued |
+| 8 | AF-017 restart hint over-warning | `RendererDiagnosticNotes.frameLoopRestartHint`: benign-vs-churn split driven by surface counters | 3 JVM tests (`RendererDiagnosticNotesTest`), CI-green run 40107047136 |
+| 9 | AF-018 invisible Vulkan fallback | `RendererDiagnosticNotes.backendFallbackItem`: explicit INFO row when Vulkan preferred but GLES active; reason marked unknown, never guessed | 4 JVM tests, CI-green 40107047136; native reason surfacing queued |
 | 10 | — device evidence 2026-10-24 | raw report archived; AF-010/014 visual checks stay open because the Vulkan path did not initialise | `artifacts/audits/device-report-SM-S921B-2026-10-24.txt` |
 
 ## Queued — next sessions (priority order)
