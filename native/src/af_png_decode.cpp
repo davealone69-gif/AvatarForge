@@ -524,8 +524,10 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     }
     const size_t pixelBytes = rowBytes * h;
     const size_t rgbaBytes = pixelCount * 4u;
+    const size_t compressedBytes = idat.size();
     if (expected > MAX_PEAK_BYTES || pixelBytes > MAX_PEAK_BYTES - expected ||
-        rgbaBytes > MAX_PEAK_BYTES - expected - pixelBytes) {
+        rgbaBytes > MAX_PEAK_BYTES - expected - pixelBytes ||
+        compressedBytes > MAX_PEAK_BYTES - expected - pixelBytes - rgbaBytes) {
         if (error) *error = "png: peak decoded memory exceeds the decoder limit";
         return false;
     }
