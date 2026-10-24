@@ -71,9 +71,9 @@ class RendererDiagnosticNotesTest {
         assertEquals(DiagStatus.INFO, item.status)
         assertTrue(item.detail.contains("Vulkan was preferred"))
         assertTrue(item.detail.contains("gles31"))
-        requireNotNull(item.hint)
         // The reason is honestly unknown at this layer; the hint must not invent one.
-        assertTrue(item.hint.contains("does not yet expose the Vulkan rejection reason"))
+        val hint = requireNotNull(item.hint)
+        assertTrue(hint.contains("does not yet expose the Vulkan rejection reason"))
     }
 
     @Test
