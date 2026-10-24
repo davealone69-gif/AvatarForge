@@ -705,6 +705,7 @@ static void testAbi() {
     /* --- prompt interpretation, on the ABI's own entry point --- */
     af_spec spec;
     af_spec_init(&spec);
+    CHECK(spec.outfit == AF_OUTFIT_TSHIRT, "public C ABI defaults to a clothed outfit");
     af_callbacks cb{};
     cb.on_progress = testAbiProgress;
     cb.on_log = testAbiLog;
