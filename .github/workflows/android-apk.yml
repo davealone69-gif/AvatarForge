@@ -16,6 +16,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  glb-fuzz-sanitizers:
+    name: Fuzz GLB importer under ASan and UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Clang and native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build zlib1g-dev
+
+      - name: Generate overflow-focused GLB corpus
+        run: python3 native/tests/make_glb_fuzz_corpus.py build-glb-fuzz/corpus
+
+      - name: Build importer with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: |
+          set -euo pipefail
+          CC=clang CXX=clang++ cmake -S native -B build-glb-fuzz -G Ninja \
+            -DAF_BUILD_GLB_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-glb-fuzz --target af_glb_fuzz -j2
+
+      - name: Fuzz overflow-focused corpus
+        run: |
+          set -euo pipefail
+          mkdir -p build-glb-fuzz/artifacts
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            build-glb-fuzz/af_glb_fuzz build-glb-fuzz/corpus \
+              -max_total_time=45 -max_len=1048576 -timeout=5 \
+              -artifact_prefix=build-glb-fuzz/artifacts/
+
+      - name: Preserve sanitizer crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvatarForge-GLB-sanitizer-failures-${{ github.sha }}
+          path: build-glb-fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
   renderer-pixels:
     name: Render real GLES and Vulkan frames
     runs-on: ubuntu-24.04
