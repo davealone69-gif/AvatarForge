@@ -12,7 +12,14 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
+    `maven-publish`
 }
+
+/* Keep in sync with app versionName. The SDK is versioned with the app for now; split them only
+   once an external consumer needs an independent release cadence. */
+val sdkVersion = "0.10.1"
+val sdkGroup = "com.avatarforge"
+val sdkArtifact = "avatarforge-sdk"
 
 /*
  * Two ways to get the native libraries into the APK:
@@ -106,6 +113,65 @@ android {
                they must stay uncompressed is FALSE and extractNativeLibs must be TRUE (the app
                manifest sets that): loadLibrary needs a real file on older devices. */
             useLegacyPackaging = true
+        }
+    }
+
+    /* Makes the release variant available to the maven-publish component below. A sources jar is
+       attached so IDE navigation works for consumers; no javadoc task exists (Kotlin docs only). */
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
+}
+
+/* Maven publication. `from(components["release"])` makes AGP generate the POM itself, including
+   the runtime dependencies (core-ktx, exifinterface, coroutines), so a Maven consumer gets them
+   transitively instead of being told to add three coordinates by hand. No license is declared:
+   the repository has not chosen one yet (see README), and claiming one here would be inaccurate. */
+afterEvaluate {
+    publishing {
+        publications {
+            register<MavenPublication>("release") {
+                groupId = sdkGroup
+                artifactId = sdkArtifact
+                version = sdkVersion
+                from(components["release"])
+                pom {
+                    name.set("AvatarForge SDK")
+                    description.set(
+                        "Offline avatar generation engine and Vulkan/GLES renderer for Android: " +
+                            "procedural geometry, PBR bake, rig, blendshapes and glTF binary export, " +
+                            "with no network permission."
+                    )
+                    url.set("https://github.com/davealone69-gif/AvatarForge")
+                    scm {
+                        connection.set("scm:git:git://github.com/davealone69-gif/AvatarForge.git")
+                        developerConnection.set("scm:git:ssh://github.com/davealone69-gif/AvatarForge.git")
+                        url.set("https://github.com/davealone69-gif/AvatarForge")
+                    }
+                    developers {
+                        developer {
+                            id.set("davealone69-gif")
+                        }
+                    }
+                }
+            }
+        }
+        /* GitHub Packages target. Credentials come from Gradle properties or the CI environment;
+           their absence never breaks an ordinary build because publishing is a separate task.
+           `publishToMavenLocal` needs no repository and works fully offline. */
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/davealone69-gif/AvatarForge")
+                credentials {
+                    username = (project.findProperty("gpr.user") as String?)
+                        ?: System.getenv("GITHUB_ACTOR")
+                    password = (project.findProperty("gpr.token") as String?)
+                        ?: System.getenv("GITHUB_TOKEN")
+                }
+            }
         }
     }
 }
