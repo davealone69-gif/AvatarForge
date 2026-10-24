@@ -166,6 +166,7 @@ mod tests {
         let s = AfSpec::defaulted();
         assert_eq!(s.struct_size as usize, core::mem::size_of::<AfSpec>());
         assert_eq!(s.seed, 1337);
+        assert_eq!(s.outfit, AF_OUTFIT_TSHIRT, "safe default is clothed");
         assert_eq!(s.height_m, AF_DEFAULT_HEIGHT_M);
         assert_eq!(s.muscle, 0.45);
         assert_eq!(s.body_fat, 0.22);
