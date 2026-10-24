@@ -52,12 +52,22 @@ data class RendererAttempt(
 
 /** Everything the diagnostics panel needs to explain why the viewer is (or is not) drawing.
  *  [framesRendered] is published only at lifecycle transitions (not per frame - the live FPS lives
- *  in RendererStats), so collecting this flow never causes per-frame recomposition. */
+ *  in RendererStats), so collecting this flow never causes per-frame recomposition.
+ *
+ *  The surface/frame-loop counters are cumulative for the life of this view: a flashing viewer
+ *  shows up here as repeated surface creates/destroys or frame-loop restarts, which is measured
+ *  evidence instead of a guess. */
 data class RendererDiagnostics(
     val state: RendererStartupState = RendererStartupState.WAITING_FOR_SURFACE,
     val attempts: List<RendererAttempt> = emptyList(),
     val lastError: String? = null,
     val framesRendered: Int = 0,
+    val surfaceCreates: Int = 0,
+    val surfaceChanges: Int = 0,
+    val surfaceDestroys: Int = 0,
+    val frameLoopRestarts: Int = 0,
+    val lastSurfaceWidth: Int = 0,
+    val lastSurfaceHeight: Int = 0,
 )
 
 class RenderSurfaceView @JvmOverloads constructor(
@@ -82,6 +92,30 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Frames that completed without throwing; reset whenever a new Surface is created. */
     private var framesRendered = 0
+
+    /* Cumulative surface/frame-loop telemetry. Touched from the main thread (holder callbacks)
+       and the render thread, hence volatile. They survive the per-surface diagnostics resets so
+       a flashing viewer leaves a measurable trail in the copied report. */
+    @Volatile private var surfaceCreates = 0
+    @Volatile private var surfaceChanges = 0
+    @Volatile private var surfaceDestroys = 0
+    @Volatile private var frameLoopRestarts = 0
+    @Volatile private var lastSurfaceWidth = 0
+    @Volatile private var lastSurfaceHeight = 0
+
+    /** Dimensions of the last resize actually handed to the native renderer; -1 = none yet. */
+    private var lastResizeWidth = -1
+    private var lastResizeHeight = -1
+
+    /** Keeps cumulative counters attached when a state transition rebuilds the diagnostics. */
+    private fun RendererDiagnostics.withCounters(): RendererDiagnostics = copy(
+        surfaceCreates = surfaceCreates,
+        surfaceChanges = surfaceChanges,
+        surfaceDestroys = surfaceDestroys,
+        frameLoopRestarts = frameLoopRestarts,
+        lastSurfaceWidth = lastSurfaceWidth,
+        lastSurfaceHeight = lastSurfaceHeight,
+    )
 
     /** Set by the UI; applied on the render thread before the next frame. */
     @Volatile private var settings: RenderSettings = RenderSettings()
@@ -156,7 +190,11 @@ class RenderSurfaceView @JvmOverloads constructor(
         visible = enabled
         handler.removeCallbacks(frameLoop)
         frameLoop.resetClock()
-        if (enabled) handler.post(frameLoop)
+        if (enabled) {
+            frameLoopRestarts++
+            _diagnostics.value = _diagnostics.value.withCounters()
+            handler.post(frameLoop)
+        }
     }
 
     /* ------------------------------------------------------------------ render thread --------- */
@@ -189,7 +227,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                     _diagnostics.value = _diagnostics.value.copy(
                         state = RendererStartupState.RUNNING,
                         framesRendered = framesRendered,
-                    )
+                    ).withCounters()
                 }
             } catch (t: Throwable) {
                 val reason = t.message ?: t.javaClass.simpleName
@@ -198,7 +236,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                     state = RendererStartupState.FAILED,
                     lastError = reason,
                     framesRendered = framesRendered,
-                )
+                ).withCounters()
                 /* The loop deliberately stops here: a frame that throws must not spin. The
                    viewer's Retry action re-runs the whole create sequence cleanly. */
                 return
@@ -226,8 +264,15 @@ class RenderSurfaceView @JvmOverloads constructor(
         activeSurface = holder.surface
         createAttempts = 0
         framesRendered = 0
+        surfaceCreates++
         _error.value = null
-        _diagnostics.value = RendererDiagnostics(state = RendererStartupState.INITIALIZING)
+        /* Attempt history belongs to the previous surface; the cumulative counters do not. */
+        _diagnostics.value = _diagnostics.value.copy(
+            state = RendererStartupState.INITIALIZING,
+            attempts = emptyList(),
+            lastError = null,
+            framesRendered = 0,
+        ).withCounters()
         handler.removeCallbacks(retryCreate)
         handler.post { attemptCreate() }
     }
@@ -242,7 +287,12 @@ class RenderSurfaceView @JvmOverloads constructor(
             createAttempts = 0
             framesRendered = 0
             _error.value = null
-            _diagnostics.value = RendererDiagnostics(state = RendererStartupState.INITIALIZING)
+            _diagnostics.value = _diagnostics.value.copy(
+                state = RendererStartupState.INITIALIZING,
+                attempts = emptyList(),
+                lastError = null,
+                framesRendered = 0,
+            ).withCounters()
             attemptCreate()
         }
     }
@@ -287,12 +337,12 @@ class RenderSurfaceView @JvmOverloads constructor(
             /* INITIALIZING, not RUNNING: the renderer exists but the frame loop has not
                presented anything yet. The first completed frame promotes this to RUNNING, so
                a renderer that creates successfully but never draws stays visibly stuck here. */
-            _diagnostics.value = RendererDiagnostics(
+            _diagnostics.value = _diagnostics.value.copy(
                 state = RendererStartupState.INITIALIZING,
                 attempts = _diagnostics.value.attempts + okAttempt,
                 lastError = null,
                 framesRendered = framesRendered,
-            )
+            ).withCounters()
             created.setCamera(camera)
             /* Re-apply the user's real settings: the GLES-forced attempt only swapped the
                backend preference for creation, the viewer's own toggle must stay authoritative. */
@@ -305,7 +355,10 @@ class RenderSurfaceView @JvmOverloads constructor(
              * Restart it only after the renderer and Surface are both ready.
              */
             handler.removeCallbacks(frameLoop)
-            if (visible) handler.post(frameLoop)
+            if (visible) {
+                frameLoopRestarts++
+                handler.post(frameLoop)
+            }
         } catch (t: Throwable) {
             renderer = null
             _rendererInfo.value = null
@@ -324,12 +377,12 @@ class RenderSurfaceView @JvmOverloads constructor(
                     "GPU initialisation failed ($reason); retrying..."
                 else
                     "Vulkan backend unavailable ($reason); trying OpenGL ES 3.1..."
-                _diagnostics.value = RendererDiagnostics(
+                _diagnostics.value = _diagnostics.value.copy(
                     state = RendererStartupState.INITIALIZING,
                     attempts = attempts,
                     lastError = reason,
                     framesRendered = framesRendered,
-                )
+                ).withCounters()
                 /* The final automatic attempt is delayed so a not-yet-ready Surface can settle. */
                 handler.removeCallbacks(retryCreate)
                 if (createAttempts == MAX_CREATE_ATTEMPTS - 1) {
@@ -339,12 +392,12 @@ class RenderSurfaceView @JvmOverloads constructor(
                 }
             } else {
                 _error.value = reason
-                _diagnostics.value = RendererDiagnostics(
+                _diagnostics.value = _diagnostics.value.copy(
                     state = RendererStartupState.FAILED,
                     attempts = attempts,
                     lastError = reason,
                     framesRendered = framesRendered,
-                )
+                ).withCounters()
             }
         }
     }
@@ -353,11 +406,26 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         handler.post {
-            renderer?.resize(width, height)
-            if (visible && renderer != null) {
-                handler.removeCallbacks(frameLoop)
-                handler.post(frameLoop)
+            surfaceChanges++
+            lastSurfaceWidth = width
+            lastSurfaceHeight = height
+            val r = renderer
+            /* Samsung/ANGLE surfaces emit repeated change callbacks while insets settle. Resizing
+               rebuilds the swapchain, so a redundant or zero-size resize was a free flash of black:
+               only touch the native renderer for a real, non-zero size change. */
+            val sizeChanged = width > 0 && height > 0 &&
+                (width != lastResizeWidth || height != lastResizeHeight)
+            if (r != null && sizeChanged) {
+                r.resize(width, height)
+                lastResizeWidth = width
+                lastResizeHeight = height
+                if (visible) {
+                    handler.removeCallbacks(frameLoop)
+                    frameLoopRestarts++
+                    handler.post(frameLoop)
+                }
             }
+            _diagnostics.value = _diagnostics.value.withCounters()
         }
     }
 
@@ -367,12 +435,19 @@ class RenderSurfaceView @JvmOverloads constructor(
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
             activeSurface = null
+            surfaceDestroys++
+            lastResizeWidth = -1
+            lastResizeHeight = -1
             handler.removeCallbacks(retryCreate)
             renderer?.destroy()
             renderer = null
             rendererInfoValueReset()
             _error.value = null
-            _diagnostics.value = RendererDiagnostics(state = RendererStartupState.WAITING_FOR_SURFACE)
+            _diagnostics.value = _diagnostics.value.copy(
+                state = RendererStartupState.WAITING_FOR_SURFACE,
+                attempts = emptyList(),
+                lastError = null,
+            ).withCounters()
             latch.countDown()
         }
         latch.await(2, java.util.concurrent.TimeUnit.SECONDS)

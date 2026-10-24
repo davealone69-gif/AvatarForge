@@ -229,6 +229,20 @@ fun collectDiagnostics(
         d.lastError?.let {
             items += DiagItem(rendererArea, "Last renderer error", it, DiagStatus.FAIL)
         }
+        items += DiagItem(
+            rendererArea, "Surface lifecycle",
+            "created ${d.surfaceCreates} · changed ${d.surfaceChanges} " +
+                "(last ${d.lastSurfaceWidth}x${d.lastSurfaceHeight}) · destroyed ${d.surfaceDestroys}",
+            DiagStatus.INFO,
+        )
+        items += DiagItem(
+            rendererArea, "Frame loop restarts",
+            d.frameLoopRestarts.toString(),
+            DiagStatus.INFO,
+            if (d.frameLoopRestarts > 3)
+                "Several restarts while the viewer was open can look like flashing; note this number in any report."
+            else null,
+        )
     }
 
     rendererInfo?.let { info ->

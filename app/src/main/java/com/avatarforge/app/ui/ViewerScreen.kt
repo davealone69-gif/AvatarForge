@@ -60,6 +60,7 @@ import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.Quality
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
+import com.avatarforge.sdk.render.RendererStartupState
 import com.avatarforge.sdk.render.RendererStats
 
 /** Which editing panel is open. Only one at a time: this is a phone, not a workstation. */
@@ -70,6 +71,9 @@ fun ViewerScreen(
     result: EngineResult,
     engine: AvatarEngine,
     rendererError: String?,
+    /** Drives the failure card's colour: red only after the bounded attempts give up, so the
+     *  automatic Vulkan -> GLES fallbacks no longer strobe a red "failed" card during start-up. */
+    rendererState: RendererStartupState?,
     onRetryRenderer: () -> Unit,
     onBack: () -> Unit,
     rendererInfo: RendererInfo?,
@@ -138,7 +142,7 @@ fun ViewerScreen(
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
             Header(result, rendererInfo, stats, settings.quality)
-            if (rendererError != null) {
+            if (rendererState == RendererStartupState.FAILED && rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 ) {
@@ -148,6 +152,18 @@ fun ViewerScreen(
                         /* Without this the only recovery was leaving the viewer and regenerating
                            the avatar; this re-runs the bounded Vulkan -> GLES create sequence. */
                         TextButton(onClick = onRetryRenderer) { Text("Retry renderer") }
+                    }
+                }
+            } else if (rendererState != RendererStartupState.RUNNING && rendererError != null) {
+                /* A transient message from an in-flight automatic fallback (e.g. "Vulkan
+                   unavailable; trying OpenGL ES 3.1"). Neutral, not red: recovery is still
+                   working and the bounded attempts have not been exhausted. */
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Starting GPU…", fontWeight = FontWeight.SemiBold)
+                        Text(rendererError, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }

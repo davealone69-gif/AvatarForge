@@ -74,6 +74,8 @@ import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.RendererDiagnostics
+import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 import kotlinx.coroutines.launch
 
@@ -128,6 +130,18 @@ class MainActivity : ComponentActivity() {
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
         var showDiagnostics by remember { mutableStateOf(false) }
+
+        /* Collected once at the host scope so both the viewer screen and the global MENU ->
+           Diagnostics dialog see the same live renderer data, including before a Surface exists
+           (each flow then resolves to null and the report says so honestly). */
+        val liveRendererInfo by surfaceViewState?.rendererInfo?.collectAsState()
+            ?: remember { mutableStateOf<RendererInfo?>(null) }
+        val liveStats by surfaceViewState?.stats?.collectAsState()
+            ?: remember { mutableStateOf<RendererStats?>(null) }
+        val liveRendererError by surfaceViewState?.error?.collectAsState()
+            ?: remember { mutableStateOf<String?>(null) }
+        val liveRendererDiagnostics by surfaceViewState?.diagnostics?.collectAsState()
+            ?: remember { mutableStateOf<RendererDiagnostics?>(null) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -250,12 +264,11 @@ class MainActivity : ComponentActivity() {
                 if (finished == null) {
                     screen = Screen.INPUT
                 } else {
-                    val rendererInfo by surfaceViewState?.rendererInfo?.collectAsState() ?: remember { mutableStateOf(null) }
-                    val stats by surfaceViewState?.stats?.collectAsState()
-                        ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
-                    val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
-                    val rendererDiagnostics by surfaceViewState?.diagnostics?.collectAsState()
-                        ?: remember { mutableStateOf(null) }
+                    val rendererInfo: RendererInfo? = liveRendererInfo
+                    val stats: RendererStats = liveStats
+                        ?: RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
+                    val rendererError: String? = liveRendererError
+                    val rendererDiagnostics: RendererDiagnostics? = liveRendererDiagnostics
                     /* Rebuilt on renderer lifecycle changes and integer-FPS crossings only, so the
                        60 Hz stats flow does not rebuild this report every frame. */
                     val diagnosticsReport: DiagnosticsReport = remember(
@@ -267,6 +280,7 @@ class MainActivity : ComponentActivity() {
                         result = finished,
                         engine = engine,
                         rendererError = rendererError,
+                        rendererState = rendererDiagnostics?.state,
                         onRetryRenderer = { surfaceView?.restart() },
                         diagnosticsReport = diagnosticsReport,
                         onCopyReport = { copyDiagnostics(context, diagnosticsReport) },
@@ -411,10 +425,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        /* Engine/device diagnostics without a Surface: the renderer rows report "not started"
-           and the same composable renders the viewer's live diagnostics panel. */
+        /* The same composable as the viewer's diag tab. With no viewer open the renderer rows
+           honestly report "not started"; with one open, live state is passed in above. */
         if (showDiagnostics) {
-            val report = remember { collectDiagnostics(context) }
+            /* Same live data as the viewer's diag tab: opening this from the menu no longer
+               produces a renderer-free report while a viewer exists behind the dialog. */
+            val report = remember(
+                liveRendererDiagnostics, liveRendererInfo, liveStats?.fps?.toInt(),
+            ) {
+                collectDiagnostics(context, liveRendererDiagnostics, liveRendererInfo, liveStats)
+            }
             DiagnosticsDialog(
                 report = report,
                 onDismiss = { showDiagnostics = false },
