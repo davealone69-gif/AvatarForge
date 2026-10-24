@@ -29,23 +29,36 @@ UNVERIFIED rather than implied by CI.
 | CI `host-tests` job | AF-001 tests never executing | workflow gate |
 | CI `:sdk:testDebugUnitTest` | AF-001 | workflow gate |
 
-## 3. Device test backlog (exact procedures, no device available here)
+## 3. Device test backlog (exact procedures; SM-S921B evidence dated 2026-10-24)
+
+Evidence key: **[device 2026-10-24]** = observed in `artifacts/audits/device-report-SM-S921B-2026-10-24.txt`;
+everything else remains pending. The reporting build's source commit is not recorded by the
+report, so even observed rows describe the device, not a specific commit.
 
 1. Fresh install of the CI artifact; verify version row 0.10.1 (2), no INTERNET permission.
+   **[device 2026-10-24]** version row matches; no-INTERNET still relies on CI aapt gate.
 2. Generate from text; wait to viewer; confirm first frame within 5 s and no red card.
+   **[device 2026-10-24]** RUNNING, 1 attempt / 264 ms, no FAIL/WARN rows, 58 FPS — first-frame
+   wall-clock was not measured by the user, so the "within 5 s" clause stays open.
 3. Generate from two reference photos; force an analysis failure (e.g. corrupt image picker
    output via a file manager) and confirm the new visible note appears and generation continues.
 4. Armor avatar, orbit 60 s at each zoom extreme; capture `diag` report — ripples must be
    absent (AF-010 retest), surface counters non-zero, depth format recorded.
+   **[device 2026-10-24]** counters non-zero and healthy at 58 FPS via GLES/ANGLE; ripple check
+   is visual and still open, and the Vulkan mip path was not initialised (AF-018).
 5. Kill the app in background with the viewer open; relaunch — render settings must be restored
    (AF-004); prompt/photos resetting is the documented remaining gap.
 6. Rotate/background/foreground 10×; expect zero or explained surface recreate counts and no
-   crash.
+   crash. **[device 2026-10-24]** single clean open: created 1 / changed 1 / destroyed 0; the
+   four frame-loop restarts are source-traced as benign (AF-017).
 7. 30-minute continuous render with clips playing; record thermal row, tier transitions, FPS
-   distribution, memory.
+   distribution, memory. **[device 2026-10-24]** spot sample only: thermal light, tier held 2
+   (no transitions to observe), 1236 MB available; the 30-minute run remains pending.
 8. Export via SAF (clean install, no grants), share via FileProvider to another app, re-open the
    GLB with `validate_glb.py` after transfer.
 9. Toggle Vulkan off and repeat 2–4 to exercise the GLES path.
+   **[device 2026-10-24]** GLES/ANGLE path exercised in practice (via automatic fallback, not
+   the toggle); the explicit-toggle flow itself remains untested.
 10. Attempt to open a `.glb` with the app from a file manager: the dead entry must no longer
     appear (AF-002); when import ships (AF-015), this becomes a positive test.
 

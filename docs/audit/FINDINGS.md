@@ -15,8 +15,11 @@ Fixes land as focused commits referenced from this register.
 | AF-007 | low | CI hygiene | Three "active" GitHub workflows have no YAML in any branch | BLOCKED (repo-admin) |
 | AF-008 | medium | renderer | Adaptive quality changes are not explainable; no ADPF | PARTIAL: tier-transition telemetry FIXED (4 JVM tests CI-green; device display UNVERIFIED); ADPF queued |
 | AF-016 | medium | native/test | Shader-table harness expected 12 stages; forward_plus compute stage shipped unvalidated | FIXED (`af09371`); gate proved its worth on first run |
+| AF-017 | low | diagnostics | Frame-loop restart hint over-warns on benign reschedules | FIXED in code + 3 JVM tests; wording now split by surface churn, CI to confirm |
+| AF-018 | low | diagnostics | Silent Vulkan→GLES fallback: "Vulkan preferred: OK" beside a gles31 backend, reason invisible | PARTIAL: Kotlin-side fallback row FIXED + 4 JVM tests; native reason surfacing QUEUED (needs renderer ABI work, see AF-019) |
+| AF-019 | low | native/ABI | Renderer C API (`af_render_capi.cpp`) has no public header, manifest or conformance gate | CONFIRMED, deferred; blocks the native half of AF-018 |
 | AF-009 | medium | release | No AAB; release APK uses debug certificate | BLOCKED (credentials) |
-| AF-010 | — (historical) | renderer/vulkan | Mip-chain image-layout spec violation caused surface rippling | FIXED (commit `bac2168`+`e9bc49b`), device retest UNVERIFIED |
+| AF-010 | — (historical) | renderer/vulkan | Mip-chain image-layout spec violation caused surface rippling | FIXED in code; device evidence 2026-10-24: GLES/ANGLE path healthy, but Vulkan path not initialised so the mip fix itself remains UNVERIFIED visually |
 | AF-011 | — (historical) | diagnostics | Counter shadowing, red-card strobe, redundant resizes | FIXED (commits `9b0af6d`/`bac2168`) |
 | AF-012 | low | test strategy | No instrumented/device tests exist | CONFIRMED, roadmap |
 | AF-013 | low | deps | No version catalog; dependency coordinates hardcoded | CONFIRMED, deferred |
@@ -127,8 +130,14 @@ Fixes land as focused commits referenced from this register.
 - Evidence and fix: see `docs/VULKAN_MIP_FIX_2026-10-24.md`. Same-layout
   `TRANSFER_DST→TRANSFER_DST` barriers around `vkCmdBlitImage` violated the spec; strict
   AMD/Xclipse drivers could return undefined blit data, matching the observed rippling. Fixed
-  in `bac2168`, prebuilts refreshed in `e9bc49b`, NDK compile green. Visual device retest
-  remains UNVERIFIED.
+  in `bac2168`, prebuilts refreshed in `e9bc49b`, NDK compile green.
+- Device evidence 2026-10-24 (`artifacts/audits/device-report-SM-S921B-2026-10-24.txt`): the
+  SM-S921B now renders healthily at 58 FPS / 17.2 ms with zero failures, but **via the GLES
+  3.1/ANGLE path** — native Vulkan initialisation was declined (see AF-018), so the Vulkan
+  blit/mip code path is not exercised by this report. The mip fix itself therefore stays
+  UNVERIFIED; a visual check for rippling on this session's build and any future Vulkan-active
+  session is still required. The EGL surface-format/geometry half of the renderer recovery is
+  positively exercised (context + window surface + first frame succeeded).
 
 ## AF-011 — Diagnostics/telemetry defects (historical, fixed)
 
@@ -155,6 +164,8 @@ Fixes land as focused commits referenced from this register.
   surface above the face. Hypotheses, in order to test after the mip fix: corrupted mip
   sampling (may already be resolved), hair-cap material/bake issue, or depth fallback. No code
   change is justified before the next device report.
+- 2026-10-24 status: the numeric report cannot see pixels, so the cap is not resolved or
+  disproven; still needs a fresh screenshot from a current build.
 
 ## AF-016 — Shader-table harness drift: forward_plus compute stage unvalidated (medium, fixed)
 
@@ -175,6 +186,54 @@ Fixes land as focused commits referenced from this register.
   assertions now cover all 13 entries. This extends coverage; no assertion was weakened.
 - Verification: local full run `All 405 checks complete: 0 failure(s)`; CI run
   `40098617172` host-tests job **success** (all three jobs green, zero failure annotations).
+
+## AF-017 — Frame-loop restart hint misclassifies benign reschedules (low, fix in flight)
+
+- Detected from: the 2026-10-24 SM-S921B device report (`artifacts/audits/device-report-SM-S921B-
+  2026-10-24.txt`): `Frame loop restarts: 4` with surface created 1 / changed 1 / destroyed 0
+  and one successful create attempt, yet the report carried the "can look like flashing" hint.
+- Source trace: the counter increments in exactly three places in `RenderSurfaceView` —
+  `setFrameLoopEnabled(true)` (view attach visibility + the viewer's explicit enable),
+  successful `attemptCreate()`, and a real `surfaceChanged` resize. A clean viewer open fires
+  each once (attach + explicit = 2, create = 1, resize = 1 → 4). None of these rebuild a
+  swapchain except the resize, which happened exactly once and was expected.
+- Defect: the old `> 3` rule warned about flashing without checking whether any surface was
+  actually recreated — an alarming but false signal on the healthiest possible open.
+- Fix: pure-Kotlin `RendererDiagnosticNotes.frameLoopRestartHint` distinguishes a stable
+  surface (0 destroys, ≤1 create, ≤1 attempt → benign explanation) from real churn (flashing
+  warning retained). Wording locked by 3 JVM tests in `RendererDiagnosticNotesTest`.
+- Verification: JVM tests to run in the next CI; device re-observation of the new wording on a
+  clean open remains UNVERIFIED.
+
+## AF-018 — Silent Vulkan→GLES fallback makes "Vulkan preferred: OK" misleading (low, PARTIAL)
+
+- Detected from: the same device report pairs `Attempt 1 (Vulkan preferred): OK in 264 ms`
+  with backend `gles31 · ANGLE ... on Vulkan 1.3.304`.
+- Source trace: `Renderer::create` (`native/src/render/af_render.cpp:166-176`) attempts
+  `createVulkanRenderer` when `preferVulkan` is set, and on null silently retries GLES; the
+  `vulkanError` string is only surfaced if BOTH backends fail. The Kotlin "attempt" records the
+  whole sequence as one successful call, so no layer records *why* Vulkan was declined.
+- Why it matters: readers reasonably infer Vulkan is driving the GPU; in fact the system GLES
+  driver (ANGLE-on-Vulkan) is. It also means the Vulkan mip fix (AF-010) can sit unexercised
+  while reports look Vulkan-green.
+- Fix this session (Kotlin side): `RendererDiagnosticNotes.backendFallbackItem` adds an INFO
+  "Backend selection" row whenever a Vulkan-preferred attempt coexists with a non-Vulkan active
+  backend, stating the observed fallback and that the rejection reason is not exposed — no
+  fabricated reason. Covered by 4 JVM tests.
+- Queued native follow-up: retain `vulkanError` in `RendererInfo` through the renderer C ABI
+  and JNI; that surface currently has no ABI gate (AF-019), so do it together with one.
+
+## AF-019 — Renderer C API lacks manifest/conformance coverage (low)
+
+- Evidence: `tools/abi_manifest.py` reads only `native/include/afcore.h`;
+  `abi/afcore.abi.json` contains 0 renderer functions (verified: `render` name filter is
+  empty across 47 entries). `af_render_capi.cpp` defines its own structs (e.g.
+  `af_render_info`) inside the .cpp with no public header, and is reached only via JNI. The
+  host harness covers shader tables but not the renderer C ABI layout/symbols.
+- Consequence: the native half of AF-018 (adding a fallback-reason field) would change an
+  unguarded struct; a layout mismatch between native and JNI would fail only on a device.
+- Recommendation: extract a public `native/include/afrender.h`, extend the manifest generator
+  (or add a sibling manifest + conformance job) before extending the renderer info struct.
 
 ## AF-015 — GLB import feature missing (medium)
 

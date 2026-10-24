@@ -100,7 +100,34 @@ on Android (the codec is JVM-tested; the wrapper is thin but device-bound); anal
 rendering in Compose; export/share flows; thermal/ADPF behaviour; signed-artifact integrity.
 Each stays UNVERIFIED with a procedure in §5 or BLOCKED with an owner action.
 
-## 5. UNVERIFIED device backlog (authoritative copy in TEST_MATRIX §3)
+## 5. Physical-device observations (SM-S921B / Xclipse 940, 2026-10-24 23:05 GMT+8)
+
+Raw report preserved at `artifacts/audits/device-report-SM-S921B-2026-10-24.txt` (user-supplied;
+the report does not record its own source commit, so build identity stays UNVERIFIED).
+
+### 5.1 Rows now REAL + VERIFIED on this device/build
+
+| Claim | Evidence from the report |
+|---|---|
+| App + native lib + engine healthy on Android 17 / API 37 / arm64 | `Overall: OK`, native loaded, ABI 1, 16 clips / 52 blendshapes / 13 regions |
+| Renderer reaches RUNNING with a presented frame | 1 attempt OK in 264 ms, state RUNNING, frame count advanced, 58 FPS |
+| EGL/ANGLE recovery path works on Xclipse 940 | gles31 · ANGLE-on-Vulkan 1.3.304, ES 3.2, shadows/MSAA/HDR/anisotropy all true |
+| Performance parity with the pre-fix baseline | 58 FPS / 17.2 ms / tier 2 / 15 draws / 417,150 tris vs prior 58 / 17.3 / tier 2 / 14 / 426,170 |
+| Adaptive telemetry does not crash and stays quiet when nothing changes | no "Quality tier changes" row; tier held 2 (positive transitions remain UNVERIFIED) |
+| Thermal/memory/storage healthy during rendering | thermal light; 1236 MB available; 34.6 GB free |
+
+### 5.2 What this report explicitly does NOT verify
+
+- The Vulkan mip-chain fix (AF-010): the native Vulkan backend did not initialise; GLES/ANGLE
+  rendered instead. Visual rippling under either backend needs eyes-on confirmation; numeric
+  diagnostics cannot see pixels.
+- The white head cap (AF-014): likewise a pixel-level question, still a hypothesis.
+- AF-003/AF-004 UI/persistence and AF-002's "open with" absence: viewer-only report; not
+  exercised. Device backlog steps 3, 5, 10 remain open.
+- Why native Vulkan was declined: not observable — see AF-018; the Kotlin-side fallback row
+  added this session needs a build containing it and another report to verify on-device.
+
+## 6. UNVERIFIED device backlog (authoritative copy in TEST_MATRIX §3)
 
 The ten-step device procedure remains the only path to REAL + VERIFIED for runtime claims.
 Highest-value items for this change set:
@@ -108,7 +135,9 @@ Highest-value items for this change set:
 - step 3: force an analysis failure and confirm the new note while generation continues (AF-003);
 - step 5: process death with the viewer open, relaunch, confirm render settings restored (AF-004);
 - step 4/7: capture a `diag` report containing the new "Quality tier changes" row (AF-008);
-- step 10: file manager no longer offers AvatarForge for `.glb` (AF-002).
+- step 10: file manager no longer offers AvatarForge for `.glb` (AF-002);
+- new: install a build containing the AF-017/AF-018 wording and confirm the "Backend selection"
+  and benign-restart rows render as designed on this device.
 
 ## 6. Known unverified/blocked dispositions (unchanged by this work)
 
