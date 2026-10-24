@@ -300,6 +300,19 @@ Fixes land as focused commits referenced from this register.
   fullscreen triangle sampling undefined/atlas-named storage; (H3) an ANGLE-specific descriptor
   or program state issue outside the code paths traced so far. No GL error log is obtainable
   from the current build, so H1–H3 cannot be discriminated from source alone.
+- 2026-10-25 second-session update (two more reports in
+  `artifacts/audits/device-report-SM-S921B-2026-10-25.txt`; still build 0.10.1 (2), so pre-fix):
+  a side-by-side of the screen against the extracted baseColor atlas
+  (`artifacts/audits/screenshots/atlas-vs-screen-comparison-2026-10-25.png`) shows atlas content
+  smeared into horizontal full-width bands — consistent with the mesh being rasterised with a
+  collapsed `uViewProj` while UVs still sample the atlas ("Theory B"), now the favoured
+  mechanism, versus a post-pass showing the atlas directly ("Theory A"). The external analysis's
+  skinning-matrix mechanism is refuted (skinning is 100 % CPU-side; no joint matrices exist in
+  any shader), but its UBO-alignment instinct is vindicated by the confirmed camera-block
+  overrun. The "logs OK / pixels garbage" paradox is code-explained: the frame path contains no
+  `glGetError`/`KHR_debug` check at all, so GL errors are structurally invisible. Full
+  adjudication table: evidence pack §8. A `KHR_debug` surfacing path remains queued behind the
+  AF-019 renderer C-API gate.
 - Next-device deterministic ladder (uses only shipped controls; details and expected
   discriminations in `artifacts/audits/device-evidence-atlas-2026-10-25.md`): move the Exposure
   slider, toggle Ground plane / Shadows / Bloom / SSS, move the Sun sliders, toggle Prefer

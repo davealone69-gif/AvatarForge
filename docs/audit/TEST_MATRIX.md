@@ -33,8 +33,10 @@ UNVERIFIED rather than implied by CI.
 ## 3. Device test backlog (exact procedures; SM-S921B evidence dated 2026-10-24)
 
 Evidence key: **[device 2026-10-24]** = observed in `artifacts/audits/device-report-SM-S921B-2026-10-24.txt`;
-everything else remains pending. The reporting build's source commit is not recorded by the
-report, so even observed rows describe the device, not a specific commit.
+**[device 2026-10-25]** = the two reports in `artifacts/audits/device-report-SM-S921B-2026-10-25.txt`
+(both still app 0.10.1 (2), pre-AF-020-fix). Everything else remains pending. The reporting
+build's source commit is not recorded by the reports, so even observed rows describe the
+device, not a specific commit.
 
 1. Fresh install of the CI artifact; verify version row 0.10.1 (2), no INTERNET permission.
    **[device 2026-10-24]** version row matches; no-INTERNET still relies on CI aapt gate.
@@ -69,6 +71,13 @@ report, so even observed rows describe the device, not a specific commit.
     persists, run the seven-step shipped-controls ladder (exposure, ground plane, shadows, sun,
     bloom, SSS, Vulkan retry) in `artifacts/audits/device-evidence-atlas-2026-10-25.md` §6,
     screenshotting each state; only then re-score AF-010 and AF-014.
+12. AF-020 cross-GPU isolation (from the 2026-10-25 external review, accepted): repeat step 11
+    on a non-ANGLE device — a Snapdragon/Adreno Android device with native GLES and, if
+    possible, a successful native Vulkan init — plus any desktop/Vulkan validation environment.
+    Correct rendering elsewhere separates an ANGLE/Xclipse translation fault from a generic
+    GL-path bug. Two suggested shortcuts are deliberately NOT available: GLES 3.0 is hard-
+    rejected by the ES 3.1 gate (`af_gl.cpp:278`), and external `.glb` loading does not exist
+    (AF-015); use a simpler app-generated avatar instead.
 
 ## 4. Rules for future tests
 

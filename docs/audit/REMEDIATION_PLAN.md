@@ -27,7 +27,11 @@ the branch; the rest are queued with explicit unblock conditions.
    run device backlog step 11 (TEST_MATRIX §3): body visible vs atlas persists; if it persists,
    execute the seven-step shipped-controls ladder in the evidence pack §6 and, if still
    ambiguous, add a `KHR_debug`/`glGetError` surfacing path AFTER the AF-019 renderer C-API gate
-   exists. Do not claim the UBO fix resolves the atlas without on-device evidence.
+   exists. Step 12 adds a non-ANGLE device to separate an Xclipse/ANGLE translation fault from a
+   generic GL-path bug. Current favoured mechanism (evidence pack §8.3, Theory B): mesh
+   rasterised with a collapsed `uViewProj` from the overrun camera block while UVs still sample
+   the atlas — plausible, not confirmed. Do not claim the UBO fix resolves the atlas without
+   on-device evidence.
 2. **AF-009 release integrity (medium, BLOCKED on credentials).** Add `:app:bundleRelease` to
    CI once a release keystore is supplied via encrypted secret; document AAB verification
    (apksigner, bundletool). Unblock: maintainer adds `keystore.properties` secrets.

@@ -11,6 +11,7 @@ content. The per-file ledger, pixel measurements and analysis method live in
 | `SM-S921B_20261024_230452_gles-angle_atlas.jpg` | gles31 / ANGLE | Full-screen base-color atlas (AF-020) |
 | `SM-S921B_20261025_000636_gles-angle_atlas.jpg` | gles31 / ANGLE | Full-screen base-color atlas (AF-020) |
 | `SM-S921B_20261025_000843_gles-angle_atlas.jpg` | gles31 / ANGLE | Full-screen base-color atlas (AF-020); primary pixel-analysis subject |
+| `atlas-vs-screen-comparison-2026-10-25.png` | analysis output (not a screenshot) | Left: downscaled 000843 screen; right: baseColor atlas extracted from the sample GLB. Same content *kind* (grey packer background, skin-tone islands, speckled skin-texture island, armour tones), screen side stretched into horizontal bands — see evidence pack §8.3. |
 
 These are user-provided diagnostic images retained for regression comparison, not test fixtures.
 Do not edit or recompress them; replace only with a newly exported original if a re-capture is

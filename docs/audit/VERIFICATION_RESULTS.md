@@ -163,6 +163,19 @@ the report does not record its own source commit, so build identity stays UNVERI
 - Why native Vulkan was declined: not observable — see AF-018; the Kotlin-side fallback row
   added this session needs a build containing it and another report to verify on-device.
 
+### 5.3 Second device session (2026-10-25 02:04 and 02:06 reports, same device)
+
+Raw reports archived at `artifacts/audits/device-report-SM-S921B-2026-10-25.txt`. Both runs are
+still app 0.10.1 (2), i.e. they predate the AF-020 camera-UBO fix and cannot test it.
+
+| Observation | Status |
+|---|---|
+| AF-017 benign-restart hint and AF-018 "Backend selection" fallback row render as designed | REAL + VERIFIED (second independent device observation; wording matches the JVM tests) |
+| Renderer stays RUNNING at 57–58 FPS / tier 1 / 417,150 tris under thermal moderate with one successful start-up each (254 ms, 186 ms) | REAL + VERIFIED |
+| `Overall: WARN` is solely the thermal-moderate row; no renderer WARN/FAIL row exists | REAL + VERIFIED |
+| Full-screen atlas corruption (AF-020) on the same build family | CONFIRMED visually again via the accompanying screenshot analysis; mechanism PARTIAL — see FINDINGS AF-020 and evidence pack §8 |
+| The diagnostics' blindness to GL errors | code-level CONFIRMED: no `glGetError`/`KHR_debug` anywhere in the frame path; a `KHR_debug` surfacing path is queued behind the AF-019 C-API gate |
+
 ## 6. UNVERIFIED device backlog (authoritative copy in TEST_MATRIX §3)
 
 The ten-step device procedure remains the only path to REAL + VERIFIED for runtime claims.
