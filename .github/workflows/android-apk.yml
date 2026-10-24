@@ -69,10 +69,19 @@ jobs:
       - name: Build debug APK, release APK, and SDK AAR
         run: |
           chmod +x ./gradlew
+          set +e
           ./gradlew --no-daemon --stacktrace --console=plain \
             :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
             -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" 2>&1 | tee build-log.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            # Surface compiler/Gradle errors as check annotations so they are readable
+            # without downloading the full Actions log bundle.
+            grep -E "^e: | error: |FAILED|What went wrong|FAILURE:|> Task .* FAILED" build-log.txt \
+              | tail -80 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
 
       - name: Stage easy-download artifacts
         run: |
