@@ -1,0 +1,112 @@
+name: Code Quality
+
+on:
+  pull_request:
+    branches: [main, work/android-engine-dev]
+  push:
+    branches: [main, work/android-engine-dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: avatarforge-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-hygiene:
+    name: Source hygiene (JSON, Python, shell)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate tracked JSON files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(git ls-files -z '*.json')
+          test "${#files[@]}" -gt 0
+          for file in "${files[@]}"; do
+            python -m json.tool "$file" >/dev/null || {
+              echo "::error file=$file::Invalid JSON"
+              exit 1
+            }
+          done
+          echo "Validated ${#files[@]} tracked JSON files."
+
+      - name: Compile Python tools
+        run: python -m compileall -q tools
+
+      - name: Parse shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(git ls-files -z '*.sh' 'tools/*.sh')
+          test "${#files[@]}" -gt 0
+          for file in "${files[@]}"; do
+            bash -n "$file" || {
+              echo "::error file=$file::Shell syntax check failed"
+              exit 1
+            }
+          done
+          echo "Parsed ${#files[@]} tracked shell scripts."
+
+  rust-quality:
+    name: Rust formatting and Clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy with warnings denied
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets --offline -- -D warnings
+
+  android-lint:
+    name: Android Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android build packages
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Run Android Lint
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace --console=plain :app:lintDebug :sdk:lintRelease -Paf.abIs=arm64-v8a
