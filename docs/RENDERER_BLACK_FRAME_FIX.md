@@ -4,7 +4,9 @@
 
 Target: **`work/android-engine-dev` at `9ec715723bfa0cccdf31c78e197fd365f2818908`**,
 not `main` and not the older `21c1bc2` ancestor. The remote branch head was rechecked during
-this repair and still matched this baseline. Changes are local; nothing has been pushed or merged.
+this repair and still matched this baseline before publishing. The repair code was pushed to this
+existing branch as `1e6d647321b64836e5196259278dc681fab703f7`. The subsequent checkpoint update changes
+only documentation. Nothing has been merged into `main`.
 
 This is a **locally build-verified and software-driver pixel-verified test candidate**, not a
 physical-device verification or a production-readiness claim. The tests render a deliberately tiny
@@ -61,7 +63,7 @@ and `artifacts/` are not updated; rebuild from source or use the separately supp
 | Public kernel C ABI | 47/47 symbols and invariants passed; manifest matches |
 | APK audit | Signature verifies; no INTERNET permission; three ARM64 libraries' ELF Build IDs match the new native build |
 | Physical Android device / S24 | **NOT TESTED** |
-| GitHub Actions for this patch | **NOT RUN — patch not pushed** |
+| GitHub Actions for this patch | **Started; latest-head result pending verification** |
 
 GLES runs at UBO alignments 16, 64 and 256. Both tests run the real software-device profile and a
 clearly labelled policy override to exercise supported MSAA and five bloom levels on Mesa. They
@@ -73,7 +75,8 @@ advance the accepted-frame sequence. These are correctness tests, **not FPS benc
 
 A separate renderer-pixel job in `.github/workflows/android-apk.yml` now gates Android packaging.
 It installs Mesa/validation/Xvfb, executes both driver tests, and retains their logs on failure.
-This workflow change has been parsed locally, but has not run on GitHub.
+This workflow change was parsed locally and GitHub has started running it. A successful result for
+the latest branch head has not yet been established.
 
 ### Run the checks
 
@@ -102,13 +105,18 @@ The pre-existing baseline's Android workflow succeeded:
 That run is for **unmodified `9ec7157`**, not this repair. A green compilation-only run did not catch
 the initialization/pixel/synchronization failures reproduced here.
 
+The repair code commit `1e6d647` triggered [run 40055587416](https://github.com/davealone69-gif/AvatarForge/actions/runs/40055587416),
+which was **in progress** when checked. This documentation follow-up triggers a newer run and may
+supersede the first one. Check the exact current remote HEAD/run, not a historical status in this note.
+
 PR #16 was inspected at `0e5f772d7608a7323f33f7143d56d07c22c9eb59`; its relevant visibility intent
 logic was selectively adapted. Other open PRs are not implicitly merged or verified by this patch.
 
 Before declaring the user-visible issue resolved on hardware:
 
-1. Apply/commit this patch on the canonical branch, push, and verify both new pixel and Android
-   packaging jobs for that exact new SHA. Do not use the baseline's green run as evidence.
+1. Verify both new pixel and Android packaging jobs for the exact latest canonical branch SHA,
+   including this documentation follow-up. If a required check fails, fix it on this same branch,
+   push and recheck the new SHA. Do not use the baseline's green run as evidence.
 2. Install the newly produced APK on the S24 (or the actual affected device). Check a complete
    avatar, non-zero fresh frame telemetry, resize/rotation, background/foreground, recovery,
    generation, GLB export/import and offline behaviour on Vulkan and GLES.

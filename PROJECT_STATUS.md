@@ -28,7 +28,7 @@ Priority order:
 3. Avatar geometry/lighting defects and existing app functionality.
 4. Branch audit, integration, and safe retirement of redundant work.
 
-## Local black-frame repair checkpoint — 2026-10-24
+## Black-frame repair checkpoint — 2026-10-24
 
 **Read this newer checkpoint before the historical review notes below.** The user selected
 black/blank viewer or 0 FPS, then explicitly selected the latest `work/android-engine-dev`, not
@@ -57,9 +57,16 @@ at `9ec715723bfa0cccdf31c78e197fd365f2818908`.
   validate for Vulkan 1.0; SDK JVM **26/0** including **8** new lifecycle/health policy tests; ARM64
   NDK libraries + debug APK + release SDK AAR build; C ABI **47/47**; APK signature, offline permission
   and native ELF Build-ID checks. Headless pixels are fixture geometry, not an installed-avatar test.
-- Added a renderer-pixel CI job and made Android packaging depend on it. Workflow syntax was parsed
-  locally. **No commit, push, merge, or GitHub run of this patch has occurred.** Physical S24 runtime
-  verification remains **UNVERIFIED**. Do not claim production readiness or hardware FPS.
+- Added a renderer-pixel CI job and made Android packaging depend on it. The repair was committed as
+  `1e6d647321b64836e5196259278dc681fab703f7` and pushed to this existing canonical branch after the
+  user authorized GitHub access. Its tree `d18b345d71b7b9da99df575b169415b40031a1bc` matches the locally
+  verified source exactly. No merge into `main` occurred.
+- GitHub started [Android APK run 40055587416](https://github.com/davealone69-gif/AvatarForge/actions/runs/40055587416)
+  for code commit `1e6d647`; it was **in progress**, not green, when checked. This checkpoint follow-up
+  changes only documentation and will trigger a newer run. Check the exact latest remote HEAD and
+  its jobs before claiming CI success; the earlier run may be superseded by branch concurrency.
+- Physical S24 runtime verification remains **UNVERIFIED**. Do not claim production readiness or
+  hardware FPS. GitHub sign-in credentials are not part of the repository or delivery.
 
 See [`docs/RENDERER_BLACK_FRAME_FIX.md`](docs/RENDERER_BLACK_FRAME_FIX.md) for root causes, test
 coverage, reproducible commands, scope limits and the safety-first shared-buffer fence tradeoff.
@@ -67,9 +74,9 @@ The session delivery contains a source patch, an ARM64 debug test APK, an SDK AA
 before/after logs. Neither the existing tracked `prebuilt/` nor the old APKs in `artifacts/` should be
 used as this repair's binary evidence.
 
-**Next steps for this repair:** apply/review and commit the prepared changes on this same branch,
-push through an authenticated developer environment, check the new pixel and Android jobs for that
-exact SHA, then install the new APK and complete the physical-device matrix in the repair note.
+**Next steps for this repair:** verify the pixel and Android jobs for the exact latest branch SHA
+(including this documentation follow-up). If a job fails, fix it on this same branch, push and recheck
+the new SHA. Then install the newly produced APK and complete the physical-device matrix in the repair note.
 The broader branch audit below remains separate unfinished work.
 
 ## Perfetto tracing setup
@@ -91,8 +98,8 @@ Re-check the live branch head and source before assuming these commits remain cu
 
 - Previous session reported Android Actions run #185 for `d6f554533249d26b92247ee68df057631462a98c`; its current status and relevance must be rechecked before relying on it.
 - Latest live branch/PR inventory was checked on 2026-10-23. The canonical branch head and latest Actions run result still need to be confirmed in the next resume pass.
-- **Latest checked remote baseline SHA:** `9ec715723bfa0cccdf31c78e197fd365f2818908` on `work/android-engine-dev`. This session has local, uncommitted repair changes on top; baseline CI does not cover them.
-- **Latest checked baseline GitHub Actions run:** [39998014453](https://github.com/davealone69-gif/AvatarForge/actions/runs/39998014453), completed/success for unmodified `9ec7157`. **Modified-source CI: NOT RUN (not pushed).**
+- **Latest checked remote baseline SHA:** `9ec715723bfa0cccdf31c78e197fd365f2818908` on `work/android-engine-dev`. The renderer repair code commit `1e6d647321b64836e5196259278dc681fab703f7` has now been pushed; baseline CI does not cover that repair or this documentation follow-up.
+- **Latest checked baseline GitHub Actions run:** [39998014453](https://github.com/davealone69-gif/AvatarForge/actions/runs/39998014453), completed/success for unmodified `9ec7157`. **Modified-source CI: STARTED for `1e6d647`, [run 40055587416](https://github.com/davealone69-gif/AvatarForge/actions/runs/40055587416), in progress when checked. Recheck the newer documentation-follow-up HEAD/run; no green claim yet.**
 - **Physical Samsung Galaxy S24 runtime verification:** OUTSTANDING unless a newer verified record proves otherwise.
 - CI success is not installed-device verification. A successful renderer initialization is not proof of visible frames. Zero FPS/zero triangles is inconclusive/failure evidence, not a pass.
 - Do not label the app production-ready without required CI checks and installed-device runtime verification.
