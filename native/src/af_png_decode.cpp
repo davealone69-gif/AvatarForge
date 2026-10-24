@@ -108,8 +108,8 @@ const uint8_t DIST_EXTRA[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
 bool inflateRaw(const uint8_t* data, size_t size, size_t maxOutput,
                 std::vector<uint8_t>* out, std::string* error) {
     BitReader in{data, size};
-    std::vector<uint8_t> window;  /* output is capped by the dimension-derived PNG scanline bound */
-    window.reserve((maxOutput < 65536u) ? maxOutput : 65536u);
+    std::vector<uint8_t> window;  /* reserve the exact dimension-derived bound to avoid geometric growth */
+    window.reserve(maxOutput);
     auto append = [&](uint8_t value) -> bool {
         if (window.size() >= maxOutput) {
             if (error) *error = "deflate: decompressed output exceeds the PNG-derived bound";
@@ -357,7 +357,7 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     if (error) error->clear();
     if (out) {
         out->width = out->height = 0;
-        out->rgba.clear();
+        std::vector<uint8_t>().swap(out->rgba);
     }
     if (!data || !out) {
         if (error) *error = "png: null input";
