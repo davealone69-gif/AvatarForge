@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 namespace af {
 namespace {
@@ -48,13 +49,13 @@ int componentSize(int componentType) {
 }
 
 bool checkedAdd(size_t a, size_t b, size_t* out) {
-    if (!out || b > SIZE_MAX - a) return false;
+    if (!out || b > std::numeric_limits<size_t>::max() - a) return false;
     *out = a + b;
     return true;
 }
 
 bool checkedMul(size_t a, size_t b, size_t* out) {
-    if (!out || (a != 0 && b > SIZE_MAX / a)) return false;
+    if (!out || (a != 0 && b > std::numeric_limits<size_t>::max() / a)) return false;
     *out = a * b;
     return true;
 }
@@ -378,7 +379,13 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
         if (error) *error = "glTF: accessor component count does not match the requested attribute type";
         return AF_ERR_INVALID_ARG;
     }
-    out->assign(view.count * static_cast<size_t>(components), 0.0f);
+    size_t floatCount = 0;
+    if (!checkedMul(view.count, static_cast<size_t>(components), &floatCount) ||
+        floatCount > out->max_size()) {
+        if (error) *error = "glTF: accessor output allocation size overflows";
+        return AF_ERR_INVALID_ARG;
+    }
+    out->assign(floatCount, 0.0f);
     for (size_t i = 0; i < view.count; ++i) {
         float v[16];
         readElement(view, i, v, components);
@@ -705,6 +712,42 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
     }
     out->version = assetVersion;
     out->generator = doc["asset"]["generator"].stringOr("");
+
+    /* This importer currently supports only the single embedded GLB BIN buffer. Validate every
+       bufferView up front, including views used only by images or sparse data. */
+    const json::Json& buffersJson = doc["buffers"];
+    const json::Json& viewsJson = doc["bufferViews"];
+    size_t declaredBufferLength = 0;
+    if (viewsJson.size() > 0) {
+        if (buffersJson.size() != 1 || !binChunk) {
+            if (error) *error = "GLB: bufferViews require one embedded BIN buffer";
+            return AF_ERR_UNSUPPORTED;
+        }
+        const json::Json& bufferJson = buffersJson.at(0);
+        if (bufferJson.find("uri") || !bufferJson["byteLength"].asIndex(&declaredBufferLength) ||
+            declaredBufferLength > binSize || binSize - declaredBufferLength > 3) {
+            if (error) *error = "GLB: embedded buffer declaration is invalid or exceeds the BIN chunk";
+            return AF_ERR_INVALID_ARG;
+        }
+        for (size_t i = 0; i < viewsJson.size(); ++i) {
+            const json::Json& bv = viewsJson.at(i);
+            size_t bufferIndex = 0, offset = 0, length = 0;
+            if (!bv["buffer"].asIndex(&bufferIndex) || bufferIndex != 0 ||
+                (!bv["byteOffset"].isNull() && !bv["byteOffset"].asIndex(&offset)) ||
+                !bv["byteLength"].asIndex(&length) ||
+                !checkedRange(offset, length, declaredBufferLength)) {
+                if (error) *error = "GLB: bufferView has an invalid buffer index or out-of-range byte span";
+                return AF_ERR_INVALID_ARG;
+            }
+            if (bv.find("byteStride")) {
+                size_t stride = 0;
+                if (!bv["byteStride"].asIndex(&stride) || stride < 4 || stride > 252 || (stride % 4) != 0) {
+                    if (error) *error = "GLB: byteStride must be a multiple of 4 in the range 4..252";
+                    return AF_ERR_INVALID_ARG;
+                }
+            }
+        }
+    }
 
     /* Extensions: record them all. Any *required* extension is fatal, because the document's
        meaning may depend on it and this reader implements none of them. */
