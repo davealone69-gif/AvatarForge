@@ -67,6 +67,26 @@ a full staged end-to-end pass through the public C ABI, scene/LOD/profiler check
 rest and playing it again is bit-identical to playing it once - the skinning path is stateless with
 respect to whatever was displayed last).
 
+### GLB importer fuzzing (Clang + ASan/UBSan)
+
+The importer has an optional libFuzzer target that instruments the GLB reader, JSON parser, and
+embedded PNG decoder with AddressSanitizer and UndefinedBehaviorSanitizer. Overflow-focused corpus
+seeds cover extreme accessor counts/offsets, bufferView offset/length overflow, invalid buffer
+indices, and strides outside the glTF limits.
+
+```bash
+python3 native/tests/make_glb_fuzz_corpus.py build-glb-fuzz/corpus
+CC=clang CXX=clang++ cmake -S native -B build-glb-fuzz \
+  -DAF_BUILD_GLB_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-glb-fuzz --target af_glb_fuzz -j2
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  build-glb-fuzz/af_glb_fuzz build-glb-fuzz/corpus -max_len=1048576 -timeout=5
+```
+
+This is a developer diagnostic target, not part of Android APK builds. A clean sanitizer run and
+the normal host test suite are required before importer hardening can be marked verified.
+
 ### Optional diagnostics
 
 ```bash
