@@ -286,11 +286,13 @@ private fun SpecEditor(spec: AvatarSpec, onChange: (AvatarSpec) -> Unit, enabled
                 EnumRow("Hair", HairStyle.entries, spec.hairStyle, enabled) { onChange(spec.copy(hairStyle = it)) }
                 EnumRow("Outfit", Outfit.entries, spec.outfit, enabled) {
                     onChange(
-                        if (it == Outfit.NONE) {
-                            spec.copy(outfit = it, footwear = Footwear.NONE, ageYears = maxOf(18f, spec.ageYears))
-                        } else {
-                            spec.copy(outfit = it)
-                        },
+                        spec.copy(
+                            outfit = it,
+                            outfitExplicit = true,
+                            adultModeConfirmed = false,
+                            footwear = if (it == Outfit.NONE) Footwear.NONE else spec.footwear,
+                            ageYears = if (it == Outfit.NONE) maxOf(18f, spec.ageYears) else spec.ageYears,
+                        ),
                     )
                 }
                 if (spec.outfit == Outfit.NONE) {
