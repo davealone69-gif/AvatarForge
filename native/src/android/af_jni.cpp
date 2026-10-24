@@ -1016,6 +1016,11 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
                                 stats.msaaSamples, stats.bloomLevels, stats.qualityLevel,
                                 stats.lastVkResult, stats.frameFatal ? 1 : 0};
         env->SetIntArrayRegion(outInts, 0, 9, values);
+        // Optional tail preserves callers using the existing nine-int telemetry layout.
+        if (env->GetArrayLength(outInts) >= 10) {
+            const jint sequence = stats.frames;
+            env->SetIntArrayRegion(outInts, 9, 1, &sequence);
+        }
     }
     return AF_OK;
 }

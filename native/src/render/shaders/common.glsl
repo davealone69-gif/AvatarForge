@@ -378,16 +378,23 @@ AfSurface afSampleSurface(vec2 uv) {
     af_const float hasMr = atlasFlags * mat.uTexFlags.y;
     af_const float hasAo = atlasFlags * mat.uTexFlags.z;
 
-    af_const vec4 baseTex = texture(uBaseColorTex, uv);
+    /* A disabled map must not participate in arithmetic. Missing UVs have zero derivatives;
+       some anisotropic samplers return NaN there, and mix(fallback, NaN, 0) is still NaN.
+       This also matters after replacing a textured mesh with an untextured one: the descriptor
+       may legitimately retain the previous atlas, but the new material must ignore its sample. */
+    vec4 baseTex = vec4(1.0);
+    if (hasBase > 0.5) baseTex = texture(uBaseColorTex, uv);
     /* af_vertex::color is the per-vertex base-colour multiplier (the engine fills it with 1.0;
        the hook exists so a future region tint or vertex bake costs nothing to add). */
-    s.albedo = mix(vec3(1.0), baseTex.rgb, hasBase) * mat.uBaseColorFactor.rgb;
-    s.alpha = mix(1.0, baseTex.a, hasBase) * mat.uBaseColorFactor.a;
+    s.albedo = baseTex.rgb * mat.uBaseColorFactor.rgb;
+    s.alpha = baseTex.a * mat.uBaseColorFactor.a;
 
-    af_const vec4 mr = texture(uMetalRoughTex, uv);
-    s.metallic = clamp(mat.uPbr.x * mix(1.0, mr.b, hasMr), 0.0, 1.0);
-    s.roughness = clamp(mat.uPbr.y * mix(1.0, mr.g, hasMr), 0.035, 1.0);
-    s.occlusion = mix(1.0, texture(uOcclusionTex, uv).r, hasAo);
+    vec4 mr = vec4(1.0);
+    if (hasMr > 0.5) mr = texture(uMetalRoughTex, uv);
+    s.metallic = clamp(mat.uPbr.x * mr.b, 0.0, 1.0);
+    s.roughness = clamp(mat.uPbr.y * mr.g, 0.035, 1.0);
+    s.occlusion = 1.0;
+    if (hasAo > 0.5) s.occlusion = texture(uOcclusionTex, uv).r;
     s.ior = max(mat.uPbr.z, 1.01);
     s.sheen = mat.uPbr.w;
     s.anisotropy = mat.uPbr2.y;

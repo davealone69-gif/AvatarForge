@@ -1,6 +1,6 @@
 # AvatarForge Project Checkpoint
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
 Repository: https://github.com/davealone69-gif/AvatarForge
 
 ## Resume here first
@@ -28,6 +28,50 @@ Priority order:
 3. Avatar geometry/lighting defects and existing app functionality.
 4. Branch audit, integration, and safe retirement of redundant work.
 
+## Local black-frame repair checkpoint — 2026-10-24
+
+**Read this newer checkpoint before the historical review notes below.** The user selected
+black/blank viewer or 0 FPS, then explicitly selected the latest `work/android-engine-dev`, not
+`main` and not the earlier `21c1bc2` ancestor. The canonical branch was checked again and remained
+at `9ec715723bfa0cccdf31c78e197fd365f2818908`.
+
+- Reproduced the unfixed branch with the new driver harness: GLES initialization emits `0x0502`;
+  Vulkan fails shader/descriptor/pipeline validation and attempts a disabled-bloom pipeline with a
+  null render pass. The new harness was also run against an isolated archive of the exact baseline.
+- Repaired real GLES/Vulkan initialization, correctly rounded UBO slices, matching depth samplers,
+  Vulkan 1.0 shader generation, valid descriptors/dynamic offsets, single-sample depth clearing,
+  transfer/render-pass synchronization and safe shared-buffer ownership. Disabled shadow targets
+  are cleared/transitioned rather than sampled in UNDEFINED layout.
+- Fallback/1x1 textures are non-anisotropic, and disabled material maps no longer use arithmetic
+  `mix(..., possiblyNaN, 0)`. Reattaching a textured mesh followed by an untextured one remains visible.
+- Inspected PR #16 at `0e5f772d7608a7323f33f7143d56d07c22c9eb59`. Selectively adapted its host-intent /
+  effective-visibility separation instead of merging the diverged branch wholesale. Added attach/
+  detach scheduling guards, deduplicated retries, recovery after creation/resize failure, and
+  fresh native sequence-based health checks so stale FPS cannot clear a recovery error.
+- Existing LOD/culling, GPU profiles, codecs, engine leases, thermal/performance hints and Vulkan
+  surface/swapchain recovery were retained. No branches/PRs closed or deleted. No third-party
+  rendering engine was added. Checked-in historical APKs/prebuilt libraries are NOT refreshed;
+  the new APK is built from current native code and delivered separately.
+- **Verified locally on the repaired sources:** full native harness **468/0**; real GLES driver
+  **270/0**; real Vulkan driver **88/0 with zero validation errors**; all **13** baked SPIR-V modules
+  validate for Vulkan 1.0; SDK JVM **26/0** including **8** new lifecycle/health policy tests; ARM64
+  NDK libraries + debug APK + release SDK AAR build; C ABI **47/47**; APK signature, offline permission
+  and native ELF Build-ID checks. Headless pixels are fixture geometry, not an installed-avatar test.
+- Added a renderer-pixel CI job and made Android packaging depend on it. Workflow syntax was parsed
+  locally. **No commit, push, merge, or GitHub run of this patch has occurred.** Physical S24 runtime
+  verification remains **UNVERIFIED**. Do not claim production readiness or hardware FPS.
+
+See [`docs/RENDERER_BLACK_FRAME_FIX.md`](docs/RENDERER_BLACK_FRAME_FIX.md) for root causes, test
+coverage, reproducible commands, scope limits and the safety-first shared-buffer fence tradeoff.
+The session delivery contains a source patch, an ARM64 debug test APK, an SDK AAR, checksums and
+before/after logs. Neither the existing tracked `prebuilt/` nor the old APKs in `artifacts/` should be
+used as this repair's binary evidence.
+
+**Next steps for this repair:** apply/review and commit the prepared changes on this same branch,
+push through an authenticated developer environment, check the new pixel and Android jobs for that
+exact SHA, then install the new APK and complete the physical-device matrix in the repair note.
+The broader branch audit below remains separate unfinished work.
+
 ## Perfetto tracing setup
 
 - `986ea7b0fe6a8b16941d7d3cd61ef9d49a487c4a`: added Android trace slices around the render loop, camera submission, native renderer call, and telemetry collection in `RenderSurfaceView.kt`.
@@ -47,8 +91,8 @@ Re-check the live branch head and source before assuming these commits remain cu
 
 - Previous session reported Android Actions run #185 for `d6f554533249d26b92247ee68df057631462a98c`; its current status and relevance must be rechecked before relying on it.
 - Latest live branch/PR inventory was checked on 2026-10-23. The canonical branch head and latest Actions run result still need to be confirmed in the next resume pass.
-- **Latest checked commit SHA:** pending recheck.
-- **Latest GitHub Actions run URL/status:** pending recheck.
+- **Latest checked remote baseline SHA:** `9ec715723bfa0cccdf31c78e197fd365f2818908` on `work/android-engine-dev`. This session has local, uncommitted repair changes on top; baseline CI does not cover them.
+- **Latest checked baseline GitHub Actions run:** [39998014453](https://github.com/davealone69-gif/AvatarForge/actions/runs/39998014453), completed/success for unmodified `9ec7157`. **Modified-source CI: NOT RUN (not pushed).**
 - **Physical Samsung Galaxy S24 runtime verification:** OUTSTANDING unless a newer verified record proves otherwise.
 - CI success is not installed-device verification. A successful renderer initialization is not proof of visible frames. Zero FPS/zero triangles is inconclusive/failure evidence, not a pass.
 - Do not label the app production-ready without required CI checks and installed-device runtime verification.

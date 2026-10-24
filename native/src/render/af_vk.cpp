@@ -247,6 +247,8 @@ private:
     uint32_t queueFamily_ = 0;
     VkPhysicalDeviceMemoryProperties memProps_{};
     uint32_t uboAlignment_ = 256;
+    uint32_t cameraStride_ = 512;
+    uint32_t postStride_ = 256;
     bool deviceSupportsCompareSamplerLinear_ = false;
 
     /* swapchain */
@@ -343,6 +345,7 @@ private:
     VkDeviceMemory atlasMemory_[AF_TEX_COUNT] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE,
                                                  VK_NULL_HANDLE, VK_NULL_HANDLE};
     int atlasWidth_ = 0, atlasHeight_ = 0;
+    bool atlasUseAnisotropy_[AF_TEX_COUNT] = {};
     bool atlasUploaded_ = false;
 
     VkBuffer vertexBuffer_ = VK_NULL_HANDLE;
@@ -440,6 +443,8 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(phys_, &props);
     uboAlignment_ = props.limits.minUniformBufferOffsetAlignment ? props.limits.minUniformBufferOffsetAlignment : 256;
+    cameraStride_ = uniformBlockStride(sizeof(CameraUbo), uboAlignment_);
+    postStride_ = uniformBlockStride(sizeof(PostUbo), uboAlignment_);
 
     /* Sample count: clamp to what the device allows for both colour and depth. */
     VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
@@ -814,7 +819,7 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
 
         /* Camera uniform buffer: one slice per frame in flight, bound with a dynamic offset. The
            two slices are what keep frame N+1 from overwriting the camera frame N is still using. */
-        const uint64_t camSize = uint64_t(uboAlignment_) * kFramesInFlight;
+        const uint64_t camSize = uint64_t(cameraStride_) * kFramesInFlight;
         if (!createBuffer(camSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &cameraUbos_.emplace_back(), &cameraUboMem_.emplace_back(),
@@ -869,10 +874,13 @@ bool VulkanRenderer::createShadowTarget(std::string* error) {
     VkSubpassDependency dep{};
     dep.srcSubpass = VK_SUBPASS_EXTERNAL;
     dep.dstSubpass = 0;
-    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;   /* previous frame's lookup */
-    dep.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dep.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -880,8 +888,16 @@ bool VulkanRenderer::createShadowTarget(std::string* error) {
     rp.pAttachments = &depth;
     rp.subpassCount = 1;
     rp.pSubpasses = &sub;
-    rp.dependencyCount = 1;
-    rp.pDependencies = &dep;
+    VkSubpassDependency dependencies[2] = {dep, {}};
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    rp.dependencyCount = 2;
+    rp.pDependencies = dependencies;
     AF_VK_CHECK(vkCreateRenderPass(device_, &rp, nullptr, &shadowPass_));
     if (!createFramebuffer(shadowPass_, {shadowView_}, uint32_t(size), uint32_t(size),
                            &shadowFramebuffer_)) {
@@ -898,7 +914,9 @@ VkFormat VulkanRenderer::pickHdrFormat() const {
        the caller so bloom still triggers, and nothing else changes. */
     const VkFormat candidates[3] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_B10G11R11_UFLOAT_PACK32,
                                     VK_FORMAT_R8G8B8A8_UNORM};
-    const VkImageUsageFlags need = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
     for (VkFormat f : candidates) {
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(phys_, f, &fp);
@@ -995,10 +1013,18 @@ bool VulkanRenderer::createHdrTargets(std::string* error) {
     VkSubpassDependency dep{};
     dep.srcSubpass = VK_SUBPASS_EXTERNAL;
     dep.dstSubpass = 0;
-    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // HDR, MSAA and depth targets are shared by the in-flight command buffers. Waiting for
+    // previous fragment reads alone misses the previous depth/MSAA writes on a second submit.
+    dep.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1006,8 +1032,15 @@ bool VulkanRenderer::createHdrTargets(std::string* error) {
     rp.pAttachments = attachments.data();
     rp.subpassCount = 1;
     rp.pSubpasses = &sub;
-    rp.dependencyCount = 1;
-    rp.pDependencies = &dep;
+    VkSubpassDependency dependencies[2] = {dep, {}};
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    rp.dependencyCount = 2;
+    rp.pDependencies = dependencies;
     AF_VK_CHECK(vkCreateRenderPass(device_, &rp, nullptr, &hdrPass_));
 
     std::vector<VkImageView> views;
@@ -1039,25 +1072,25 @@ bool VulkanRenderer::createHdrTargets(std::string* error) {
         VkSubpassDependency bd{};
         bd.srcSubpass = VK_SUBPASS_EXTERNAL;
         bd.dstSubpass = 0;
-        bd.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        // Both bloom passes share framebuffers, so their dependencies must be identical.
+        bd.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         bd.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        bd.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        bd.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        bd.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        bd.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo brp{};
         brp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         brp.attachmentCount = 1;
         brp.pAttachments = &ba;
         brp.subpassCount = 1;
         brp.pSubpasses = &bs;
-        brp.dependencyCount = 1;
-        brp.pDependencies = &bd;
+        VkSubpassDependency bloomDependencies[2] = {bd, dependencies[1]};
+        brp.dependencyCount = 2;
+        brp.pDependencies = bloomDependencies;
         AF_VK_CHECK(vkCreateRenderPass(device_, &brp, nullptr, &bloomDownPass_));
         /* The upsample pass loads the finer level and adds into it, so it must both keep its
            contents (LOAD) and end up sampled by the next pass up (SHADER_READ_ONLY). */
         ba.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         ba.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        bd.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        bd.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
         AF_VK_CHECK(vkCreateRenderPass(device_, &brp, nullptr, &bloomUpPass_));
 
         int level = 0;
@@ -1103,8 +1136,8 @@ bool VulkanRenderer::createSamplers(std::string* error) {
     }
     AF_VK_CHECK(vkCreateSampler(device_, &si, nullptr, &atlasSampler_));
 
-    /* The shadow sampler compares in hardware: 2x2 linear PCF for free, on top of the 5 taps the
-       shader issues. */
+    /* common.glsl uses sampler2D and compares raw depth itself. A comparison sampler
+       requires sampler2DShadow / Dref instructions and is invalid for the current shader. */
     VkSamplerCreateInfo ss{};
     ss.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     ss.magFilter = VK_FILTER_LINEAR;
@@ -1113,7 +1146,7 @@ bool VulkanRenderer::createSamplers(std::string* error) {
     ss.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ss.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     ss.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ss.compareEnable = VK_TRUE;
+    ss.compareEnable = VK_FALSE;
     ss.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     ss.maxLod = 0.0f;
     AF_VK_CHECK(vkCreateSampler(device_, &ss, nullptr, &shadowSampler_));
@@ -1136,7 +1169,8 @@ bool VulkanRenderer::createDescriptorLayouts(std::string* error) {
        pass), plus the two samplers the post passes read from. */
     VkDescriptorSetLayoutBinding b0[5]{};
     b0[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
+             nullptr};
     b0[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b0[2] = {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b0[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -1172,13 +1206,25 @@ bool VulkanRenderer::createDescriptorLayouts(std::string* error) {
 
 bool VulkanRenderer::createBuffers(std::string* error) {
     /* Post-process uniform slices: one per bloom down, one per bloom up, one for the composite. */
-    const uint64_t postSize = uint64_t(uboAlignment_) * kPostSlices;
+    const uint64_t postSize = uint64_t(postStride_) * kPostSlices;
     if (!createBuffer(postSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                       &postUbo_, &postUboMem_, &postUboMapped_)) {
         *error = "post uniform buffer allocation failed";
         return false;
     }
+
+    // Descriptor sets are built before an engine is attached. Give their material binding a
+    // real buffer immediately; VK_NULL_HANDLE is not a valid uniform-buffer descriptor.
+    materialStride_ = uniformBlockStride(sizeof(MaterialUbo), uboAlignment_);
+    materialUboSize_ = materialStride_;
+    if (!createBuffer(materialUboSize_, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      &materialUbo_, &materialUboMem_, &materialUboMapped_)) {
+        *error = "initial material uniform buffer allocation failed";
+        return false;
+    }
+    std::memset(materialUboMapped_, 0, size_t(materialUboSize_));
 
     const uint64_t lightBytes = sizeof(ForwardLightHeader) + sizeof(ForwardLightGpu) * kForwardMaxLights;
     if (!createBuffer(lightBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -1408,9 +1454,11 @@ void VulkanRenderer::imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLay
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = image;
     b.subresourceRange = {aspect, 0, 1, 0, 1};
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+    // Used for initial uploads: a transition to TRANSFER_DST must make writes (clear/copy)
+    // available, not transfer reads. UNDEFINED has no prior access to make available.
+    b.srcAccessMask = 0;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                          0, nullptr, 0, nullptr, 1, &b);
 }
 
@@ -1473,10 +1521,12 @@ bool VulkanRenderer::createPipelines(std::string* error) {
     li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     li.setLayoutCount = 3;
     li.pSetLayouts = sets;
-    AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &avatarLayout_));
+    if (avatarLayout_ == VK_NULL_HANDLE)
+        AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &avatarLayout_));
 
     /* Forward+ uses the same camera block and storage-buffer set as the graphics path. */
-    AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &forwardPlusLayout_));
+    if (forwardPlusLayout_ == VK_NULL_HANDLE)
+        AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &forwardPlusLayout_));
     {
         const AfShaderVk* cs = afShaderVk("forward_plus", AF_STAGE_COMP);
         if (!cs) { *error = "forward_plus.comp missing from the SPIR-V table"; return false; }
@@ -1498,7 +1548,8 @@ bool VulkanRenderer::createPipelines(std::string* error) {
     }
 
     li.setLayoutCount = 1;
-    AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &postLayout_));
+    if (postLayout_ == VK_NULL_HANDLE)
+        AF_VK_CHECK(vkCreatePipelineLayout(device_, &li, nullptr, &postLayout_));
 
     /* ---- shared state blocks ---- */
     VkPipelineViewportStateCreateInfo vp{};
@@ -1776,6 +1827,9 @@ bool VulkanRenderer::createPipelines(std::string* error) {
             {"composite", compositePass_, &compositePipeline_, false},
         };
         for (const PostPass& p : passes) {
+            // Bloom targets/passes do not exist when bloom is disabled (the default). A graphics
+            // pipeline with a null renderPass requires dynamic rendering, which we do not use.
+            if (p.pass == VK_NULL_HANDLE) continue;
             const AfShaderVk* fs = afShaderVk(p.name, AF_STAGE_FRAG);
             if (!fs) { *error = "post shader missing from the SPIR-V table"; return false; }
             VkShaderModule vert = makeModule(vs), frag = makeModule(fs);
@@ -1952,7 +2006,12 @@ bool VulkanRenderer::writeDescriptorSets(std::string* error) {
     {
         VkDescriptorBufferInfo matInfo{materialUbo_, 0, sizeof(MaterialUbo)};
         VkDescriptorImageInfo tex[5];
-        for (int i = 0; i < 5; ++i) tex[i] = {atlasSampler_, atlasViews_[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        for (int i = 0; i < 5; ++i) {
+            // 1x1 fallback maps have no filter footprint. Some drivers produce NaNs with an
+            // anisotropic sampler and zero UV derivatives; even mix(value, NaN, 0) poisons alpha.
+            tex[i] = {atlasUseAnisotropy_[i] ? atlasSampler_ : postSampler_, atlasViews_[i],
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
         VkWriteDescriptorSet w[6]{};
         for (int i = 0; i < 6; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2005,13 +2064,14 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
 
     for (int i = 0; i < AF_TEX_COUNT; ++i) {
         if (atlasViews_[i] != VK_NULL_HANDLE) continue;
-        if (!createRenderTarget(1, 1, VK_FORMAT_R8_UNORM,
+        if (!createRenderTarget(1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                 &atlasImages_[i], &atlasMemory_[i], &atlasViews_[i],
                                 VK_IMAGE_ASPECT_COLOR_BIT)) {
             *error = "atlas placeholder allocation failed";
             return false;
         }
+        atlasUseAnisotropy_[i] = false;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -2065,6 +2125,9 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
     if (!engine_) return true;
     bool uploadSucceeded = true;
     for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        // Missing slots can retain an old atlas image after reattachment. They still need the
+        // non-anisotropic descriptor when a mesh without UVs samples with zero derivatives.
+        atlasUseAnisotropy_[slot] = false;
         af_texture tex{};
         if (af_engine_texture(engine_, slot, &tex) != AF_OK || !tex.data ||
             tex.width <= 0 || tex.height <= 0 || (tex.channels != 1 && tex.channels != 4)) continue;
@@ -2185,6 +2248,7 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
         atlasGpuBytes_[slot] = uncompressedAtlasFootprint(tex.width, tex.height, tex.channels);
         atlasWidth_ = tex.width;
         atlasHeight_ = tex.height;
+        atlasUseAnisotropy_[slot] = tex.width > 1 && tex.height > 1;
     }
     atlasUploaded_ = true;
     stats_.textureBytes = 0;
@@ -2390,6 +2454,8 @@ bool VulkanRenderer::uploadCompressedAtlas(const EncodedAtlas& atlas, std::strin
         item.image = VK_NULL_HANDLE;
         item.memory = VK_NULL_HANDLE;
         atlasGpuBytes_[slot] = item.byteSize;
+        const EncodedTexture& encoded = atlas.textures[static_cast<size_t>(slot)];
+        atlasUseAnisotropy_[slot] = encoded.width > 1 && encoded.height > 1;
         if (item.staging) vkDestroyBuffer(device_, item.staging, nullptr);
         if (item.stagingMemory) vkFreeMemory(device_, item.stagingMemory, nullptr);
         item.staging = VK_NULL_HANDLE;
@@ -2475,13 +2541,13 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     scene_.camera.envFlags[0] = options_.enableShadows ? 1.0f : 0.0f;
 
     if (!cameraUboMapped_.empty() && cameraUboMapped_[0])
-        std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * uboAlignment_,
+        std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * cameraStride_,
                     &scene_.camera, sizeof(CameraUbo));
 
     /* ---- post-process slices ------------------------------------------------------------------ */
     if (postUboMapped_) {
         auto slice = [&](uint32_t i) {
-            return reinterpret_cast<PostUbo*>(static_cast<char*>(postUboMapped_) + size_t(i) * uboAlignment_);
+            return reinterpret_cast<PostUbo*>(static_cast<char*>(postUboMapped_) + size_t(i) * postStride_);
         };
         /* On an 8-bit HDR target the sun disc and the eye highlight clip at 1.0, so the bloom
            threshold drops with them; on a float target they are found at their real intensity. */
@@ -2529,8 +2595,7 @@ void VulkanRenderer::rebuildMaterialBlocks() {
     const int materialCount = af_engine_material_count(engine_);
     if (submeshCount <= 0 || !submeshes) { materialCount_ = 0; return; }
 
-    const uint32_t stride = uboAlignment_ > sizeof(MaterialUbo) ? uboAlignment_
-                                                                 : uint32_t(sizeof(MaterialUbo) + 15u) / 16u * 16u;
+    const uint32_t stride = uniformBlockStride(sizeof(MaterialUbo), uboAlignment_);
     materialStride_ = stride;
     const uint64_t needed = uint64_t(submeshCount + 1) * stride;
     if (needed > materialUboSize_) {
@@ -2776,7 +2841,7 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
                          0, 1, &bar, 0, nullptr, 0, nullptr);
     meshDirty_ = false;
 }
@@ -2785,7 +2850,8 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
  *  Command recording
  * ============================================================================================ */
 void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
-    if (!options_.enableShadows || !engine_) return;
+    // Even a disabled/empty shadow map is a live sampled descriptor. Clear it and execute its
+    // final layout transition; skipping the pass leaves a newly recreated image UNDEFINED.
     VkClearValue clear{};
     clear.depthStencil = {1.0f, 0};
 
@@ -2798,7 +2864,8 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
     bi.pClearValues = &clear;
     vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
 
-    if (vertexCount_ > 0 && vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
+    if (options_.enableShadows && engine_ && vertexCount_ > 0 &&
+        vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
         VkViewport vp{0.0f, 0.0f, float(options_.shadowMapSize), float(options_.shadowMapSize), 0.0f, 1.0f};
         VkRect2D sc{{0, 0}, {uint32_t(options_.shadowMapSize), uint32_t(options_.shadowMapSize)}};
         vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -2809,7 +2876,7 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
         vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         const VkDescriptorSet set = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
         if (set != VK_NULL_HANDLE) {
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraStride_, uint32_t(2 * bloomLevels_) * postStride_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1, &set, 2, offsets);
         }
         const af_submesh* submeshes = af_engine_submeshes(engine_);
@@ -2840,7 +2907,9 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     VkClearValue clears[3]{};
     clears[0].color = {{0.055f, 0.075f, 0.11f, 1.0f}};   /* deep studio backdrop, linear light */
     clears[1].color = {{0.0f, 0.0f, 0.0f, 1.0f}};        /* MSAA resolve target: not loaded */
-    clears[2].depthStencil = {1.0f, 0};
+    // At 1x there is no resolve attachment: depth moves from attachment 2 to 1. Clearing
+    // clears[1] as a colour left depth at 0, causing every normal fragment to fail its test.
+    clears[options_.msaaSamples > 1 ? 2 : 1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -2860,7 +2929,7 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdSetScissor(cmd, 0, 1, &sc);
 
     const VkDescriptorSet set0 = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
-    const uint32_t offsets0[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+    const uint32_t offsets0[2] = {frameIndex_ * cameraStride_, uint32_t(2 * bloomLevels_) * postStride_};
 
     /* ---- studio ground ------------------------------------------------------------------------ */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
@@ -2957,11 +3026,14 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
        the explicit barrier keeps the result ordered before any fragment stage consumes it. */
     if (forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusPipeline_);
-        const uint32_t cameraOffset = frameIndex_ * uboAlignment_;
+        const uint32_t cameraOffset = frameIndex_ * cameraStride_;
         VkDescriptorSet sets[3] = {cameraSets_[0], materialSet_, forwardPlusSet_};
-        const uint32_t dynamicOffsets[2] = {cameraOffset, 0};
+        // Dynamic offsets cover ALL dynamic bindings in the three layouts, even bindings the
+        // compute shader does not read: camera + post in set 0, then material in set 1.
+        const uint32_t dynamicOffsets[3] = {
+            cameraOffset, uint32_t(2 * bloomLevels_) * postStride_, 0};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusLayout_, 0, 3,
-                                sets, 2, dynamicOffsets);
+                                sets, 3, dynamicOffsets);
         vkCmdDispatch(cmd, (kForwardTilesX + 7) / 8, (kForwardTilesY + 7) / 8, 1);
         VkBufferMemoryBarrier tileBarrier{};
         tileBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -2988,6 +3060,9 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRenderPassBeginInfo rp{};
             rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             rp.renderPass = bloomDownPass_;
+            const VkClearValue clear{};
+            rp.clearValueCount = 1;
+            rp.pClearValues = &clear;
             rp.framebuffer = bloom_[i].framebuffer;
             rp.renderArea.extent = {bloom_[i].width, bloom_[i].height};
             vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
@@ -2997,7 +3072,7 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomDownPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraStride_, uint32_t(i) * postStride_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomDownSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3017,7 +3092,7 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomUpPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(bloomLevels_ + i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraStride_, uint32_t(bloomLevels_ + i) * postStride_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomUpSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3039,7 +3114,7 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
-        const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+        const uint32_t offsets[2] = {frameIndex_ * cameraStride_, uint32_t(2 * bloomLevels_) * postStride_};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                 &compositeSet_, 2, offsets);
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -3161,7 +3236,11 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         failFatal(VK_ERROR_INITIALIZATION_FAILED, "frame synchronization state validation");
         return;
     }
-    const VkResult waited = vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    // Camera slices are per-frame, but mesh/material/post/Forward+ buffers are still shared.
+    // A fence for just this ring slot does not protect CPU stores from the previous slot's GPU
+    // reads. Retire every owner before updating mapped shared memory or resizing its buffers.
+    const VkResult waited = vkWaitForFences(device_, uint32_t(inFlight_.size()), inFlight_.data(),
+                                             VK_TRUE, UINT64_MAX);
     if (waited != VK_SUCCESS) { failFatal(waited, "vkWaitForFences"); return; }
 
     uint32_t imageIndex = 0;
@@ -3263,7 +3342,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
        that the image was physically displayed. */
     if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
         ++stats_.presentRequestsAccepted;
-        ++stats_.frames;
+        stats_.frames = int((uint32_t(stats_.frames) + 1u) & 0x7fffffffu);
         stats_.drawCalls = drawCallsThisFrame_;
         stats_.triangles = trianglesThisFrame_;
         stats_.vertices = vertexCount_;

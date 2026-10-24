@@ -152,6 +152,13 @@ struct PostUbo {
 };
 static_assert(sizeof(PostUbo) == 32, "PostUbo must match PostBlock");
 
+/* An offset alignment is not a block size. CameraUbo is 448 bytes, so a device with
+   256-byte alignment needs a 512-byte slice, not 256. Sharing this calculation prevents
+   overlapping frames and out-of-bounds dynamic UBO ranges in BOTH graphics APIs. */
+constexpr uint32_t uniformBlockStride(uint32_t size, uint32_t alignment) {
+    return alignment ? ((size + alignment - 1u) / alignment) * alignment : size;
+}
+
 /* ------------------------------------------------------------------ vertex layout ---------- */
 /* Byte offsets into af_vertex. Both backends bind the engine's buffer directly with these. */
 struct VertexLayout {

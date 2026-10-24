@@ -112,7 +112,7 @@ def validate_spirv(glslc, spv):
     exe = os.path.join(os.path.dirname(glslc), "spirv-val")
     if not os.path.isfile(exe):
         return
-    r = subprocess.run([exe, "--target-env", "vulkan1.1", spv], capture_output=True, text=True)
+    r = subprocess.run([exe, "--target-env", "vulkan1.0", spv], capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit("spirv-val rejected %s: %s" % (spv, r.stdout + r.stderr))
 
@@ -139,7 +139,7 @@ def compile_spirv(glslc, source, stage, tmpdir, name):
     src = os.path.join(tmpdir, "%s.%s" % (name, stage))
     dst = os.path.join(tmpdir, "%s.%s.spv" % (name, stage))
     open(src, "w", encoding="utf-8").write(source)
-    cmd = [glslc, "-fshader-stage=" + GLSL_STAGE[stage], "-O", "--target-env=vulkan1.1",
+    cmd = [glslc, "-fshader-stage=" + GLSL_STAGE[stage], "-O", "--target-env=vulkan1.0",
            "-Werror", "-o", dst, src]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

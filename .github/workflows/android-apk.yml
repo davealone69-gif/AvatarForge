@@ -16,8 +16,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  renderer-pixels:
+    name: Render real GLES and Vulkan frames
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install headless graphics drivers and validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ zlib1g-dev libegl1-mesa-dev libgles2-mesa-dev \
+            mesa-vulkan-drivers libvulkan-dev vulkan-validationlayers libx11-dev xvfb xauth
+
+      - name: Assert real GLES pixels at desktop and mobile UBO alignments
+        run: |
+          mkdir -p renderer-test-logs
+          bash tools/test_renderer.sh 2>&1 | tee renderer-test-logs/gles.txt
+
+      - name: Assert Vulkan pixels and synchronization validation
+        run: bash tools/test_renderer_vk.sh 2>&1 | tee renderer-test-logs/vulkan.txt
+
+      - name: Preserve renderer regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvatarForge-renderer-tests-${{ github.sha }}
+          path: renderer-test-logs/
+          if-no-files-found: warn
+          retention-days: 14
+
   build-apk:
     name: Build and verify Android packages
+    needs: renderer-pixels
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

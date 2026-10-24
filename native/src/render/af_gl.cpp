@@ -183,6 +183,8 @@ private:
     int surfaceWidth_ = 0;
     int surfaceHeight_ = 0;
     uint32_t uboAlignment_ = 256;
+    uint32_t cameraStride_ = 512;
+    uint32_t postStride_ = 256;
 
     /* ---- programs and uniform locations ---- */
     GLuint forwardProgram_ = 0, shadowProgram_ = 0, groundProgram_ = 0, lineProgram_ = 0;
@@ -304,6 +306,8 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     GLint align = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     uboAlignment_ = uint32_t(align > 0 ? align : 256);
+    cameraStride_ = uniformBlockStride(sizeof(CameraUbo), uboAlignment_);
+    postStride_ = uniformBlockStride(sizeof(PostUbo), uboAlignment_);
 
     /* Floating-point colour attachments: ES 3.2 has them in core, ES 3.0/3.1 need the extension. */
     bool floatColour = (major > 3 || (major == 3 && minor >= 2));
@@ -424,7 +428,11 @@ bool GlRenderer::createPrograms(std::string* error) {
        qualifier, so the units are assigned here, next to the code that binds them. */
     auto unit = [](GLuint p, const char* name, GLint value) {
         const GLint loc = glGetUniformLocation(p, name);
-        if (loc >= 0) glUniform1i(loc, value);
+        if (loc >= 0) {
+            // glUniform updates the CURRENT program, not the program queried for the location.
+            glUseProgram(p);
+            glUniform1i(loc, value);
+        }
     };
     unit(forwardProgram_, "uBaseColorTex", 0);
     unit(forwardProgram_, "uNormalTex", 1);
@@ -445,6 +453,7 @@ bool GlRenderer::createPrograms(std::string* error) {
     uForward_.occlusion = glGetUniformLocation(forwardProgram_, "uOcclusionTex");
     uForward_.subsurface = glGetUniformLocation(forwardProgram_, "uSubsurfaceTex");
     uPost_.source = glGetUniformLocation(bloomDownProgram_, "uSourceTex");
+    glUseProgram(0);
     return true;
 }
 
@@ -525,8 +534,8 @@ bool GlRenderer::createTargets(std::string* error) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    /* Shadow map: a depth texture with hardware comparison, so the shader's 5 taps each get a
-       2x2 filtered comparison for free. */
+    /* common.glsl samples raw depth with sampler2D and performs its own PCF comparisons.
+       Enabling hardware comparison here would mismatch the shader's sampler type. */
     const int shadowSize = options_.enableShadows ? options_.shadowMapSize : 512;
     glGenTextures(1, &shadowTexture_);
     glBindTexture(GL_TEXTURE_2D, shadowTexture_);
@@ -536,7 +545,7 @@ bool GlRenderer::createTargets(std::string* error) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
     glGenFramebuffers(1, &shadowFbo_);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
@@ -595,9 +604,17 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     glGenVertexArrays(1, &emptyVao_);
     glGenVertexArrays(1, &lineVao_);
 
+    // glVertexAttribPointer captures the bound buffer object NOW. Binding a VBO at draw time
+    // does not repair a VAO configured with buffer 0 (client arrays are illegal in GLES 3).
+    glGenBuffers(1, &vertexVbo_);
+    glGenBuffers(1, &indexIbo_);
+    glGenBuffers(1, &groundVbo_);
+    glGenBuffers(1, &lineVbo_);
+
     /* Avatar VAO: the engine's interleaved af_vertex, stride 88. */
     glBindVertexArray(avatarVao_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, VertexLayout::stride,
                           reinterpret_cast<const void*>(size_t(VertexLayout::posOffset)));
@@ -634,22 +651,20 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
 
     const float quad[12] = {-1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f,
                             -1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f};
-    glGenBuffers(1, &groundVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 
     lineCapacity_ = GLint64(4096 * 28);
-    glGenBuffers(1, &lineVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     glBufferData(GL_ARRAY_BUFFER, lineCapacity_, nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glGenBuffers(1, &cameraUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
-    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 2, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(cameraStride_) * 2, nullptr, GL_DYNAMIC_DRAW);
     glGenBuffers(1, &postUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
-    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 16, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(postStride_) * 16, nullptr, GL_DYNAMIC_DRAW);
     glGenBuffers(1, &materialUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, materialUbo_);
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 32, nullptr, GL_DYNAMIC_DRAW);
@@ -785,8 +800,16 @@ void GlRenderer::uploadAtlas(std::string* error) {
     atlasGpuBytes_ = 0;
     for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
         af_texture tex{};
-        if (af_engine_texture(engine_, slot, &tex) != AF_OK) continue;
-        if (!tex.data || tex.width <= 0 || tex.height <= 0) continue;
+        if (af_engine_texture(engine_, slot, &tex) != AF_OK || !tex.data ||
+            tex.width <= 0 || tex.height <= 0) {
+            // A new engine may omit a slot that used to contain a filtered atlas. Zero UV
+            // derivatives must not sample its old anisotropic state, even with has_*_tex=0.
+            if (info_.supportsAnisotropy) {
+                glBindTexture(GL_TEXTURE_2D, atlasTexture_[slot]);
+                glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */, 1.0f);
+            }
+            continue;
+        }
 
         const GLenum internal = (tex.channels == 1) ? GL_R8
                                : (slot == AF_TEX_BASE_COLOR) ? GL_SRGB8_ALPHA8 : GL_RGBA8;
@@ -810,7 +833,7 @@ void GlRenderer::uploadAtlas(std::string* error) {
             GLfloat maxAniso = 1.0f;
             glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso);
             glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */,
-                            std::min(4.0f, maxAniso));
+                            tex.width > 1 && tex.height > 1 ? std::min(4.0f, maxAniso) : 1.0f);
         }
         const uint64_t bytes = uncompressedAtlasFootprint(tex.width, tex.height, tex.channels);
         atlasGpuBytes_ = atlasGpuBytes_ > UINT64_MAX - bytes ? UINT64_MAX : atlasGpuBytes_ + bytes;
@@ -931,8 +954,7 @@ void GlRenderer::rebuildMaterialBlocks() {
     const int materialCount = af_engine_material_count(engine_);
     if (submeshCount <= 0 || !submeshes) { materialCount_ = 0; return; }
 
-    materialStride_ = uboAlignment_ > sizeof(MaterialUbo) ? uboAlignment_
-                                                          : (sizeof(MaterialUbo) + 15u) / 16u * 16u;
+    materialStride_ = uniformBlockStride(sizeof(MaterialUbo), uboAlignment_);
     const GLint64 needed = GLint64(submeshCount + 1) * materialStride_;
     glBindBuffer(GL_UNIFORM_BUFFER, materialUbo_);
     if (needed > materialCapacity_) {
@@ -1063,7 +1085,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
 
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     const int frame = int(stats_.frames % 2);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo), &scene_.camera);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
@@ -1080,7 +1102,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
             p.texel[1] = 1.0f / float(sh ? sh : 1);
             p.texel[2] = p.texel[3] = 0.0f;
             glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
-            glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(i) * uboAlignment_, sizeof(PostUbo), &p);
+            glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(i) * postStride_, sizeof(PostUbo), &p);
         }
         for (int j = 0; j + 1 < bloomLevels_; ++j) {
             p.params[0] = p.params[1] = p.params[2] = p.params[3] = 0.0f;
@@ -1088,7 +1110,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
             p.texel[1] = 1.0f / float(bloomHeight_[j] ? bloomHeight_[j] : 1);
             p.texel[2] = p.texel[3] = 0.0f;
             glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
-            glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(bloomLevels_ + j) * uboAlignment_,
+            glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(bloomLevels_ + j) * postStride_,
                             sizeof(PostUbo), &p);
         }
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
@@ -1099,9 +1121,11 @@ void GlRenderer::updateScene(float deltaSeconds) {
     c.texel[0] = 1.0f / float(surfaceWidth_ ? surfaceWidth_ : 1);
     c.texel[1] = 1.0f / float(surfaceHeight_ ? surfaceHeight_ : 1);
     glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(2 * bloomLevels_) * uboAlignment_, sizeof(PostUbo), &c);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(2 * bloomLevels_) * postStride_, sizeof(PostUbo), &c);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, cameraUbo_);
+    // The shadow pass also needs this frame's slice, not the beginning of the whole buffer.
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraStride_,
+                      sizeof(CameraUbo));
     glBindBufferBase(GL_UNIFORM_BUFFER, 2, postUbo_);
 
     rebuildMaterialBlocks();
@@ -1171,7 +1195,7 @@ void GlRenderer::drawForwardPass() {
     glClearColor(0.055f, 0.075f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo));
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraStride_, sizeof(CameraUbo));
 
     /* ---- studio ground ---- */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
@@ -1180,11 +1204,12 @@ void GlRenderer::drawForwardPass() {
         glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
         glBindBufferRange(GL_UNIFORM_BUFFER, 1, materialUbo_,
                           GLintptr(materialCount_) * materialStride_, sizeof(MaterialUbo));
-        glBindTexture(GL_TEXTURE_2D, shadowTexture_);
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, shadowTexture_);
         glActiveTexture(GL_TEXTURE0);
+        glDisable(GL_CULL_FACE); // The contact plane is deliberately two-sided.
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glEnable(GL_CULL_FACE);
         ++drawCalls_;
     }
 
@@ -1288,7 +1313,7 @@ void GlRenderer::drawBloom() {
         glUseProgram(bloomDownProgram_);
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, (i == 0) ? hdrTexture_ : bloomTexture_[i - 1]);
-        glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(i) * uboAlignment_, sizeof(PostUbo));
+        glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(i) * postStride_, sizeof(PostUbo));
         glDrawArrays(GL_TRIANGLES, 0, 3);
         ++drawCalls_;
     }
@@ -1300,7 +1325,7 @@ void GlRenderer::drawBloom() {
         glUseProgram(bloomUpProgram_);
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, bloomTexture_[i + 1]);
-        glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(bloomLevels_ + i) * uboAlignment_,
+        glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(bloomLevels_ + i) * postStride_,
                           sizeof(PostUbo));
         glDrawArrays(GL_TRIANGLES, 0, 3);
         ++drawCalls_;
@@ -1321,7 +1346,7 @@ void GlRenderer::drawComposite() {
     glActiveTexture(GL_TEXTURE7);
     glBindTexture(GL_TEXTURE_2D, bloomLevels_ > 0 ? bloomTexture_[0] : hdrTexture_);
     glActiveTexture(GL_TEXTURE0);
-    glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(2 * bloomLevels_) * uboAlignment_,
+    glBindBufferRange(GL_UNIFORM_BUFFER, 2, postUbo_, GLintptr(2 * bloomLevels_) * postStride_,
                       sizeof(PostUbo));
     glDrawArrays(GL_TRIANGLES, 0, 3);
     ++drawCalls_;
@@ -1365,12 +1390,6 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         }
     }
 
-    stats_.frames++;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-    }
     drawCalls_ = 0;
     triangles_ = 0;
 
@@ -1400,9 +1419,17 @@ void GlRenderer::renderFrame(float deltaSeconds) {
            than rendering into nothing. AvatarEngine.health() surfaces the flag. */
         const EGLint err = eglGetError();
         AF_GL_LOGE("eglSwapBuffers failed (egl error 0x%x)", unsigned(err));
-        if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) contextLost_ = true;
+        if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE || err == EGL_BAD_NATIVE_WINDOW)
+            contextLost_ = true;
+        return; // Preserve the last sequence: a non-throwing failed swap is not a new frame.
     }
 
+    stats_.frames = int((uint32_t(stats_.frames) + 1u) & 0x7fffffffu);
+    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
+        const float alpha = 0.06f;
+        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
+        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
+    }
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
     stats_.vertices = vertexCount_;

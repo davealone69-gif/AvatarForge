@@ -85,6 +85,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Render-thread watchdog state for a renderer that returns without counting frames. */
     private var stalledFrames = 0
     private var restartedAfterStall = false
+    private var observedFrameSequence = 0
     @Volatile private var surfaceWidth = 0
     @Volatile private var surfaceHeight = 0
     private var performanceHintSession: PerformanceHintManager.Session? = null
@@ -93,7 +94,12 @@ class RenderSurfaceView @JvmOverloads constructor(
     val thermalStatusFlow: StateFlow<Int?> = _thermalStatusFlow.asStateFlow()
     @Volatile private var thermalStatus: Int? = null
     private val thermalExecutor = Executor { command -> handler.post(command) }
+    /** Keep host lifecycle intent separate from Android visibility (adapted from PR #16). */
+    @Volatile private var frameLoopRequested = false
     @Volatile private var visible = false
+    // View's constructor can dispatch visibility callbacks before our fields are initialized.
+    private var callbacksReady = false
+    private var viewAttached = false
 
     init {
         registerThermalListener()
@@ -101,6 +107,7 @@ class RenderSurfaceView @JvmOverloads constructor(
         /* The renderer wants every pixel the view has, and it will letterbox nothing: the camera
            aspect is recomputed on resize so the avatar never stretches. */
         holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+        callbacksReady = true
     }
 
     private fun settingsForThermal(requested: RenderSettings): RenderSettings = requested.copy(
@@ -278,14 +285,40 @@ class RenderSurfaceView @JvmOverloads constructor(
         return current.pickRegion(handle, viewX, viewY, viewWidth, viewHeight, camera)
     }
 
-    /** Starts/stops the frame loop. Called from the host lifecycle. */
+    /** Host render intent. View/window visibility must never overwrite a host pause. */
     fun setFrameLoopEnabled(enabled: Boolean) {
         synchronized(lifecycleLock) {
             if (released) return
-            visible = enabled
+            frameLoopRequested = enabled
+            refreshFrameLoopStateLocked()
+        }
+    }
+
+    /** Adapt PR #16's intent/effective-visibility separation without adding per-frame logging. */
+    private fun refreshFrameLoopStateLocked() {
+        val shouldRun = RenderLoopPolicy.shouldRun(
+            requested = frameLoopRequested,
+            shown = isShown,
+            windowVisible = windowVisibility == VISIBLE,
+            attached = viewAttached,
+            surfaceValid = activeSurface?.isValid == true,
+            released = released,
+        )
+        if (visible == shouldRun) return
+        visible = shouldRun
+        handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
+        if (shouldRun) queueNextFrame()
+    }
+
+    /** Recovery and the tail of an in-progress frame must not create two self-scheduling loops. */
+    private fun queueNextFrame(delayMs: Long = 0L) {
+        synchronized(lifecycleLock) {
             handler.removeCallbacks(frameLoop)
-            frameLoop.resetClock()
-            if (enabled) handler.post(frameLoop)
+            if (visible && !released && !handler.postDelayed(frameLoop, delayMs)) {
+                visible = false
+                _error.value = "Render thread rejected the next frame"
+            }
         }
     }
 
@@ -297,10 +330,21 @@ class RenderSurfaceView @JvmOverloads constructor(
         fun resetClock() { lastNs = 0L }
 
         override fun run() {
+            if (!visible || released) return
             val r = renderer
             if (r == null) {
                 resetClock()
-                if (visible) handler.postDelayed(this, FRAME_RETRY_MS)
+                val surface = activeSurface
+                if (surface?.isValid == true) {
+                    try {
+                        createRendererOnRenderThread(surface)
+                        if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
+                    } catch (t: Throwable) {
+                        discardRendererOnRenderThread()
+                        _error.value = t.message ?: t.javaClass.simpleName
+                    }
+                }
+                queueNextFrame(if (renderer == null) FRAME_ERROR_RETRY_MS else FRAME_RETRY_MS)
                 return
             }
             val frameStartNs = System.nanoTime()
@@ -326,10 +370,18 @@ class RenderSurfaceView @JvmOverloads constructor(
                     val st = r.stats()
                     _stats.value = st
                     reportFrameWorkDuration(System.nanoTime() - frameStartNs)
-                    /* An empty scene still counts frames. Zero FPS plus zero triangles for a full
-                       second therefore points to a renderer that is returning before drawing. */
-                    if (st.fps <= 0f && st.triangles == 0) stalledFrames++ else stalledFrames = 0
-                    if (stalledFrames >= STALL_FRAMES) handleRendererStall()
+                    val healthy = RenderLoopPolicy.hasHealthyFrame(st, observedFrameSequence)
+                    observedFrameSequence = st.frameSequence
+                    if (healthy) {
+                        stalledFrames = 0
+                        _error.value = null
+                    } else {
+                        ++stalledFrames
+                    }
+                    // Native fatal returns do not throw, and may retain an earlier positive FPS.
+                    if ((st.frameFatal && !restartedAfterStall) || stalledFrames >= STALL_FRAMES) {
+                        handleRendererStall()
+                    }
                 } finally {
                     Trace.endSection()
                 }
@@ -338,13 +390,12 @@ class RenderSurfaceView @JvmOverloads constructor(
                 _error.value = t.message ?: t.javaClass.simpleName
                 /* A single transient frame failure must not permanently freeze the viewer on a
                    black SurfaceView. Keep the diagnostic visible, then retry at a low rate while
-                   the view remains visible. A successful frame clears the stale error below. */
-                if (visible) handler.postDelayed(this, FRAME_ERROR_RETRY_MS)
+                   the view remains visible. Fresh frame progress clears the stale error. */
+                queueNextFrame(FRAME_ERROR_RETRY_MS)
                 return
             } finally {
                 Trace.endSection()
             }
-            if (_error.value != null) _error.value = null
             if (visible) {
                 /* The previous loop always slept 16 ms *after* doing the render work. A 22 ms
                    frame therefore became 38 ms (~26 FPS), which falsely triggered the quality
@@ -352,7 +403,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                 val elapsedNs = System.nanoTime() - frameStartNs
                 val remainingNs = (FRAME_INTERVAL_NS - elapsedNs).coerceAtLeast(0L)
                 val delayMs = (remainingNs + 999_999L) / 1_000_000L
-                handler.postDelayed(this, delayMs)
+                queueNextFrame(delayMs)
             }
         }
     }
@@ -369,9 +420,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                 if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
                 _error.value = "Renderer stalled; restarted once. Checking for frames."
             } catch (t: Throwable) {
-                runCatching { renderer?.destroy() }
-                renderer = null
-                _rendererInfo.value = null
+                discardRendererOnRenderThread()
                 _error.value = "Renderer recovery failed: ${t.message ?: t.javaClass.simpleName}. Check logcat -s AvatarForge."
             }
         } else {
@@ -486,6 +535,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         val surface: Surface = holder.surface
         activeSurface = surface
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked() }
         stalledFrames = 0
         restartedAfterStall = false
         onRenderThread {
@@ -493,28 +543,34 @@ class RenderSurfaceView @JvmOverloads constructor(
                 createRendererOnRenderThread(surface)
                 if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
             } catch (t: Throwable) {
-                runCatching { renderer?.destroy() }
-                renderer = null
-                closePerformanceHints()
-                _rendererInfo.value = null
+                discardRendererOnRenderThread()
                 _error.value = t.message ?: t.javaClass.simpleName
+                queueNextFrame(FRAME_ERROR_RETRY_MS)
             }
         }
     }
 
     /** Creates the GPU renderer on its owner thread for a new or recovered Surface. */
     private fun createRendererOnRenderThread(surface: Surface) {
-        closePerformanceHints()
-        renderer?.destroy()
+        discardRendererOnRenderThread()
         val effectiveSettings = settingsForThermal(settings)
         renderer = AvatarRenderer.create(surface, effectiveSettings)
         _rendererInfo.value = renderer?.info()
-        _error.value = null
         renderer?.setCamera(camera)
         renderer?.applyOptions(effectiveSettings)
         openPerformanceHints()
-        handler.removeCallbacks(frameLoop)
-        if (visible) handler.post(frameLoop)
+        queueNextFrame()
+    }
+
+    /** Accessed only on the render thread; the engine lease remains held for a later retry. */
+    private fun discardRendererOnRenderThread() {
+        closePerformanceHints()
+        val previous = renderer
+        renderer = null
+        _rendererInfo.value = null
+        observedFrameSequence = 0
+        runCatching { previous?.destroy() }
+            .onFailure { _error.value = it.message ?: it.javaClass.simpleName }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -528,22 +584,22 @@ class RenderSurfaceView @JvmOverloads constructor(
                     .getOrDefault(false)
                 if (!resized) {
                     _error.value = _error.value ?: "Renderer resize failed for ${width}×${height}; GPU targets could not be recreated"
-                    handler.removeCallbacks(frameLoop)
+                    // A failed native resize can leave partial targets. Recreate at a low rate
+                    // instead of removing the sole frame callback and freezing forever.
+                    discardRendererOnRenderThread()
+                    queueNextFrame(FRAME_ERROR_RETRY_MS)
                 } else {
-                    _error.value = null
-                    if (visible) {
-                        handler.removeCallbacks(frameLoop)
-                        handler.post(frameLoop)
-                    }
+                    queueNextFrame()
                 }
             }
         }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        activeSurface = null
+        synchronized(lifecycleLock) { refreshFrameLoopStateLocked() }
         stalledFrames = 0
         restartedAfterStall = false
-        activeSurface = null
         surfaceWidth = 0
         surfaceHeight = 0
         /* The renderer must be gone before Android invalidates the Surface. No timeout is safe:
@@ -567,6 +623,7 @@ class RenderSurfaceView @JvmOverloads constructor(
             if (released) return
             released = true
             attachmentVersion++
+            frameLoopRequested = false
             visible = false
             handler.removeCallbacks(frameLoop)
             leaseToRelease = engineLease
@@ -598,10 +655,32 @@ class RenderSurfaceView @JvmOverloads constructor(
         this.engine = engine
     }
 
-    /** Set once in XML/inflation; kept for parity with View's own visibility semantics. */
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
-        setFrameLoopEnabled(visibility == VISIBLE)
+        if (callbacksReady) synchronized(lifecycleLock) { refreshFrameLoopStateLocked() }
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (callbacksReady) synchronized(lifecycleLock) { refreshFrameLoopStateLocked() }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (callbacksReady) synchronized(lifecycleLock) {
+            viewAttached = true
+            refreshFrameLoopStateLocked()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        // isAttachedToWindow remains true until after this callback. Stop before super tears
+        // down SurfaceView's window, rather than accidentally leaving the loop enabled.
+        if (callbacksReady) synchronized(lifecycleLock) {
+            viewAttached = false
+            refreshFrameLoopStateLocked()
+        }
+        super.onDetachedFromWindow()
     }
 
     private companion object {
