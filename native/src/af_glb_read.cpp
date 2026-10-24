@@ -47,6 +47,22 @@ int componentSize(int componentType) {
     }
 }
 
+bool checkedAdd(size_t a, size_t b, size_t* out) {
+    if (!out || b > SIZE_MAX - a) return false;
+    *out = a + b;
+    return true;
+}
+
+bool checkedMul(size_t a, size_t b, size_t* out) {
+    if (!out || (a != 0 && b > SIZE_MAX / a)) return false;
+    *out = a * b;
+    return true;
+}
+
+bool checkedRange(size_t offset, size_t length, size_t limit) {
+    return offset <= limit && length <= limit - offset;
+}
+
 int typeComponents(const std::string& type) {
     if (type == "SCALAR") return 1;
     if (type == "VEC2") return 2;
@@ -112,15 +128,18 @@ struct AccessorView {
 
 int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, int accessorIndex,
                     AccessorView* view, std::string* error) {
-    const json::Json& accessors = doc["accessors"];
-    const json::Json& acc = accessors.atOrNull(static_cast<size_t>(accessorIndex < 0 ? 0 : accessorIndex));
-    if (accessorIndex < 0 || acc.isNull()) {
+    if (!view || accessorIndex < 0) {
+        if (error) *error = "glTF: accessor index out of range";
+        return AF_ERR_INVALID_ARG;
+    }
+    const json::Json& acc = doc["accessors"].atOrNull(static_cast<size_t>(accessorIndex));
+    if (acc.isNull()) {
         if (error) *error = "glTF: accessor index out of range";
         return AF_ERR_INVALID_ARG;
     }
     size_t count = 0;
-    if (!acc["count"].asIndex(&count)) {
-        if (error) *error = "glTF: accessor without a valid count";
+    if (!acc["count"].asIndex(&count) || count == 0) {
+        if (error) *error = "glTF: accessor count must be a positive integer";
         return AF_ERR_INVALID_ARG;
     }
     const int componentType = acc["componentType"].asInt(0);
@@ -130,7 +149,11 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         if (error) *error = "glTF: accessor with an unknown component type or element type";
         return AF_ERR_INVALID_ARG;
     }
-    const size_t elementBytes = static_cast<size_t>(csize) * static_cast<size_t>(components);
+    size_t elementBytes = 0;
+    if (!checkedMul(static_cast<size_t>(csize), static_cast<size_t>(components), &elementBytes)) {
+        if (error) *error = "glTF: accessor element size overflows";
+        return AF_ERR_INVALID_ARG;
+    }
 
     view->count = count;
     view->components = components;
@@ -139,52 +162,74 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
     view->stride = elementBytes;
     view->valid = true;
 
-    if (count == 0) {
-        view->base = bin;
-        return AF_OK;
-    }
-
-    const json::Json& bvJson = doc["bufferViews"].atOrNull(static_cast<size_t>(acc["bufferView"].asInt(0)));
-    if (bvJson.isNull()) {
-        /* Sparse-only accessor (all zeros outside the sparse patch) is legal. Callers that need
-           data must use sparse-aware copy; here we report a zero base and let the caller treat
-           the buffer as zeros. */
+    const json::Json& bvRef = acc["bufferView"];
+    if (!bvRef.isNumber()) {
+        if (!acc["sparse"].isObject()) {
+            if (error) *error = "glTF: accessor without a bufferView must have sparse data";
+            return AF_ERR_INVALID_ARG;
+        }
         view->base = nullptr;
         return AF_OK;
     }
-    size_t byteOffset = 0;
-    acc["byteOffset"].asIndex(&byteOffset);
+    const int bvIndex = bvRef.asInt(-1);
+    if (bvIndex < 0) {
+        if (error) *error = "glTF: accessor bufferView index is invalid";
+        return AF_ERR_INVALID_ARG;
+    }
+    const json::Json& bvJson = doc["bufferViews"].atOrNull(static_cast<size_t>(bvIndex));
+    if (bvJson.isNull()) {
+        if (error) *error = "glTF: accessor bufferView index out of range";
+        return AF_ERR_INVALID_ARG;
+    }
+
     size_t bvOffset = 0, bvLength = 0;
-    bvJson["byteOffset"].asIndex(&bvOffset);
-    if (!bvJson["byteLength"].asIndex(&bvLength)) {
-        if (error) *error = "glTF: bufferView without a byteLength";
+    if (!bvJson["byteOffset"].isNull() && !bvJson["byteOffset"].asIndex(&bvOffset)) {
+        if (error) *error = "glTF: bufferView has an invalid byteOffset";
         return AF_ERR_INVALID_ARG;
     }
-    size_t bvStride = 0;
-    if (bvJson.find("byteStride") && !bvJson["byteStride"].asIndex(&bvStride)) {
-        if (error) *error = "glTF: bufferView with an invalid byteStride";
+    if (!bvJson["byteLength"].asIndex(&bvLength) || !checkedRange(bvOffset, bvLength, binSize)) {
+        if (error) *error = "glTF: bufferView range exceeds the binary buffer";
         return AF_ERR_INVALID_ARG;
     }
-    if (bvStride == 0) bvStride = elementBytes;
-    if (bvStride < elementBytes) {
-        if (error) *error = "glTF: byteStride smaller than the element size";
+    size_t bufferIndex = 0;
+    if (!bvJson["buffer"].asIndex(&bufferIndex) || bufferIndex != 0) {
+        if (error) *error = "glTF: bufferView references an unavailable buffer";
+        return AF_ERR_UNSUPPORTED;
+    }
+
+    size_t byteOffset = 0;
+    if (!acc["byteOffset"].isNull() && !acc["byteOffset"].asIndex(&byteOffset)) {
+        if (error) *error = "glTF: accessor has an invalid byteOffset";
         return AF_ERR_INVALID_ARG;
     }
-    /* Everything in 64-bit: count * stride overflows 32 bits at 4 G and a hostile file can claim
-       it. The addition cannot wrap because each term is bounded by size_t. */
-    const uint64_t start = static_cast<uint64_t>(bvOffset) + static_cast<uint64_t>(byteOffset);
-    const uint64_t span = static_cast<uint64_t>(count - 1) * static_cast<uint64_t>(bvStride) +
-                          static_cast<uint64_t>(elementBytes);
-    if (start > binSize || span > binSize || start + span > static_cast<uint64_t>(binSize)) {
-        if (error) *error = "glTF: accessor range exceeds the binary chunk";
+    size_t stride = elementBytes;
+    if (bvJson.find("byteStride")) {
+        if (!bvJson["byteStride"].asIndex(&stride) || stride < 4 || stride > 252 || (stride % 4) != 0) {
+            if (error) *error = "glTF: byteStride must be a multiple of 4 in the range 4..252";
+            return AF_ERR_INVALID_ARG;
+        }
+        if (stride < elementBytes) {
+            if (error) *error = "glTF: byteStride smaller than the element size";
+            return AF_ERR_INVALID_ARG;
+        }
+    }
+
+    size_t lastOffset = 0, span = 0, absoluteStart = 0;
+    if (byteOffset > bvLength ||
+        !checkedMul(count - 1, stride, &lastOffset) ||
+        !checkedAdd(lastOffset, elementBytes, &span) ||
+        !checkedRange(byteOffset, span, bvLength) ||
+        !checkedAdd(bvOffset, byteOffset, &absoluteStart) ||
+        !checkedRange(absoluteStart, span, binSize)) {
+        if (error) *error = "glTF: accessor offset/span overflows or exceeds its bufferView";
         return AF_ERR_INVALID_ARG;
     }
-    if (start + span > static_cast<uint64_t>(bvOffset) + static_cast<uint64_t>(bvLength)) {
-        if (error) *error = "glTF: accessor range exceeds its bufferView";
+    if (!bin) {
+        if (error) *error = "glTF: accessor requires a missing binary chunk";
         return AF_ERR_INVALID_ARG;
     }
-    view->base = bin + start;
-    view->stride = bvStride;
+    view->base = bin + absoluteStart;
+    view->stride = stride;
     return AF_OK;
 }
 
