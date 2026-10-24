@@ -335,15 +335,20 @@ int applySparse(const uint8_t* bin, size_t binSize, const json::Json& doc, const
     const uint8_t* valBase = bin + valStart;
     const bool normalized = acc["normalized"].asBool(false);
     for (size_t i = 0; i < sparseCount; ++i) {
-        size_t target = 0;
-        if (idxSize == 1) target = idxBase[i];
+        size_t target = 0, indexOffset = 0;
+        if (!checkedMul(i, static_cast<size_t>(idxSize), &indexOffset) ||
+            !checkedRange(indexOffset, static_cast<size_t>(idxSize), idxSpan)) {
+            if (error) *error = "glTF: sparse index read offset overflows";
+            return AF_ERR_INVALID_ARG;
+        }
+        if (idxSize == 1) target = idxBase[indexOffset];
         else if (idxSize == 2) {
             uint16_t v;
-            std::memcpy(&v, idxBase + i * static_cast<size_t>(idxSize), sizeof(v));
+            std::memcpy(&v, idxBase + indexOffset, sizeof(v));
             target = v;
         } else {
             uint32_t v;
-            std::memcpy(&v, idxBase + i * static_cast<size_t>(idxSize), sizeof(v));
+            std::memcpy(&v, idxBase + indexOffset, sizeof(v));
             target = v;
         }
         if (target >= count) {
