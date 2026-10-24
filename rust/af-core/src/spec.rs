@@ -31,7 +31,7 @@ impl AfSpec {
             sex: AF_SEX_UNSPECIFIED,
             build: AF_BUILD_AVERAGE,
             hair_style: AF_HAIR_MEDIUM,
-            outfit: AF_OUTFIT_NONE,
+            outfit: AF_OUTFIT_TSHIRT,
             footwear: AF_FOOTWEAR_NONE,
             seed: 1337,
             height_m: AF_DEFAULT_HEIGHT_M,
