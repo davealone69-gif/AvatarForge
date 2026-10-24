@@ -72,7 +72,7 @@ data class DiagnosticsReport(
             rendererDiagnostics?.takeIf { it.attempts.isNotEmpty() }?.let { d ->
                 appendLine()
                 appendLine("== Renderer start-up attempts ==")
-                appendLine("Final state: ${d.state.name} · frames presented: ${d.framesRendered}")
+                appendLine("Final state: ${d.state.name} · frames at last state change: ${d.framesRendered}")
                 for (a in d.attempts) {
                     val backend = if (a.preferVulkan) "Vulkan preferred" else "GLES forced"
                     val outcome = if (a.succeeded) "OK" else "FAIL"
@@ -220,7 +220,7 @@ fun collectDiagnostics(
         }
         items += DiagItem(
             rendererArea, "Start-up",
-            "${d.state.name} · ${d.attempts.size} attempt(s) · ${d.framesRendered} frames presented",
+            "${d.state.name} · ${d.attempts.size} attempt(s) · ${d.framesRendered} frame(s) at last state change",
             stateStatus,
             if (d.state == RendererStartupState.FAILED)
                 "Open Render settings, turn off 'Prefer Vulkan (else GLES 3.1)', then tap Retry renderer."

@@ -95,6 +95,20 @@ const char* vkDeviceTypeName(VkPhysicalDeviceType t) {
     }
 }
 
+/* Human-readable name for diagnostics, appended to the RendererInfo driver string so the
+   actually-selected depth format (D32 / D24S8 / D16...) appears in a copied report without
+   widening the C ABI struct. A D16 fallback matters because low-precision depth makes the
+   armor-vs-body coplanar surfaces more prone to Z-fighting shimmer. */
+const char* vkDepthFormatName(VkFormat f) {
+    switch (f) {
+        case VK_FORMAT_D32_SFLOAT:          return "D32_SFLOAT";
+        case VK_FORMAT_D24_UNORM_S8_UINT:   return "D24_UNORM_S8";
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:  return "D32_SFLOAT_S8";
+        case VK_FORMAT_D16_UNORM:           return "D16_UNORM";
+        default:                            return "unknown";
+    }
+}
+
 /* ============================================================================================
  *  VulkanRenderer
  * ============================================================================================ */
@@ -403,7 +417,9 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
                   VK_VERSION_PATCH(props.apiVersion));
     info_.apiVersion = apiBuf;
     char drvBuf[96];
-    std::snprintf(drvBuf, sizeof(drvBuf), "driver %u (%s)", props.driverVersion, vkDeviceTypeName(props.deviceType));
+    std::snprintf(drvBuf, sizeof(drvBuf), "driver %u (%s) · depth %s",
+                  props.driverVersion, vkDeviceTypeName(props.deviceType),
+                  vkDepthFormatName(depthFormat_));
     info_.driver = drvBuf;
     info_.supportsShadows = shadowImage_ != VK_NULL_HANDLE;
     info_.supportsFloatHdr = hdrFormat_ == VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -1339,16 +1355,23 @@ void VulkanRenderer::imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLay
 /** Builds the mip chain with blit chains - the kernel hands over mip level 0 only. */
 void VulkanRenderer::generateMips(VkCommandBuffer cmd, VkImage image, int32_t width, int32_t height,
                                   uint32_t levels) {
-    if (levels < 2) return;
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    /* Single-level images never enter the blit chain below, but they still have to leave the
+       upload layout before a shader can sample them. */
+    if (levels < 2) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &b);
+        return;
+    }
 
     int32_t w = width, h = height;
     for (uint32_t i = 1; i < levels; ++i) {
@@ -1356,10 +1379,37 @@ void VulkanRenderer::generateMips(VkCommandBuffer cmd, VkImage image, int32_t wi
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
 
-        b.subresourceRange.baseMipLevel = i - 1;
-        b.subresourceRange.levelCount = 1;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &b);
+        /* vkCmdBlitImage requires the source subresource in TRANSFER_SRC_OPTIMAL and the
+           destination in TRANSFER_DST_OPTIMAL. The previous code issued same-layout
+           DST -> DST barriers and blitted anyway: permissive drivers treat the two transfer
+           layouts as the same hardware state, but strict drivers (AMD/Xclipse) return undefined
+           blit data, which surfaced as rippling, shimmering atlas mips on the model. */
+        VkImageMemoryBarrier src{};
+        src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        src.srcQueueFamilyIndex = src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        src.image = image;
+        src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 1, 0, 1};
+        src.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        src.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        /* Destination level has never been touched: discard with UNDEFINED, its contents are
+           fully overwritten by the blit. */
+        VkImageMemoryBarrier dst{};
+        dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        dst.srcQueueFamilyIndex = dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        dst.image = image;
+        dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1};
+        dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        dst.srcAccessMask = 0;
+        dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        VkImageMemoryBarrier blitBarriers[2] = {src, dst};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 2, blitBarriers);
+
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
         blit.srcOffsets[1] = {pw, ph, 1};
@@ -1367,20 +1417,34 @@ void VulkanRenderer::generateMips(VkCommandBuffer cmd, VkImage image, int32_t wi
         blit.dstOffsets[1] = {w, h, 1};
         vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-        b.subresourceRange.baseMipLevel = i;
-        b.subresourceRange.levelCount = 1;
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     }
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1};
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         0, nullptr, 0, nullptr, 1, &b);
+
+    /* Levels 0..levels-2 end as blit sources; the final level was only ever a destination.
+       Hand every level to the fragment shader with matching old layouts in one batch. */
+    VkImageMemoryBarrier fromSrc{};
+    fromSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    fromSrc.srcQueueFamilyIndex = fromSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    fromSrc.image = image;
+    fromSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels - 1, 0, 1};
+    fromSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    fromSrc.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    fromSrc.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    fromSrc.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkImageMemoryBarrier fromDst{};
+    fromDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    fromDst.srcQueueFamilyIndex = fromDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    fromDst.image = image;
+    fromDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, levels - 1, 1, 0, 1};
+    fromDst.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    fromDst.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    fromDst.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    fromDst.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkImageMemoryBarrier finalBarriers[2] = {fromSrc, fromDst};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                         0, nullptr, 0, nullptr, 2, finalBarriers);
 }
 
 /* ============================================================================================

@@ -107,7 +107,7 @@ fun DiagnosticsContent(
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        "Final state: ${d.state.name} · ${d.framesRendered} frames presented",
+                        "Final state: ${d.state.name} · ${d.framesRendered} frame(s) at last state change",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                     )

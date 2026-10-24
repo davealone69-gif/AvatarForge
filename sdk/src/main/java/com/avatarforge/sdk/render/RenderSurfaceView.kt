@@ -107,14 +107,17 @@ class RenderSurfaceView @JvmOverloads constructor(
     private var lastResizeWidth = -1
     private var lastResizeHeight = -1
 
-    /** Keeps cumulative counters attached when a state transition rebuilds the diagnostics. */
+    /** Keeps cumulative counters attached when a state transition rebuilds the diagnostics.
+     *  The view fields must be qualified: inside this member extension the unqualified names
+     *  resolve to the receiver's own (default-zero) data-class properties, which silently made
+     *  every counter read 0 in the field report. */
     private fun RendererDiagnostics.withCounters(): RendererDiagnostics = copy(
-        surfaceCreates = surfaceCreates,
-        surfaceChanges = surfaceChanges,
-        surfaceDestroys = surfaceDestroys,
-        frameLoopRestarts = frameLoopRestarts,
-        lastSurfaceWidth = lastSurfaceWidth,
-        lastSurfaceHeight = lastSurfaceHeight,
+        surfaceCreates = this@RenderSurfaceView.surfaceCreates,
+        surfaceChanges = this@RenderSurfaceView.surfaceChanges,
+        surfaceDestroys = this@RenderSurfaceView.surfaceDestroys,
+        frameLoopRestarts = this@RenderSurfaceView.frameLoopRestarts,
+        lastSurfaceWidth = this@RenderSurfaceView.lastSurfaceWidth,
+        lastSurfaceHeight = this@RenderSurfaceView.lastSurfaceHeight,
     )
 
     /** Set by the UI; applied on the render thread before the next frame. */

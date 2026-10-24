@@ -78,6 +78,19 @@ where every attempt has truly been exhausted.
 4. If the model looks wrong only for the first frames and then corrects itself, that is the
    engine attaching after the surface; note it in the report together with the attempts card. If
    it stays wrong, follow section 8 (poses/faces/model checks).
+5. **Rippling, wavy stripes or shimmer on the model itself** (not the surrounding card, and not
+   a low FPS reading) is a texture/swapchain artifact, not a frame-rate problem - one measured
+   case showed 58 FPS "on target" alongside severe rippling. Confirm with the Backend row in the
+   `diag` tab:
+   - the **depth** suffix (e.g. `depth D16_UNORM`) tells you the depth buffer precision; D16 on
+     close armor layers can show Z-fighting shimmer;
+   - the Vulkan atlas mip-chain layout defect that caused moving ripples on Xclipse/AMD-class
+     drivers is fixed in current builds - see
+     [VULKAN_MIP_FIX_2026-10-24.md](VULKAN_MIP_FIX_2026-10-24.md). If ripples remain on a build
+     that includes the fix, switch **Prefer Vulkan** off and Retry renderer to compare GLES, and
+     send the report.
+6. If a report shows all surface counters at zero on a running Vulkan viewer, the installed
+   build predates the counter fix; update before drawing conclusions from those rows.
 
 ## 4. It renders, but slowly ("below 30 FPS", stutter)
 
