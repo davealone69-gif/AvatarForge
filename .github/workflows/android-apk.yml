@@ -152,10 +152,10 @@ jobs:
       - name: Build arm64-v8a native libraries
         run: |
           set +e
-          AF_NINJA_JOBS=2 tools/build_android.sh arm64-v8a 2>&1 | tee native-build.txt
+          AF_NINJA_JOBS=2 bash tools/build_android.sh arm64-v8a 2>&1 | tee native-build.txt
           rc=${PIPESTATUS[0]}
           if [ "$rc" != "0" ]; then
-            grep -E "error:|FAILED|ninja: build stopped" native-build.txt \
+            grep -E "error:|error :|FAILED|CMake Error|ninja: build stopped|Permission denied|No such file" native-build.txt \
               | tail -40 | while IFS= read -r line; do echo "::error::$line"; done
             exit 1
           fi
