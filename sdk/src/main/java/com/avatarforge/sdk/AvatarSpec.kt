@@ -136,6 +136,10 @@ data class AvatarSpec(
 
     /** The prompt this spec came from; informational, stored in the exported GLB. */
     val prompt: String = "",
+    /** True only after the user explicitly chooses an outfit in the editor. Not part of the native ABI. */
+    val outfitExplicit: Boolean = false,
+    /** Explicit user confirmation required before generating the unclothed adult anatomical base. */
+    val adultModeConfirmed: Boolean = false,
 ) {
     init {
         require(skinTone.size == 3 && hairTone.size == 3 && clothTone.size == 3 && gearTone.size == 3) {
@@ -153,6 +157,9 @@ data class AvatarSpec(
      */
     fun requireGeneratable(effectivePrompt: String = prompt): AvatarSpec {
         if (outfit == Outfit.NONE) {
+            require(adultModeConfirmed) {
+                "Nude/anatomical generation requires explicit adult-mode confirmation"
+            }
             val minorMarkers = setOf(
                 "boy", "child", "girl", "kid", "minor", "schoolboy", "schoolgirl", "teen",
                 "teenage", "underage",
