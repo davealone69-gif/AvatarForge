@@ -79,6 +79,9 @@ data class DiagnosticsReport(
                     appendLine("Attempt ${a.attempt} ($backend): $outcome in ${a.elapsedMs} ms" +
                         (a.error?.let { " - $it" } ?: ""))
                 }
+                if (d.tierTransitions.isNotEmpty()) {
+                    appendLine("Quality tier changes: ${d.tierTransitions.joinToString(" · ")}")
+                }
             }
         }
 }
@@ -243,6 +246,14 @@ fun collectDiagnostics(
                 "Several restarts while the viewer was open can look like flashing; note this number in any report."
             else null,
         )
+        if (d.tierTransitions.isNotEmpty()) {
+            items += DiagItem(
+                rendererArea, "Quality tier changes",
+                d.tierTransitions.joinToString(" · "),
+                DiagStatus.INFO,
+                "The adaptive controller stepped MSAA/shadow/bloom quality to hold the frame budget.",
+            )
+        }
     }
 
     rendererInfo?.let { info ->

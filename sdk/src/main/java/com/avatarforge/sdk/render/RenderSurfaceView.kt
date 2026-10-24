@@ -68,6 +68,9 @@ data class RendererDiagnostics(
     val frameLoopRestarts: Int = 0,
     val lastSurfaceWidth: Int = 0,
     val lastSurfaceHeight: Int = 0,
+    /** Bounded history of adaptive-quality changes, newest last, e.g. "frame 412: tier 2 -> 1".
+     *  Makes the BudgetRenderer's hysteresis decisions explainable without a native ABI change. */
+    val tierTransitions: List<String> = emptyList(),
 )
 
 class RenderSurfaceView @JvmOverloads constructor(
@@ -107,6 +110,13 @@ class RenderSurfaceView @JvmOverloads constructor(
     private var lastResizeWidth = -1
     private var lastResizeHeight = -1
 
+    /** Adaptive-quality ladder changes observed from RendererStats, bounded for the report.
+     *  Guarded because surfaceCreated's diagnostics reset runs on the main thread while frame
+     *  observations run on the render thread. */
+    private val tierLock = Any()
+    private val tierTransitions = ArrayDeque<String>(MAX_TIER_EVENTS)
+    @Volatile private var lastObservedTier: Int? = null
+
     /** Keeps cumulative counters attached when a state transition rebuilds the diagnostics.
      *  The view fields must be qualified: inside this member extension the unqualified names
      *  resolve to the receiver's own (default-zero) data-class properties, which silently made
@@ -118,7 +128,21 @@ class RenderSurfaceView @JvmOverloads constructor(
         frameLoopRestarts = this@RenderSurfaceView.frameLoopRestarts,
         lastSurfaceWidth = this@RenderSurfaceView.lastSurfaceWidth,
         lastSurfaceHeight = this@RenderSurfaceView.lastSurfaceHeight,
+        tierTransitions = synchronized(tierLock) { tierTransitions.toList() },
     )
+
+    /** Records an adaptive-quality ladder change. Events are rare because the native
+     *  BudgetRenderer applies hysteresis (30 slow / 240 fast frames). */
+    private fun recordTierChange(tier: Int) {
+        val previous = lastObservedTier
+        lastObservedTier = tier
+        if (previous == null || previous == tier) return
+        synchronized(tierLock) {
+            while (tierTransitions.size >= MAX_TIER_EVENTS) tierTransitions.removeFirst()
+            tierTransitions.addLast("frame $framesRendered: tier $previous -> $tier")
+        }
+        _diagnostics.value = _diagnostics.value.withCounters()
+    }
 
     /** Set by the UI; applied on the render thread before the next frame. */
     @Volatile private var settings: RenderSettings = RenderSettings()
@@ -223,6 +247,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                 r.frame(delta.coerceIn(0f, 0.1f))
                 _stats.value = r.stats()
                 framesRendered++
+                recordTierChange(_stats.value.qualityLevel)
                 /* Emit only on the INITIALIZING -> RUNNING transition: a per-frame diagnostics
                    emission would recompose every collector at 60 Hz for a number the stats flow
                    already publishes. The live frame rate stays in RendererStats. */
@@ -267,6 +292,8 @@ class RenderSurfaceView @JvmOverloads constructor(
         activeSurface = holder.surface
         createAttempts = 0
         framesRendered = 0
+        /* A new renderer's first stats tier is a baseline, not a transition. */
+        lastObservedTier = null
         surfaceCreates++
         _error.value = null
         /* Attempt history belongs to the previous surface; the cumulative counters do not. */
@@ -289,6 +316,7 @@ class RenderSurfaceView @JvmOverloads constructor(
         handler.post {
             createAttempts = 0
             framesRendered = 0
+            lastObservedTier = null
             _error.value = null
             _diagnostics.value = _diagnostics.value.copy(
                 state = RendererStartupState.INITIALIZING,
@@ -498,5 +526,6 @@ class RenderSurfaceView @JvmOverloads constructor(
         /* Three create attempts per surface: as-configured, GLES-forced, then one delayed. */
         const val MAX_CREATE_ATTEMPTS = 3
         const val CREATE_RETRY_DELAY_MS = 250L
+        const val MAX_TIER_EVENTS = 10
     }
 }
