@@ -16,7 +16,7 @@ void af_spec_init(af_spec* spec) {
     spec->sex           = AF_SEX_UNSPECIFIED;
     spec->build         = AF_BUILD_AVERAGE;
     spec->hair_style    = AF_HAIR_MEDIUM;
-    spec->outfit        = AF_OUTFIT_NONE;
+    spec->outfit        = AF_OUTFIT_TSHIRT;
     spec->footwear      = AF_FOOTWEAR_NONE;
     spec->seed          = 1337;
 
