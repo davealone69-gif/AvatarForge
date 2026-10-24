@@ -240,15 +240,21 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
 }
 
 /* Reads element `i` as up to 16 floats. Bounds were proven by resolveAccessor(). */
-void readElement(const AccessorView& view, size_t i, float* out, int outComponents) {
+bool readElement(const AccessorView& view, size_t i, float* out, int outComponents) {
+    if (!out || i >= view.count || outComponents < 0 || outComponents > 16) return false;
     for (int c = 0; c < outComponents; ++c) out[c] = 0.0f;
-    if (!view.base) return;   /* sparse-only or empty: zeros, which is the glTF default */
-    const uint8_t* p = view.base + i * view.stride;
+    if (!view.base) return true; /* sparse-only: zeros are the glTF default before applying the patch */
+    size_t elementOffset = 0;
+    if (!checkedMul(i, view.stride, &elementOffset)) return false;
     const int n = view.components < outComponents ? view.components : outComponents;
+    const size_t csize = static_cast<size_t>(componentSize(view.componentType));
     for (int c = 0; c < n; ++c) {
-        out[c] = readComponent(p + static_cast<size_t>(c) * static_cast<size_t>(componentSize(view.componentType)),
-                               view.componentType, view.normalized);
+        size_t componentOffset = 0, readOffset = 0;
+        if (!checkedMul(static_cast<size_t>(c), csize, &componentOffset) ||
+            !checkedAdd(elementOffset, componentOffset, &readOffset)) return false;
+        out[c] = readComponent(view.base + readOffset, view.componentType, view.normalized);
     }
+    return true;
 }
 
 /* Applies an accessor's sparse patch over a dense float buffer of `count * components`. */
@@ -394,9 +400,22 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
     out->assign(floatCount, 0.0f);
     for (size_t i = 0; i < view.count; ++i) {
         float v[16];
-        readElement(view, i, v, components);
+        if (!readElement(view, i, v, components)) {
+            if (error) *error = "glTF: accessor element offset overflows";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t destBase = 0;
+        if (!checkedMul(i, static_cast<size_t>(components), &destBase)) {
+            if (error) *error = "glTF: accessor destination offset overflows";
+            return AF_ERR_INVALID_ARG;
+        }
         for (int c = 0; c < components; ++c) {
-            (*out)[i * static_cast<size_t>(components) + static_cast<size_t>(c)] = v[c];
+            size_t dest = 0;
+            if (!checkedAdd(destBase, static_cast<size_t>(c), &dest) || dest >= out->size()) {
+                if (error) *error = "glTF: accessor destination span is invalid";
+                return AF_ERR_INVALID_ARG;
+            }
+            (*out)[dest] = v[c];
         }
     }
     if (applySparse(bin, binSize, doc, acc, view.count, components, out->data(), error) != AF_OK) return AF_ERR_INVALID_ARG;
@@ -407,6 +426,14 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
 /* Indices as u32, whatever their stored width. */
 int readIndices(const uint8_t* bin, size_t binSize, const json::Json& doc, int accessorIndex,
                 std::vector<uint32_t>* out, std::string* error) {
+    const json::Json& accessor = doc["accessors"].atOrNull(static_cast<size_t>(accessorIndex < 0 ? 0 : accessorIndex));
+    const int componentType = accessor["componentType"].asInt(0);
+    if (accessorIndex < 0 || accessor.isNull() ||
+        (componentType != 5121 && componentType != 5123 && componentType != 5125) ||
+        accessor["type"].stringOr("") != "SCALAR") {
+        if (error) *error = "glTF: indices accessor must be an unsigned integer SCALAR";
+        return AF_ERR_INVALID_ARG;
+    }
     std::vector<float> raw;
     size_t count = 0;
     const int rc = readAccessorFloats(bin, binSize, doc, accessorIndex, 1, &raw, &count, error);
@@ -414,8 +441,9 @@ int readIndices(const uint8_t* bin, size_t binSize, const json::Json& doc, int a
     out->resize(count);
     for (size_t i = 0; i < count; ++i) {
         const float v = raw[i];
-        if (v < 0.0f) {
-            if (error) *error = "glTF: negative index";
+        if (!std::isfinite(v) || v < 0.0f ||
+            static_cast<double>(v) > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+            if (error) *error = "glTF: index is negative, non-finite, or outside the u32 range";
             return AF_ERR_INVALID_ARG;
         }
         (*out)[i] = static_cast<uint32_t>(v);
