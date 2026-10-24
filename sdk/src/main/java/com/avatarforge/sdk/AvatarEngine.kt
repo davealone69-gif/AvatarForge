@@ -790,7 +790,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val spec = AvatarSpec.unpack(ints, floats, outPrompt[0] ?: prompt)
         /* Analysis is observational: keep the caller's explicit choices unless the prompt named a
            value the caller left at its default. */
-        mergePrompted(resolvedBase, spec)
+        mergePrompted(resolvedBase, spec).requireGeneratable(prompt)
     }
 
     /* ------------------------------------------------------------------ export ---------------- */
@@ -1239,7 +1239,9 @@ class AvatarEngine private constructor(private val appContext: Context) {
             sex = if (base.sex == Sex.UNSPECIFIED) prompted.sex else base.sex,
             build = if (base.build == Build.AVERAGE) prompted.build else base.build,
             hairStyle = if (base.hairStyle == HairStyle.MEDIUM) prompted.hairStyle else base.hairStyle,
-            outfit = if (base.outfit == Outfit.NONE) prompted.outfit else base.outfit,
+            outfit = if (base.outfitExplicit) base.outfit else prompted.outfit,
+            outfitExplicit = base.outfitExplicit,
+            adultModeConfirmed = base.adultModeConfirmed,
             footwear = if (base.footwear == Footwear.NONE) prompted.footwear else base.footwear,
             heightM = if (kotlin.math.abs(base.heightM - AvatarSpec.DEFAULT_HEIGHT_M) < 1e-5f)
                 prompted.heightM else base.heightM,
