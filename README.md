@@ -51,6 +51,10 @@ but have not been exercised on hardware. The checked-in 0.10.1 APK/AAR predate t
 | `engine/` | Renderer-side assets/shaders support |
 | `STATUS.md`, `BUILD.md`, `DEVICE.md` | Where it stands · how to build · how to verify on hardware |
 
+## SDK host-app integration
+
+The SDK is a separate Android library, but third-party consumption through a produced AAR has not yet been independently runtime-verified. See [Host-app integration guide](docs/SDK_HOST_INTEGRATION.md) for local Maven publication, dependency metadata, ABI packaging, singleton/resource constraints, and the required clean-consumer smoke test. Do not treat the archived AAR under `artifacts/` as current; rebuild from the exact source commit before consuming it.
+
 ## Build
 
 ```bash
