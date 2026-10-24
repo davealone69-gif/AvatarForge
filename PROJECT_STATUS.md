@@ -264,3 +264,18 @@ The live branch list contained 18 refs. Comparisons against `work/android-engine
 - **PARTIAL:** in-app DIY/Diagnostics source is visible in PR #19 and the user reports it is built into the app.
 - **UNVERIFIED:** installed version/SHA match, diagnostics copy/report action, long-duration FPS, renderer recovery under resize/background transitions, animation, export/import, and exact-head CI for the current branch/PRs.
 - **NOT DONE:** no branches were merged, force-updated, or deleted during this triage snapshot. Branch sorting must be completed by selective diff review and exact-head CI, not by deleting refs based only on age or ahead/behind counts.
+
+
+## SDK transplant audit checkpoint — 2026-10-24
+
+Source-level audit recorded in [`docs/SDK_TRANSPLANT_AUDIT_2026-10-24.md`](docs/SDK_TRANSPLANT_AUDIT_2026-10-24.md), commit `49f3c609f09d41a7a008fc973655880a86a73b32`.
+
+- Confirmed `:sdk` Android library, public Kotlin façade, renderer wrapper/SurfaceView, CMake native-library path, JNI keep rules, and app dependency on `:sdk`.
+- **Transplant readiness is not yet proven:** no clean external consumer app has consumed a produced AAR in this audit. The current in-repository app uses `implementation(project(":sdk"))`, which is not the same test.
+- AAR publication/versioned dependency configuration was not established from the inspected SDK build file.
+- `TEST_MATRIX.md` and `RELEASE_CHECKLIST.md` were not found at root or `docs/` paths on this branch; README instead points to `DEVICE.md` and `docs/RENDERER_FIX.md`. Reconcile paths before treating the user's 10-step matrix as available in-repo.
+- Device runtime remains **UNVERIFIED**; Xclipse 940 mip retest and white-head-cap hypothesis remain pending/unconfirmed. Signed release remains **BLOCKED** without a valid keystore. Debug stays DEBUG.
+- Deferred: prompt/photo persistence, ADPF thermal adaptation, GLB import, phantom workflows/repo-admin, instrumented tests.
+- `main` was not modified. No runtime, Android build, or AAR consumer build was performed in this audit.
+
+Next action: implement a separate consumer smoke-test app/module, build and inspect the AAR/native ABI payload, then run the canonical 10-step device matrix when hardware is available.
