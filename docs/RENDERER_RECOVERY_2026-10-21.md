@@ -1,5 +1,11 @@
 # Renderer recovery update (2026-10-21)
 
+> **2026-10-24 follow-up:** source audit found three concrete initialisation defects behind the
+> black-viewer / 0 FPS report (missing EGL native-visual matching that ANGLE rejects, an
+> unprobed Vulkan depth format, and a single-shot renderer create with no recovery). The fixes and
+> the required native rebuild are documented in
+> [RENDERER_FIX_2026-10-24.md](RENDERER_FIX_2026-10-24.md). Hardware verification is still pending.
+
 ## Purpose
 
 This update bundle contains a rebuilt ARM64 debug APK and matching SDK AAR intended to retest the black viewer / 0 FPS rendering failure reported on a Samsung Galaxy S24 using Xclipse 940 / ANGLE.

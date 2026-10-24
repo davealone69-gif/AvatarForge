@@ -37,14 +37,19 @@ AGP 8.x needs JDK 17, the renderer links `vulkan`/`EGL`/`GLESv3`/`android`/`log`
 sysroot, and the kernel needs only zlib (provided by the Android platform, `-lz` on a host).
 
 Hardware: this project is developed and verified on a 2 vCPU / 2 GB container. Configure Gradle
-accordingly (`gradle.properties` already does: no daemon, no parallel module builds, 1.5 GB heap).
+accordingly (`gradle.properties` already does: no daemon, no parallel module builds, 1024 MB heap
+and a 384 MB metaspace cap, with the Kotlin compiler running in-process). The CI runner has 7 GB
+and overrides only the JVM args via `-Dorg.gradle.jvmargs` (`GRADLE_JVMARGS` in the workflow:
+same 1024 MB heap, 768 MB metaspace) because the `maven-publish` plugin plus in-process Kotlin
+compilation exceed the 384 MB metaspace cap; the low-RAM local defaults are intentionally left
+unchanged.
 
 ---
 
 ## 1. Kernel + host test harness (no device, no Android toolchain)
 
 ```bash
-tools/build_host.sh test     # builds build-host/libafcore.so and runs the 386-check harness
+tools/build_host.sh test     # builds build-host/libafcore.so and runs the 439-check harness
 tools/build_host.sh kernel   # library only
 tools/build_host.sh all      # library + harness binary, do not run
 ```
@@ -52,7 +57,7 @@ tools/build_host.sh all      # library + harness binary, do not run
 Expected output ends with:
 
 ```
-All 386 checks complete: 0 failure(s)
+All 439 checks complete: 0 failure(s)
 ```
 
 The harness covers anthropometry (waist/hip/crotch exactness against tape measurements), signed
@@ -153,15 +158,23 @@ keystore so it can still be installed on a test device. R8 is deliberately off; 
 
 ### Artifacts built in this repository
 
-| Artifact | Size | Contents |
+The binaries under `artifacts/` are **archived historical snapshots** (see
+`artifacts/BUILD-0.10.1.txt`); they are never overwritten. Fresh binaries for every commit are
+the workflow artifacts on CI (`AvatarForge-Android-<sha>`, including `AvatarForge-sdk.aar` and,
+for current builds, a consumable `maven-repo/`). Sizes below are measured on the archived files
+and will not match a current CI build:
+
+| Artifact | Archived size (measured) | Contents |
 |---|---|---|
-| `artifacts/avatarforge-debug-arm64.apk` | 10,360,165 B | debuggable app, 8 dex files, arm64 natives (stripped), `ui-tooling` included |
-| `artifacts/avatarforge-release-arm64.apk` | 6,784,655 B | release app, 2 dex files, arm64 natives, signed with the debug certificate |
-| `artifacts/avatarforge-sdk-arm64.aar` | 864,300 B | `classes.jar`, `proguard.txt`, `res/xml/avatarforge_file_paths.xml` |
+| `artifacts/avatarforge-debug-arm64.apk` | 9,809,688 B | debuggable app, arm64 natives (stripped), `ui-tooling` included |
+| `artifacts/avatarforge-release-arm64.apk` | 6,864,226 B | release app, arm64 natives, signed with the debug certificate |
+| `artifacts/avatarforge-sdk-arm64.aar` | 958,767 B | `classes.jar`, `proguard.txt`, `res/xml/avatarforge_file_paths.xml`, three `jni/arm64-v8a/*.so`; **predates the maven-publish POM and the 2026-10-24 SDK changes — use the CI artifact instead** |
 
 All three carry exactly one permission (`com.avatarforge.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`) -
 no `INTERNET` - and a non-exported `FileProvider`. `tools/verify.sh` re-checks both claims, and the
-on-device pass is written out step by step in **DEVICE.md**.
+on-device pass is written out step by step in **DEVICE.md**. For embedding the SDK in another
+app, including Maven coordinates (`com.avatarforge:avatarforge-sdk`) and host requirements, see
+**docs/SDK_INTEGRATION.md**.
 
 Install and run:
 
@@ -224,7 +237,7 @@ installed but Python.
 tools/verify.sh
 ```
 
-Five sections, non-zero exit on the first failure: the kernel harness (386 checks), the shader tables
+Five sections, non-zero exit on the first failure: the kernel harness (439 checks), the shader tables
 against their sources, the structural validation of an exported `.glb`, and an audit of the built
 artifacts - including the one claim that must never regress, **no `INTERNET` permission in any APK**.
 

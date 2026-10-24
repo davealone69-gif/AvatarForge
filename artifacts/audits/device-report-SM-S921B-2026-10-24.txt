@@ -1,0 +1,50 @@
+AvatarForge diagnostics - 2026-10-24 23:05:00 GMT+08:00
+Source: user-pasted report from a physical Samsung SM-S921B (Galaxy S24, Exynos 2400, Xclipse 940).
+App version shown by the report: 0.10.1 (2). The exact source commit/artifact of the installed
+APK is not recorded by the report, so build identity is UNVERIFIED.
+
+Overall: OK
+
+== App ==
+
+[INFO] App version: 0.10.1 (2)
+[OK] Native library: libavatarforge.so loaded
+[OK] Engine: version 0.10.1 · ABI 1 · healthy
+[INFO] Engine content: 16 clips · 52 blendshapes · 13 regions
+
+== Device ==
+
+[INFO] Model: samsung SM-S921B · Android 17 (API 37) · arm64-v8a
+[OK] Memory: 7.1 GB total · 1236 MB available
+[OK] Storage: 34614 MB free in app storage
+[OK] Thermal: light
+[INFO] CPU cores: 10
+
+== Renderer ==
+
+[OK] Start-up: RUNNING · 1 attempt(s) · 1 frame(s) at last state change
+[INFO] Surface lifecycle: created 1 · changed 1 (last 1080x2340) · destroyed 0
+[INFO] Frame loop restarts: 4
+  hint (as shipped in the reporting build): Several restarts while the viewer was open can look
+  like flashing; note this number in any report.
+[OK] Backend: gles31 · ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304) · OpenGL ES 3.2 Driver
+  version: 25.6.4 git hash: 9fe6623ec0db · Samsung Electronics Co., Ltd.
+[INFO] GPU features: shadows=true · MSAA=true · float HDR=true · anisotropy=true
+[OK] Frame rate: 58 FPS · 17.2 ms frame · quality tier 2 · 15 draw calls · 417150 triangles
+
+== Renderer start-up attempts ==
+
+Final state: RUNNING · frames at last state change: 1
+Attempt 1 (Vulkan preferred): OK in 264 ms
+
+Notes attached after source analysis (see docs/audit/FINDINGS.md AF-017/AF-018):
+- The four frame-loop restarts map 1:1 to benign sources: view-visibility enable, explicit
+  setFrameLoopEnabled(true) from the viewer, one successful renderer create, one real surface
+  resize. Zero destroys, one create attempt -> no flash mechanism.
+- "Vulkan preferred: OK" is the Kotlin create-attempt label; native Renderer::create tried
+  Vulkan, it was declined, and GLES 3.1 (ANGLE-on-Vulkan) succeeded inside the same attempt.
+  The Vulkan rejection reason is discarded on the fallback path and not observable in this report.
+- No "Quality tier changes" row: the adaptive tier stayed at 2 for the whole session.
+- The Vulkan mip-chain fix (AF-010) is NOT exercised by this session because the native Vulkan
+  backend did not initialise; the EGL/ANGLE path (the other half of the renderer recovery work)
+  is exercised and healthy. Visual ripple/white-cap status cannot be read from numeric diagnostics.

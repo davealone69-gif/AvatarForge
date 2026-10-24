@@ -20,6 +20,12 @@ jobs:
     name: Build and verify Android packages
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      # gradle.properties caps JVM metaspace at 384m for 2 GB local build containers. The hosted
+      # runner has 7 GB; the maven-publish plugin plus in-process Kotlin compilation exceed that
+      # cap (OutOfMemoryError: Metaspace, run 40101913345). Widen only the CI JVM so the verified
+      # low-RAM local tuning in gradle.properties stays untouched.
+      GRADLE_JVMARGS: -Xmx1024m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -69,10 +75,47 @@ jobs:
       - name: Build debug APK, release APK, and SDK AAR
         run: |
           chmod +x ./gradlew
+          set +e
           ./gradlew --no-daemon --stacktrace --console=plain \
-            :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
+            :app:assembleDebug :app:assembleRelease :sdk:assembleRelease :sdk:testDebugUnitTest \
             -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" 2>&1 | tee build-log.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            # Surface compiler/Gradle errors as check annotations so they are readable
+            # without downloading the full Actions log bundle.
+            grep -E "^e: | error: |FAILED|What went wrong|FAILURE:|> Task .* FAILED" build-log.txt \
+              | tail -80 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
+      - name: Build Maven publication (POM + sources) and verify its metadata
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --console=plain \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" :sdk:generatePomFileForReleasePublication
+          POM="$(find sdk/build/publications/release -name 'pom-default.xml' | head -1)"
+          test -s "$POM"
+          # The POM must identify the module and carry the transitive dependencies so a Maven
+          # consumer does not have to rediscover the three coordinates by hand.
+          for needle in '<packaging>aar</packaging>' \
+                        '<groupId>com.avatarforge</groupId>' \
+                        '<artifactId>avatarforge-sdk</artifactId>' \
+                        'androidx.core' 'exifinterface' 'kotlinx-coroutines-android'; do
+            if ! grep -q "$needle" "$POM"; then
+              echo "::error::POM missing expected entry: $needle"
+              cat "$POM"
+              exit 1
+            fi
+          done
+          # No license may be claimed until the repo actually chooses one.
+          if grep -q '<licenses>' "$POM"; then
+            echo "::error::POM declares a license although LICENSE is absent in the repo."
+            exit 1
+          fi
+          echo "POM verified: $(grep -c '<dependency>' "$POM") dependency entries"
 
       - name: Stage easy-download artifacts
         run: |
@@ -83,7 +126,19 @@ jobs:
           find sdk/build/outputs -type f -name '*.aar' -exec cp {} dist/AvatarForge-sdk.aar \;
           test -s dist/AvatarForge-debug-arm64.apk
           test -s dist/AvatarForge-release-arm64.apk
+          test -s dist/AvatarForge-sdk.aar
           ls -lh dist
+
+      - name: Publish SDK to the local Maven repo and stage it as an artifact
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --console=plain \
+            -Dorg.gradle.jvmargs="$GRADLE_JVMARGS" :sdk:publishReleasePublicationToMavenLocal
+          mkdir -p dist/maven-repo
+          # Maven layout keeps the group path: maven-repo/avatarforge/avatarforge-sdk/<version>/...
+          cp -r "$HOME/.m2/repository/com/avatarforge" dist/maven-repo/
+          test -s dist/maven-repo/avatarforge/avatarforge-sdk/*/avatarforge-sdk-*.pom
+          find dist/maven-repo -type f | sort
 
       - name: Audit APK permissions and native ABI
         run: |
@@ -117,3 +172,118 @@ jobs:
             dist/AvatarForge-debug-arm64.apk
             dist/AvatarForge-release-arm64.apk
             dist/AvatarForge-sdk.aar
+
+  # The APK job packages the committed prebuilt/ .so files on purpose (see tools/build_android.sh:
+  # the NDK build is the memory-hungry part of the pipeline). This job compiles the C++ from
+  # source instead, so a native-only change cannot merge while uncompilable, and it publishes the
+  # freshly built libraries as an artifact that can be committed back into prebuilt/.
+  native-compile:
+    name: Compile native libraries from source (NDK)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      # On a PR run check out the branch tip itself (not the pull merge ref), so a prebuilt
+      # refresh commit below pushes cleanly onto the contributor's branch.
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Build arm64-v8a native libraries
+        run: |
+          set +e
+          AF_NINJA_JOBS=2 bash tools/build_android.sh arm64-v8a 2>&1 | tee native-build.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            grep -E "error:|error :|FAILED|CMake Error|ninja: build stopped|Permission denied|No such file" native-build.txt \
+              | tail -40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
+      - name: Flag stale committed prebuilts
+        run: |
+          set -euo pipefail
+          stale=0
+          for lib in libafcore.so libafrender.so libavatarforge.so; do
+            fresh="prebuilt/arm64-v8a/$lib"
+            if git show HEAD:"$fresh" | cmp -s - "$fresh"; then
+              echo "$lib: committed prebuilt matches the source rebuild"
+            else
+              echo "::warning::$lib differs from a fresh source build - refresh prebuilt/ (tools/build_android.sh) or the APK keeps shipping the old library."
+              stale=1
+            fi
+          done
+          echo "prebuilt_stale=$stale" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit refreshed prebuilts when sources are newer
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- prebuilt/arm64-v8a; then
+            echo "Committed prebuilts already match the source rebuild; nothing to do."
+            exit 0
+          fi
+          # Loop guard: a refresh commit triggers another PR run; if a refresh already exists in
+          # the last few commits (a docs/CI commit may sit on top), never commit a second time.
+          if git log -3 --pretty=%s | grep -q "^Refresh prebuilt arm64"; then
+            echo "A prebuilt refresh is already among the last 3 commits; skipping to avoid a loop."
+            exit 0
+          fi
+          git config user.name "avatarforge-ci"
+          git config user.email "avatarforge-ci@users.noreply.github.com"
+          git add prebuilt/arm64-v8a
+          git commit -m "Refresh prebuilt arm64-v8a native libraries" \
+            -m "Auto-refreshed by the native-compile CI job from the C++ sources at ${GITHUB_SHA:0:7}, so the APK/AAR job packages libraries that include the latest native fixes."
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
+
+      - name: Upload freshly built native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvatarForge-prebuilt-arm64-${{ github.sha }}
+          path: prebuilt/arm64-v8a/*.so
+          if-no-files-found: error
+          retention-days: 30
+
+  # Host-side tests (finding AF-001): before this job existed no workflow executed any test.
+  # Runs the kernel harness, ABI contract drift check, ABI conformance, GLB validation and the
+  # customization contract gate. No Android SDK needed; g++ + zlib + python3 only.
+  host-tests:
+    name: Host kernel tests and ABI/GLB validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install host build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++ zlib1g-dev
+
+      - name: Build and run the kernel host harness
+        run: bash tools/build_host.sh test
+
+      - name: ABI manifest must match the native header (drift gate)
+        run: |
+          python3 tools/abi_manifest.py
+          if ! git diff --exit-code -- abi/afcore.abi.json; then
+            echo "::error::abi/afcore.abi.json is out of date; run tools/abi_manifest.py and commit the result."
+            exit 1
+          fi
+
+      - name: ABI conformance of the host library against the manifest
+        run: python3 tools/abi_conformance.py build-host/libafcore.so
+
+      - name: Validate the sample GLB export structurally
+        run: python3 tools/validate_glb.py artifacts/avatarforge-sample.glb
+
+      - name: Validate customization contracts
+        run: python3 tools/validate_custom_inputs.py config/customization/*.json

@@ -38,6 +38,7 @@
 #include <cstring>
 #include <string>
 #include "af_shaders.h"   /* the baked shader tables, checked by [10] */
+#include "af_align.h"     /* afRoundUp, checked by the camera UBO slot test (AF-020) */
 #include "../src/af_glb_read.h"
 #include "../src/af_json.h"
 #include "../src/af_png.h"
@@ -1240,6 +1241,10 @@ static void testShaderTables() {
         {"line", AF_STAGE_VERT},    {"line", AF_STAGE_FRAG},
         {"fullscreen", AF_STAGE_VERT},
         {"bloom_down", AF_STAGE_FRAG}, {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
+        /* Clustered forward+ light culling compute pass, required by the Vulkan backend
+           (af_vk.cpp). Was missing from this list since the stage shipped, so the harness
+           neither counted nor validated it; adding it extends coverage to all 13 entries. */
+        {"forward_plus", AF_STAGE_COMP},
     };
     const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
     CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",
@@ -2175,6 +2180,50 @@ static void testEngineImport() {
     af_engine_destroy(e);
 }
 
+/* Regression test for AF-020: the GLES (and latent Vulkan) camera UBO used the driver's
+   uniform-buffer offset alignment as the per-frame stride, but CameraUbo is 448 bytes - larger
+   than the 16/64/256 alignments Android drivers actually report - so frame 1 overran the buffer.
+   The fix rounds the slot size up from the struct size, not the alignment. This runs on the host
+   because the slot arithmetic is pure constexpr maths in af_align.h. The 448-byte struct size is
+   pinned here as a constant and pinned to the real type by static_assert(sizeof(CameraUbo)==448)
+   in af_render_common.h, which every NDK/CMake renderer build enforces. */
+static void testCameraUboSlotLayout() {
+    std::printf("\n\x1b[1m[17] camera UBO double-buffer slot layout (AF-020)\x1b[0m\n");
+    constexpr uint32_t kCameraUboSize = 448;   /* == sizeof(af::CameraUbo), asserted in the renderer header */
+
+    CHECK(af::afRoundUp(0u, 256u) == 0u, "afRoundUp: zero stays zero");
+    CHECK(af::afRoundUp(448u, 256u) == 512u, "afRoundUp: 448 -> 512 at 256 alignment");
+    CHECK(af::afRoundUp(448u, 512u) == 512u, "afRoundUp: 448 -> 512 at 512 alignment");
+    CHECK(af::afRoundUp(448u, 16u) == 448u, "afRoundUp: already a multiple is unchanged");
+    CHECK(af::afRoundUp(447u, 64u) == 448u, "afRoundUp: 447 -> 448 at 64 alignment");
+    CHECK(af::afRoundUp(448u, 7u) == 448u, "afRoundUp: non-power-of-two alignment works (448 % 7 == 0)");
+    CHECK(af::afRoundUp(449u, 7u) == 455u, "afRoundUp: non-power-of-two alignment rounds up");
+    CHECK(af::afRoundUp(100u, 1u) == 100u, "afRoundUp: alignment 1 is the identity");
+
+    /* Every alignment a real Android GLES/Vulkan driver may report for
+       GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT / minUniformBufferOffsetAlignment. */
+    const uint32_t alignments[] = {16u, 32u, 64u, 128u, 256u, 512u, 1024u, 4096u};
+    for (uint32_t a : alignments) {
+        const uint32_t slot = af::afRoundUp(kCameraUboSize, a);
+        CHECK(slot >= kCameraUboSize,
+              "AF-020: camera slot (%u) must hold one 448-byte CameraUbo at alignment %u", slot, a);
+        CHECK(slot % a == 0, "AF-020: camera slot (%u) must be a multiple of alignment %u", slot, a);
+        /* Two slots back-to-back: frame 1 starts at slot and its 448 bytes must end inside
+           the 2*slot allocation. This is the exact bound the old uboAlignment_*2 sizing broke. */
+        CHECK(uint64_t(slot) + kCameraUboSize <= uint64_t(slot) * 2,
+              "AF-020: frame-1 camera UBO overruns the double buffer at alignment %u", a);
+    }
+
+    /* Pins the defect's arithmetic so the old formula cannot silently return: at the ANGLE
+       default alignment (256) the old 256-byte stride puts frame 1's range [256, 704) outside a
+       512-byte buffer; the new 512-byte slot puts it at [512, 960) inside a 1024-byte buffer. */
+    CHECK(uint64_t(256) + kCameraUboSize > uint64_t(512),
+          "AF-020: documenting the old overrun condition (256 + 448 > 512)");
+    const uint32_t angleSlot = af::afRoundUp(kCameraUboSize, 256u);
+    CHECK(angleSlot == 512 && uint64_t(angleSlot) + kCameraUboSize <= uint64_t(angleSlot) * 2,
+          "AF-020: ANGLE 256-alignment double buffer must contain frame 1");
+}
+
 int main(int argc, char** argv) {
     std::printf("\n\x1b[1mAvatarForge kernel host tests\x1b[0m  (ABI %d, %d threads)\n\n", AF_ABI_VERSION, defaultThreadCount());
     const bool quick = (argc > 1 && std::strcmp(argv[1], "--quick") == 0);
@@ -2197,6 +2246,7 @@ int main(int argc, char** argv) {
     testTexturing();
     testApparel();
     testShaderTables();
+    testCameraUboSlotLayout();
     testAbi();
     if (!quick) testPoseComposition();
     if (!quick) testBlendshapeExport();

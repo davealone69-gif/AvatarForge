@@ -1,0 +1,63 @@
+name: Refresh prebuilt native libraries
+
+# Manually triggered only. Rebuilds prebuilt/arm64-v8a from the C++ sources on the runner NDK
+# (the sandbox that actually has an NDK installed) and commits the result back to the chosen
+# branch. The normal PR build packages these committed .so files, so this is the supported way
+# to make a native fix reach the APK without a local NDK. Do not run it on every push: a binary
+# commit per CI run would bury the real history.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to rebuild and push the refreshed prebuilts into"
+        required: true
+        default: "main"
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild-and-commit:
+    name: Rebuild arm64 prebuilts and commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Build native libraries from source
+        run: |
+          set +e
+          AF_NINJA_JOBS=2 bash tools/build_android.sh arm64-v8a 2>&1 | tee native-build.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            grep -E "error:|error :|FAILED|CMake Error|ninja: build stopped" native-build.txt \
+              | tail -40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
+      - name: Commit refreshed prebuilts
+        run: |
+          set -euo pipefail
+          git config user.name "avatarforge-ci"
+          git config user.email "avatarforge-ci@users.noreply.github.com"
+          git add prebuilt/arm64-v8a
+          if git diff --cached --quiet; then
+            echo "Prebuilts already match the current sources; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Refresh prebuilt arm64-v8a native libraries" \
+            -m "Rebuilt by the refresh-prebuilt workflow from the current C++ sources, so the APK packages the latest native fixes (including the Vulkan mip chain layout correction)."
+          git push origin "HEAD:${{ inputs.branch }}"

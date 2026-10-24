@@ -34,13 +34,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Opening a .glb the user shares with us. A plain Intent filter: nothing leaves
-                 the device and no network scheme is accepted. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="model/gltf-binary" />
-            </intent-filter>
+            <!-- No ACTION_VIEW filter for model/gltf-binary until GLB import is actually wired
+                 (finding AF-015): the native reader exists but no JNI/UI path opens an external
+                 file, so advertising an "open with" entry would be a fake capability. -->
         </activity>
     </application>
 
