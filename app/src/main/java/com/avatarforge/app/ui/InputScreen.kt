@@ -40,6 +40,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -294,11 +295,22 @@ private fun SpecEditor(spec: AvatarSpec, onChange: (AvatarSpec) -> Unit, enabled
                 }
                 if (spec.outfit == Outfit.NONE) {
                     Text(
-                        "Adult-only nude anatomical base selected. This is the real unclothed base surface. " +
-                            "Detailed sexual-anatomy controls stay hidden until each one changes real geometry or material output.",
+                        "The unclothed anatomical base is restricted to confirmed adults. Prompt wording or age metadata alone is not confirmation.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = spec.adultModeConfirmed,
+                            onCheckedChange = { onChange(spec.copy(adultModeConfirmed = it)) },
+                            enabled = enabled,
+                        )
+                        Text(
+                            "I confirm the subject is an adult (18+) and explicitly want the unclothed anatomical base.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
                 EnumRow("Footwear", Footwear.entries, spec.footwear, enabled) { onChange(spec.copy(footwear = it)) }
                 LabeledSlider(
