@@ -1,17 +1,18 @@
 /*
  * AvatarForge :: :sdk
  *
- * The SDK module: the Kotlin façade, the JNI bridge declaration, the renderer wrapper and the
- * render surface view. It also builds the three native libraries through CMake, so a consumer that
- * takes this module as an AAR gets the kernel with it.
+ * The SDK module: Kotlin façade, JNI bridge declaration, renderer wrapper and render surface view.
+ * It also builds the native libraries through CMake, so a consumer that takes this module as an AAR
+ * gets the kernel with it.
  *
  * Anything an app needs is public here: there is no "internal" API that the sample app uses and a
- * third party cannot. The `com.avatarforge.sdk.internal` package exists only to keep the raw JNI
- * declarations out of autocomplete.
+ * third party cannot. The com.avatarforge.sdk.internal package keeps raw JNI declarations out of
+ * autocomplete.
  */
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
+    id("maven-publish")
 }
 
 /*
@@ -28,6 +29,7 @@ plugins {
  * CI caches the native layer between app-only changes.
  */
 val prebuiltJni: String? = project.findProperty("af.prebuiltJni") as String?
+val sdkPublicationVersion = providers.gradleProperty("af.sdkVersion").orElse("0.10.2-SNAPSHOT")
 
 android {
     namespace = "com.avatarforge.sdk"
@@ -37,30 +39,13 @@ android {
     defaultConfig {
         minSdk = 26
         // A library does not set targetSdk: the consuming app's value is the one that applies.
-
-        /* arm64-v8a is the primary target: every device that can hold this pipeline at 30 FPS is
-           64-bit ARM. x86_64 is included so the app can be run (and profiled) in an emulator. */
-        /* -Paf.abIs=arm64-v8a builds a single architecture: half the native compile time and half
-           the peak memory, which is what a low-RAM build machine needs. The default keeps both. */
+        /* arm64-v8a is primary; x86_64 supports emulator builds. */
         val abis = (project.findProperty("af.abIs") as String?)?.split(",")?.map { it.trim() }
             ?: listOf("arm64-v8a", "x86_64")
-        ndk {
-            abiFilters += abis
-        }
+        ndk { abiFilters += abis }
         consumerProguardFiles("consumer-rules.pro")
-
         externalNativeBuild {
             cmake {
-                /*
-                 * Passing the native build knobs through defaultConfig: this is the DSL node that
-                 * owns `arguments` (the module-level externalNativeBuild block only carries the path
-                 * and the CMake version).
-                 *
-                 * -Paf.lowRam=true serialises the native compile and drops it to -O1. On a 2 GB
-                 * container an -O3 compile of af_vk.cpp plus the Gradle daemon exceeds RAM and the
-                 * build daemon is killed; with the flag the same APK builds. Shipping builds do not
-                 * use it (see BUILD.md).
-                 */
                 if (project.findProperty("af.lowRam") == "true") {
                     arguments.add("-DAF_OPT_FLAGS=-O1")
                     arguments.add("-DCMAKE_BUILD_PARALLEL_LEVEL=1")
@@ -71,8 +56,6 @@ android {
         }
     }
 
-    /* Data-driven customization contracts are packaged into the AAR as offline assets. The raw
-       user submissions remain under requirements/; only normalized, status-gated contracts ship. */
     sourceSets.getByName("main").assets.srcDir("../config")
 
     if (prebuiltJni == null) {
@@ -87,32 +70,69 @@ android {
     }
 
     buildTypes {
-        release {
-            isMinifyEnabled = false     // the SDK is a library; the app decides about shrinking
-        }
+        release { isMinifyEnabled = false }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
 
     packaging {
-        jniLibs {
-            /* The native libraries are loaded with System.loadLibrary from the APK's lib/ dir, so
-               they must stay uncompressed is FALSE and extractNativeLibs must be TRUE (the app
-               manifest sets that): loadLibrary needs a real file on older devices. */
-            useLegacyPackaging = true
-        }
+        jniLibs { useLegacyPackaging = true }
+    }
+
+    publishing {
+        singleVariant("release") { withSourcesJar() }
     }
 }
 
 dependencies {
+    // Public API exposes StateFlow and suspend functions, so coroutines must be a compile dependency.
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     testImplementation("junit:junit:4.13.2")
+}
+
+/*
+ * Publish to a deterministic local Maven repository under sdk/build/repo. The generated POM and
+ * Gradle module metadata carry dependency coordinates, unlike copying a raw AAR into libs/.
+ * A remote Maven repository is deliberately not configured: publishing credentials must never be
+ * embedded in this repository.
+ */
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                groupId = "com.avatarforge"
+                artifactId = "avatarforge-sdk"
+                version = sdkPublicationVersion.get()
+                from(components["release"])
+                pom {
+                    name.set("AvatarForge Android SDK")
+                    description.set("On-device avatar generation and native Vulkan/OpenGL ES renderer for Android.")
+                    url.set("https://github.com/davealone69-gif/AvatarForge")
+                    licenses {
+                        license {
+                            name.set("License not yet selected")
+                            url.set("https://github.com/davealone69-gif/AvatarForge")
+                        }
+                    }
+                    scm {
+                        url.set("https://github.com/davealone69-gif/AvatarForge")
+                        connection.set("scm:git:git://github.com/davealone69-gif/AvatarForge.git")
+                        developerConnection.set("scm:git:ssh://git@github.com/davealone69-gif/AvatarForge.git")
+                    }
+                }
+            }
+        }
+        repositories {
+            maven {
+                name = "localBuild"
+                url = layout.buildDirectory.dir("repo").get().asFile.toURI()
+            }
+        }
+    }
 }
