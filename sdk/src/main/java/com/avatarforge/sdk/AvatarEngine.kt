@@ -954,7 +954,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
                                 h, request.prompt, specInts, specFloats, outPrompt,
                             )
                             check(matched >= 0) { "prompt analysis failed: ${NativeBridge.engineLastError(h)}" }
-                            AvatarSpec.unpack(specInts, specFloats, outPrompt[0] ?: request.prompt)
+                            mergePrompted(request.spec, AvatarSpec.unpack(specInts, specFloats, outPrompt[0] ?: request.prompt))
+                                .requireGeneratable(request.prompt)
                         } else {
                             request.spec
                         }
