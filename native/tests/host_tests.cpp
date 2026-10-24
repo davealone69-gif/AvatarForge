@@ -1992,14 +1992,29 @@ static void testBlendshapeExport() {
     af_engine* e = nullptr;
     CHECK(af_engine_create(&spec, nullptr, &e) == AF_OK && e != nullptr, "engine created through the public ABI");
     if (!e) return;
-    CHECK(af_engine_run_all(e) == AF_OK, "full pipeline ran (%s)", af_engine_last_error(e));
+    const int32_t buildRc = af_engine_run_all(e);
+    CHECK(buildRc == AF_OK, "full pipeline ran (%s)", af_engine_last_error(e));
+    if (buildRc != AF_OK) {
+        af_engine_destroy(e);
+        return;
+    }
 
-    char names[64][64];
+    char names[64][64]{};
     const int32_t channels = af_engine_blendshape_names(names, 64);
     CHECK(channels == 52, "52 ARKit channels named (%d)", channels);
+    if (channels <= 0 || channels > 64) {
+        CHECK(false, "blendshape channel count is valid before channel indexing");
+        af_engine_destroy(e);
+        return;
+    }
     const int32_t n = af_engine_vertex_count(e);
     const af_vertex* rest = af_engine_vertices_rest(e);
     CHECK(rest != nullptr && n > 10000, "bind-pose buffer exposed for %d vertices", n);
+    if (rest == nullptr || n <= 10000) {
+        CHECK(false, "bind-pose buffer and vertex count are valid before comparison");
+        af_engine_destroy(e);
+        return;
+    }
 
     /* The exporter's own threshold (af_glb.cpp): a component below 0.05 mm is not worth a sparse
        entry. A channel that never exceeds it would have been dropped. */
@@ -2011,8 +2026,13 @@ static void testBlendshapeExport() {
     for (int32_t c = 0; c < channels; ++c) {
         std::fill(w.begin(), w.end(), 0.0f);
         w[static_cast<size_t>(c)] = 1.0f;
-        if (af_engine_apply_blendshapes(e, w.data(), channels) != AF_OK) break;
+        const int32_t applyRc = af_engine_apply_blendshapes(e, w.data(), channels);
         const af_vertex* moved = af_engine_vertices(e);
+        CHECK(applyRc == AF_OK && moved != nullptr, "blendshape channel %d produces a readable buffer", c);
+        if (applyRc != AF_OK || moved == nullptr) {
+            af_engine_destroy(e);
+            return;
+        }
         size_t above = 0;
         double amplitude = 0.0;
         for (int32_t i = 0; i < n && rest && moved; ++i) {
