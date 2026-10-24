@@ -37,13 +37,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Opening a .glb the user shares with us. A plain Intent filter: nothing leaves
-                 the device and no network scheme is accepted. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="model/gltf-binary" />
-            </intent-filter>
+            <!-- GLB external opening is intentionally not advertised until URI permission,
+                 bounded stream ingestion, JNI import, and viewer-state handling are implemented. -->
         </activity>
     </application>
 
