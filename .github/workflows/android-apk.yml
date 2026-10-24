@@ -126,3 +126,59 @@ jobs:
             dist/AvatarForge-debug-arm64.apk
             dist/AvatarForge-release-arm64.apk
             dist/AvatarForge-sdk.aar
+
+  # The APK job packages the committed prebuilt/ .so files on purpose (see tools/build_android.sh:
+  # the NDK build is the memory-hungry part of the pipeline). This job compiles the C++ from
+  # source instead, so a native-only change cannot merge while uncompilable, and it publishes the
+  # freshly built libraries as an artifact that can be committed back into prebuilt/.
+  native-compile:
+    name: Compile native libraries from source (NDK)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Build arm64-v8a native libraries
+        run: |
+          set +e
+          AF_NINJA_JOBS=2 tools/build_android.sh arm64-v8a 2>&1 | tee native-build.txt
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            grep -E "error:|FAILED|ninja: build stopped" native-build.txt \
+              | tail -40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+
+      - name: Flag stale committed prebuilts
+        run: |
+          set -euo pipefail
+          stale=0
+          for lib in libafcore.so libafrender.so libavatarforge.so; do
+            fresh="prebuilt/arm64-v8a/$lib"
+            if git show HEAD:"$fresh" | cmp -s - "$fresh"; then
+              echo "$lib: committed prebuilt matches the source rebuild"
+            else
+              echo "::warning::$lib differs from a fresh source build - refresh prebuilt/ (tools/build_android.sh) or the APK keeps shipping the old library."
+              stale=1
+            fi
+          done
+          echo "prebuilt_stale=$stale" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload freshly built native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvatarForge-prebuilt-arm64-${{ github.sha }}
+          path: prebuilt/arm64-v8a/*.so
+          if-no-files-found: error
+          retention-days: 30
