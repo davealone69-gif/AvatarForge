@@ -67,11 +67,13 @@ import com.avatarforge.sdk.DiagnosticsReport
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.collectDiagnostics
 import com.avatarforge.sdk.GenerationRequest
+import com.avatarforge.sdk.ImageAnalysisNotes
 import com.avatarforge.sdk.ImageReference
 import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.JobHandle
 import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.SettingsStore
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererDiagnostics
@@ -122,7 +124,12 @@ class MainActivity : ComponentActivity() {
         var result by remember { mutableStateOf<EngineResult?>(null) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
-        var settings by remember { mutableStateOf(AvatarForge.recommendedSettings(context)) }
+        /* AF-004: renderer settings survive process death; null store means first run, so the
+           device-resource recommendation remains the default. */
+        val settingsStore = remember { SettingsStore(context) }
+        var settings by remember {
+            mutableStateOf(settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context))
+        }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
@@ -223,19 +230,14 @@ class MainActivity : ComponentActivity() {
                     val a = imageA ?: return@InputScreen
                     val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
                     val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                    val analysed = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
-                    analysisNote = analysed?.joinToString("\n") { ref ->
-                        val an = ref.analysis
-                        if (an == null) "no analysis available" else buildString {
-                            append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
-                            append(" · ")
-                            append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
-                            append(" · skin L* %.0f".format(an.skinLab[0]))
-                            append(" · hair L* %.0f".format(an.hairLab[0]))
-                            append(" · garment metalness %.2f".format(an.metalConfidence))
-                            append(" · key light %.2f".format(an.keyLightIntensity))
-                        }
-                    }
+                    /* AF-003: a failure must be visible. The outcome maps to an honest note via
+                       the tested ImageAnalysisNotes mapper; generation still proceeds text-only. */
+                    val outcome = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }
+                    val analysed = outcome.getOrNull()
+                    analysisNote = ImageAnalysisNotes.describe(
+                        analysed,
+                        outcome.exceptionOrNull()?.message,
+                    )
                     val resolved = analysed?.let { engine.specFromImages(it, spec) } ?: spec
                     spec = resolved
                     begin(
@@ -290,7 +292,11 @@ class MainActivity : ComponentActivity() {
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
-                        onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onSettings = {
+                            settings = it
+                            surfaceView?.applySettings(it)
+                            settingsStore.saveRenderSettings(it)
+                        },
                         panel = panel,
                         onPanel = { panel = it },
                         clipIndex = clipIndex,
