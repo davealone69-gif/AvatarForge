@@ -922,7 +922,7 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
             const int comps = chan.path == 1 ? 4 : 3; /* rotation is VEC4; translation/scale are VEC3 */
             const int outputRc = readAccessorFloats(binChunk, binSize, doc, sampler["output"].asInt(-1), comps, &values, &valueCount, error);
             if (outputRc != AF_OK) return outputRc;
-            if (timeCount == 0 || valueCount != timeCount * static_cast<size_t>(comps) *
+            if (timeCount == 0 || valueCount != timeCount *
                     static_cast<size_t>(chan.interpolation == 2 ? 3 : 1)) {
                 if (error) *error = "glTF: animation sampler input/output key counts do not match target path";
                 return AF_ERR_INVALID_ARG;
