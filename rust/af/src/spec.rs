@@ -84,8 +84,8 @@ impl HairStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Outfit {
-    #[default]
     None = 0,
+    #[default]
     TShirt = 1,
     Dress = 2,
     Suit = 3,
