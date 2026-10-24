@@ -35,6 +35,31 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** Where the renderer is in its start-up lifecycle. Honest, never assumed: WAITING means
+ *  no Surface exists yet, INITIALIZING means a create attempt is in flight (or a renderer was
+ *  created but has not presented a frame yet), RUNNING means at least one frame completed,
+ *  FAILED means every create attempt gave up or a frame threw. */
+enum class RendererStartupState { WAITING_FOR_SURFACE, INITIALIZING, RUNNING, FAILED }
+
+/** One entry in the bounded Vulkan -> GLES create sequence, shown verbatim in the diagnostics. */
+data class RendererAttempt(
+    val attempt: Int,
+    val preferVulkan: Boolean,
+    val succeeded: Boolean,
+    val error: String?,
+    val elapsedMs: Long,
+)
+
+/** Everything the diagnostics panel needs to explain why the viewer is (or is not) drawing.
+ *  [framesRendered] is published only at lifecycle transitions (not per frame - the live FPS lives
+ *  in RendererStats), so collecting this flow never causes per-frame recomposition. */
+data class RendererDiagnostics(
+    val state: RendererStartupState = RendererStartupState.WAITING_FOR_SURFACE,
+    val attempts: List<RendererAttempt> = emptyList(),
+    val lastError: String? = null,
+    val framesRendered: Int = 0,
+)
+
 class RenderSurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -51,6 +76,12 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _diagnostics = MutableStateFlow(RendererDiagnostics())
+    val diagnostics: StateFlow<RendererDiagnostics> = _diagnostics.asStateFlow()
+
+    /** Frames that completed without throwing; reset whenever a new Surface is created. */
+    private var framesRendered = 0
 
     /** Set by the UI; applied on the render thread before the next frame. */
     @Volatile private var settings: RenderSettings = RenderSettings()
@@ -150,8 +181,26 @@ class RenderSurfaceView @JvmOverloads constructor(
                 r.setCamera(camera)
                 r.frame(delta.coerceIn(0f, 0.1f))
                 _stats.value = r.stats()
+                framesRendered++
+                /* Emit only on the INITIALIZING -> RUNNING transition: a per-frame diagnostics
+                   emission would recompose every collector at 60 Hz for a number the stats flow
+                   already publishes. The live frame rate stays in RendererStats. */
+                if (_diagnostics.value.state != RendererStartupState.RUNNING) {
+                    _diagnostics.value = _diagnostics.value.copy(
+                        state = RendererStartupState.RUNNING,
+                        framesRendered = framesRendered,
+                    )
+                }
             } catch (t: Throwable) {
-                _error.value = t.message ?: t.javaClass.simpleName
+                val reason = t.message ?: t.javaClass.simpleName
+                _error.value = reason
+                _diagnostics.value = _diagnostics.value.copy(
+                    state = RendererStartupState.FAILED,
+                    lastError = reason,
+                    framesRendered = framesRendered,
+                )
+                /* The loop deliberately stops here: a frame that throws must not spin. The
+                   viewer's Retry action re-runs the whole create sequence cleanly. */
                 return
             }
             if (visible) {
@@ -176,6 +225,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         activeSurface = holder.surface
         createAttempts = 0
+        framesRendered = 0
+        _error.value = null
+        _diagnostics.value = RendererDiagnostics(state = RendererStartupState.INITIALIZING)
         handler.removeCallbacks(retryCreate)
         handler.post { attemptCreate() }
     }
@@ -188,6 +240,9 @@ class RenderSurfaceView @JvmOverloads constructor(
         handler.removeCallbacks(retryCreate)
         handler.post {
             createAttempts = 0
+            framesRendered = 0
+            _error.value = null
+            _diagnostics.value = RendererDiagnostics(state = RendererStartupState.INITIALIZING)
             attemptCreate()
         }
     }
@@ -212,6 +267,8 @@ class RenderSurfaceView @JvmOverloads constructor(
         }
         val forceGl = createAttempts >= 1
         val attemptSettings = if (forceGl) settings.copy(preferVulkan = false) else settings
+        val attemptStarted = android.os.SystemClock.elapsedRealtime()
+        _diagnostics.value = _diagnostics.value.copy(state = RendererStartupState.INITIALIZING)
         try {
             renderer?.destroy()
             renderer = null
@@ -220,6 +277,22 @@ class RenderSurfaceView @JvmOverloads constructor(
             renderer = created
             _rendererInfo.value = created.info()
             _error.value = null
+            val okAttempt = RendererAttempt(
+                attempt = createAttempts + 1,
+                preferVulkan = attemptSettings.preferVulkan,
+                succeeded = true,
+                error = null,
+                elapsedMs = android.os.SystemClock.elapsedRealtime() - attemptStarted,
+            )
+            /* INITIALIZING, not RUNNING: the renderer exists but the frame loop has not
+               presented anything yet. The first completed frame promotes this to RUNNING, so
+               a renderer that creates successfully but never draws stays visibly stuck here. */
+            _diagnostics.value = RendererDiagnostics(
+                state = RendererStartupState.INITIALIZING,
+                attempts = _diagnostics.value.attempts + okAttempt,
+                lastError = null,
+                framesRendered = framesRendered,
+            )
             created.setCamera(camera)
             /* Re-apply the user's real settings: the GLES-forced attempt only swapped the
                backend preference for creation, the viewer's own toggle must stay authoritative. */
@@ -237,12 +310,26 @@ class RenderSurfaceView @JvmOverloads constructor(
             renderer = null
             _rendererInfo.value = null
             createAttempts++
+            val reason = t.message ?: t.javaClass.simpleName
+            val failedAttempt = RendererAttempt(
+                attempt = createAttempts,
+                preferVulkan = attemptSettings.preferVulkan,
+                succeeded = false,
+                error = reason,
+                elapsedMs = android.os.SystemClock.elapsedRealtime() - attemptStarted,
+            )
+            val attempts = _diagnostics.value.attempts + failedAttempt
             if (createAttempts < MAX_CREATE_ATTEMPTS) {
-                val reason = t.message ?: t.javaClass.simpleName
                 _error.value = if (forceGl)
                     "GPU initialisation failed ($reason); retrying..."
                 else
                     "Vulkan backend unavailable ($reason); trying OpenGL ES 3.1..."
+                _diagnostics.value = RendererDiagnostics(
+                    state = RendererStartupState.INITIALIZING,
+                    attempts = attempts,
+                    lastError = reason,
+                    framesRendered = framesRendered,
+                )
                 /* The final automatic attempt is delayed so a not-yet-ready Surface can settle. */
                 handler.removeCallbacks(retryCreate)
                 if (createAttempts == MAX_CREATE_ATTEMPTS - 1) {
@@ -251,7 +338,13 @@ class RenderSurfaceView @JvmOverloads constructor(
                     handler.post(retryCreate)
                 }
             } else {
-                _error.value = t.message ?: t.javaClass.simpleName
+                _error.value = reason
+                _diagnostics.value = RendererDiagnostics(
+                    state = RendererStartupState.FAILED,
+                    attempts = attempts,
+                    lastError = reason,
+                    framesRendered = framesRendered,
+                )
             }
         }
     }
@@ -278,6 +371,8 @@ class RenderSurfaceView @JvmOverloads constructor(
             renderer?.destroy()
             renderer = null
             rendererInfoValueReset()
+            _error.value = null
+            _diagnostics.value = RendererDiagnostics(state = RendererStartupState.WAITING_FOR_SURFACE)
             latch.countDown()
         }
         latch.await(2, java.util.concurrent.TimeUnit.SECONDS)

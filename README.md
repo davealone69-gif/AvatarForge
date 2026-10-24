@@ -111,3 +111,7 @@ Install from the phone: download the APK, open it in Downloads, and allow instal
 ## Renderer recovery retest (2026-10-21)
 
 A separate recovery build is available for retesting the reported black-viewer / 0 FPS failure. Its physical-device result is still **UNVERIFIED**. See [renderer recovery notes and checksums](docs/RENDERER_RECOVERY_2026-10-21.md) for the bundle identity, exact checksums, download source, and device acceptance checklist. The APK/AAR binaries are not GitHub release assets yet; the notes link to the original Dropbox bundle.
+
+## Diagnostics and DIY fault finding
+
+The app contains a built-in diagnostics screen: open the **diag** panel in the 3D viewer, or **MENU -> Diagnostics** on any screen. It reports measured app, device, and renderer facts (including each Vulkan/GLES start-up attempt and its exact error), flags WARN/FAIL rows with actionable hints, and can copy a plain-text report to the clipboard. See [DIY fault finding](docs/DIY_FAULT_FINDING.md) for the full checklist.

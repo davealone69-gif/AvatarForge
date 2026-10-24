@@ -16,7 +16,6 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.PowerManager
 import android.os.StatFs
 import androidx.core.content.FileProvider
@@ -105,36 +104,11 @@ object AvatarForge {
         return stat.availableBytes > requiredBytes
     }
 
-    /** One-paragraph, human-readable device report for the settings screen's diagnostics card. */
-    fun deviceReport(context: Context): String {
-        val health = AvatarEngine.health()
-        val caps = runCatching { AvatarEngine.capabilities(context) }.getOrNull()
-        val stat = StatFs(context.filesDir.absolutePath)
-        return buildString {
-            appendLine("Kernel      : ${health.engineVersion} (ABI ${health.abiVersion})")
-            appendLine("Native      : ${if (health.nativeLibraryLoaded) "loaded" else "FAILED - ${health.problem}"}")
-            appendLine("Device      : ${Build.MANUFACTURER} ${Build.MODEL} (API ${Build.VERSION.SDK_INT}, ${Build.SUPPORTED_ABIS.firstOrNull()})")
-            caps?.let {
-                appendLine("RAM         : ${"%.1f".format(it.totalRamBytes / 1073741824.0)} GB${if (it.lowRamDevice) " (low-RAM)" else ""}")
-                appendLine("Engine budget: ${it.memoryBudgetBytes / 1048576} MB")
-                appendLine("Clips       : ${it.clipCount}, blendshapes: ${it.blendshapeCount}, regions: ${it.regionCount}")
-            }
-            appendLine("Free storage: ${stat.availableBytes / 1048576} MB")
-            val resources = DeviceResourceGovernor(context).snapshot()
-            appendLine("Available RAM: ${resources.availableRamBytes / 1048576} MB")
-            appendLine("Resource state: ${resources.state}")
-            appendLine("Thermal status: ${resources.thermalStatus?.let { thermal ->
-                when (thermal) {
-                    PowerManager.THERMAL_STATUS_NONE -> "none"
-                    PowerManager.THERMAL_STATUS_LIGHT -> "light"
-                    PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
-                    PowerManager.THERMAL_STATUS_SEVERE -> "severe"
-                    PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
-                    PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
-                    PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
-                    else -> "unknown($thermal)"
-                }
-            } ?: "unavailable on this Android version"}")
-        }
-    }
+    /**
+     * One-paragraph human-readable device report for the settings screen's diagnostics card.
+     * Delegates to the structured [collectDiagnostics] collector so the text report and the
+     * in-app diagnostics panel can never drift apart. Renderer fields are absent here because no
+     * Surface exists at this entry point; the viewer's diagnostics panel adds them.
+     */
+    fun deviceReport(context: Context): String = collectDiagnostics(context).plainText
 }

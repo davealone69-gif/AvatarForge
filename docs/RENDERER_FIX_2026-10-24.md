@@ -111,3 +111,7 @@ the `.so` files are refreshed.
    drawn into a released surface and no render thread is leaked.
 6. Capture the full error string from the card if all three attempts fail, and record it against
    this document.
+
+## See also
+
+- [DIY fault finding](../docs/DIY_FAULT_FINDING.md) - plain-language checklist driven by the new in-app **Diagnostics** panel (viewer `diag` panel, or **MENU -> Diagnostics** on any screen), with renderer lifecycle state, per-attempt create history, and a copyable plain-text report.

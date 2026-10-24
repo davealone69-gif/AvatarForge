@@ -16,6 +16,9 @@
  */
 package com.avatarforge.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -50,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.avatarforge.app.ui.AppBitmaps
+import com.avatarforge.app.ui.DiagnosticsDialog
 import com.avatarforge.app.ui.InputScreen
 import com.avatarforge.app.ui.ProgressScreen
 import com.avatarforge.app.ui.ViewerPanel
@@ -59,7 +63,9 @@ import com.avatarforge.app.ui.poseClipName
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.AvatarForge
 import com.avatarforge.sdk.AvatarSpec
+import com.avatarforge.sdk.DiagnosticsReport
 import com.avatarforge.sdk.EngineResult
+import com.avatarforge.sdk.collectDiagnostics
 import com.avatarforge.sdk.GenerationRequest
 import com.avatarforge.sdk.ImageReference
 import com.avatarforge.sdk.ImageRole
@@ -121,6 +127,7 @@ class MainActivity : ComponentActivity() {
         var pickedRegion by remember { mutableStateOf(-1) }
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
+        var showDiagnostics by remember { mutableStateOf(false) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -247,11 +254,22 @@ class MainActivity : ComponentActivity() {
                     val stats by surfaceViewState?.stats?.collectAsState()
                         ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
                     val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
+                    val rendererDiagnostics by surfaceViewState?.diagnostics?.collectAsState()
+                        ?: remember { mutableStateOf(null) }
+                    /* Rebuilt on renderer lifecycle changes and integer-FPS crossings only, so the
+                       60 Hz stats flow does not rebuild this report every frame. */
+                    val diagnosticsReport: DiagnosticsReport = remember(
+                        rendererDiagnostics, rendererInfo, stats.fps.toInt(),
+                    ) {
+                        collectDiagnostics(context, rendererDiagnostics, rendererInfo, stats)
+                    }
                     ViewerScreen(
                         result = finished,
                         engine = engine,
                         rendererError = rendererError,
                         onRetryRenderer = { surfaceView?.restart() },
+                        diagnosticsReport = diagnosticsReport,
+                        onCopyReport = { copyDiagnostics(context, diagnosticsReport) },
                         onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,
@@ -382,9 +400,34 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Diagnostics") },
+                        onClick = {
+                            menuExpanded = false
+                            showDiagnostics = true
+                        },
+                    )
                 }
             }
         }
+
+        /* Engine/device diagnostics without a Surface: the renderer rows report "not started"
+           and the same composable renders the viewer's live diagnostics panel. */
+        if (showDiagnostics) {
+            val report = remember { collectDiagnostics(context) }
+            DiagnosticsDialog(
+                report = report,
+                onDismiss = { showDiagnostics = false },
+                onCopy = { copyDiagnostics(context, report) },
+            )
+        }
     }
 }
+}
+
+/** Copies the full diagnostics report to the clipboard without any permission prompt. */
+private fun copyDiagnostics(context: Context, report: DiagnosticsReport) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("AvatarForge diagnostics", report.plainText))
+    Toast.makeText(context, "Diagnostics copied to clipboard", Toast.LENGTH_SHORT).show()
 }

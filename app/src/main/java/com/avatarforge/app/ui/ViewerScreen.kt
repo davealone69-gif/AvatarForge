@@ -53,6 +53,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.DiagnosticsReport
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraSettings
@@ -62,7 +63,7 @@ import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 
 /** Which editing panel is open. Only one at a time: this is a phone, not a workstation. */
-enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER }
+enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER, DIAG }
 
 @Composable
 fun ViewerScreen(
@@ -92,6 +93,9 @@ fun ViewerScreen(
     onPickRegion: (Int) -> Unit,
     /** View-space tap, forwarded to the host which performs the pick against the live camera. */
     onTapModel: (Float, Float) -> Unit,
+    /** Snapshot report for the diagnostics panel; null keeps the panel honest ("not measured yet"). */
+    diagnosticsReport: DiagnosticsReport?,
+    onCopyReport: () -> Unit,
     modifier: Modifier = Modifier,
     /** The SurfaceView, hoisted so this screen stays previewable in Compose tooling. */
     surface: @Composable () -> Unit,
@@ -184,6 +188,22 @@ fun ViewerScreen(
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
                         ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
+                        ViewerPanel.DIAG -> {
+                            val report = diagnosticsReport
+                            if (report == null) {
+                                Text(
+                                    "Diagnostics are not measured yet. Reopen this panel in a moment.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                DiagnosticsContent(
+                                    report = report,
+                                    onRetryRenderer = onRetryRenderer,
+                                    onCopy = onCopyReport,
+                                )
+                            }
+                        }
                         ViewerPanel.CAMERA -> Unit
                     }
                 }
