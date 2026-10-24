@@ -1935,13 +1935,32 @@ static void testPoseComposition() {
         CHECK(smile >= 0, "mouthSmileLeft resolvable by name");
         if (smile >= 0) {
             w[static_cast<size_t>(smile)] = 1.0f;
-            af_engine_apply_blendshapes(e, w.data(), channels);       /* still walking */
+            const int32_t smileWalkRc = af_engine_apply_blendshapes(e, w.data(), channels);
+            const af_vertex* smileWalkVerts = af_engine_vertices(e);
+            CHECK(smileWalkRc == AF_OK && smileWalkVerts != nullptr,
+                  "walking smile produces a readable vertex buffer");
+            if (smileWalkRc != AF_OK || smileWalkVerts == nullptr) {
+                af_engine_destroy(e);
+                return;
+            }
             std::vector<af_vertex> smileWalk(static_cast<size_t>(n));
-            std::memcpy(smileWalk.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
-            af_engine_apply_clip(e, AF_CLIP_REST, 0.0f);
-            af_engine_apply_blendshapes(e, w.data(), channels);       /* rest, same weight */
+            std::memcpy(smileWalk.data(), smileWalkVerts, sizeof(af_vertex) * static_cast<size_t>(n));
+            const int32_t smileRestPoseRc = af_engine_apply_clip(e, AF_CLIP_REST, 0.0f);
+            CHECK(smileRestPoseRc == AF_OK, "REST pose applies before smile comparison");
+            if (smileRestPoseRc != AF_OK) {
+                af_engine_destroy(e);
+                return;
+            }
+            const int32_t smileRestRc = af_engine_apply_blendshapes(e, w.data(), channels);
+            const af_vertex* smileRestVerts = af_engine_vertices(e);
+            CHECK(smileRestRc == AF_OK && smileRestVerts != nullptr,
+                  "resting smile produces a readable vertex buffer");
+            if (smileRestRc != AF_OK || smileRestVerts == nullptr) {
+                af_engine_destroy(e);
+                return;
+            }
             std::vector<af_vertex> smileRest(static_cast<size_t>(n));
-            std::memcpy(smileRest.data(), af_engine_vertices(e), sizeof(af_vertex) * static_cast<size_t>(n));
+            std::memcpy(smileRest.data(), smileRestVerts, sizeof(af_vertex) * static_cast<size_t>(n));
             /* The face offsets must be identical once the difference between the two skeletons is
                removed, so compare the smile against its own pose baseline. */
             const float faceDelta = [&] {
