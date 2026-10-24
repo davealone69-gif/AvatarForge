@@ -380,9 +380,10 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
         return AF_ERR_INVALID_ARG;
     }
     size_t floatCount = 0;
+    constexpr size_t MAX_ACCESSOR_FLOATS = size_t{1} << 24; /* bound sparse-only hostile allocations too */
     if (!checkedMul(view.count, static_cast<size_t>(components), &floatCount) ||
-        floatCount > out->max_size()) {
-        if (error) *error = "glTF: accessor output allocation size overflows";
+        floatCount > out->max_size() || floatCount > MAX_ACCESSOR_FLOATS) {
+        if (error) *error = "glTF: accessor output allocation size overflows or exceeds the importer limit";
         return AF_ERR_INVALID_ARG;
     }
     out->assign(floatCount, 0.0f);
