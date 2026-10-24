@@ -88,7 +88,7 @@ data class AvatarSpec(
     val sex: Sex = Sex.UNSPECIFIED,
     val build: Build = Build.AVERAGE,
     val hairStyle: HairStyle = HairStyle.MEDIUM,
-    val outfit: Outfit = Outfit.NONE,
+    val outfit: Outfit = Outfit.TSHIRT,
     val footwear: Footwear = Footwear.NONE,
     /** RNG seed. Identical seed => identical avatar, bit for bit. */
     val seed: Int = 1337,
