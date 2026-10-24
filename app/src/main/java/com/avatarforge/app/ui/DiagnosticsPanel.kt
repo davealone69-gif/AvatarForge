@@ -10,7 +10,7 @@
 package com.avatarforge.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clip
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
