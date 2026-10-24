@@ -443,11 +443,11 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
             }
             palette.assign(body, body + len);
         } else if (std::memcmp(type, "tRNS", 4) == 0) {
-            if (sawIdat) {
-                if (error) *error = "png: tRNS appears after IDAT";
+            if (sawIdat || colorType != 3 || len == 0 || len > 256) {
+                if (error) *error = "png: unsupported, misplaced, or oversized tRNS chunk";
                 return false;
             }
-            if (colorType == 3) paletteAlpha.assign(body, body + len);
+            paletteAlpha.assign(body, body + len);
         } else if (std::memcmp(type, "IDAT", 4) == 0) {
             if (idatEnded || idat.size() > MAX_COMPRESSED_BYTES ||
                 static_cast<size_t>(len) > MAX_COMPRESSED_BYTES - idat.size()) {
@@ -477,6 +477,12 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     }
     if (!sawIhdr || idat.empty()) {
         if (error) *error = "png: missing IHDR or IDAT";
+        return false;
+    }
+    if (colorType == 3 &&
+        (palette.empty() || palette.size() % 3 != 0 || palette.size() / 3 > (size_t{1} << bitDepth) ||
+         paletteAlpha.size() > palette.size() / 3)) {
+        if (error) *error = "png: indexed palette or transparency table is invalid";
         return false;
     }
 
