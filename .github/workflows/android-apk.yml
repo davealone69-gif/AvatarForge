@@ -71,7 +71,7 @@ jobs:
           chmod +x ./gradlew
           set +e
           ./gradlew --no-daemon --stacktrace --console=plain \
-            :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
+            :app:assembleDebug :app:assembleRelease :sdk:assembleRelease :sdk:testDebugUnitTest \
             -Paf.abIs=arm64-v8a \
             -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" 2>&1 | tee build-log.txt
           rc=${PIPESTATUS[0]}
@@ -207,3 +207,37 @@ jobs:
           path: prebuilt/arm64-v8a/*.so
           if-no-files-found: error
           retention-days: 30
+
+  # Host-side tests (finding AF-001): before this job existed no workflow executed any test.
+  # Runs the kernel harness, ABI contract drift check, ABI conformance, GLB validation and the
+  # customization contract gate. No Android SDK needed; g++ + zlib + python3 only.
+  host-tests:
+    name: Host kernel tests and ABI/GLB validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install host build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++ zlib1g-dev
+
+      - name: Build and run the kernel host harness
+        run: bash tools/build_host.sh test
+
+      - name: ABI manifest must match the native header (drift gate)
+        run: |
+          python3 tools/abi_manifest.py
+          if ! git diff --exit-code -- abi/afcore.abi.json; then
+            echo "::error::abi/afcore.abi.json is out of date; run tools/abi_manifest.py and commit the result."
+            exit 1
+          fi
+
+      - name: ABI conformance of the host library against the manifest
+        run: python3 tools/abi_conformance.py build-host/libafcore.so
+
+      - name: Validate the sample GLB export structurally
+        run: python3 tools/validate_glb.py artifacts/avatarforge-sample.glb
+
+      - name: Validate customization contracts
+        run: python3 tools/validate_custom_inputs.py config/customization/*.json
