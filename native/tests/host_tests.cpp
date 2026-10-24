@@ -1882,6 +1882,11 @@ static void testPoseComposition() {
         std::vector<float> jm(static_cast<size_t>(joints) * 16u, 0.0f);
         const int32_t written = af_engine_joint_matrices(e, jm.data(), joints);
         CHECK(written == joints, "the posed skeleton publishes every joint matrix (%d written)", written);
+        if (written != joints) {
+            CHECK(false, "joint matrix buffer is complete before matrix indexing");
+            af_engine_destroy(e);
+            return;
+        }
         float rootErr = 0.0f;
         for (int k = 0; k < 16; ++k) {
             rootErr = std::max(rootErr, std::fabs(jm[static_cast<size_t>(k)] - ((k % 5 == 0) ? 1.0f : 0.0f)));
