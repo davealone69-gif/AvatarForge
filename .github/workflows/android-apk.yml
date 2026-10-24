@@ -136,8 +136,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
+      # On a PR run check out the branch tip itself (not the pull merge ref), so a prebuilt
+      # refresh commit below pushes cleanly onto the contributor's branch.
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -174,6 +178,27 @@ jobs:
             fi
           done
           echo "prebuilt_stale=$stale" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit refreshed prebuilts when sources are newer
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- prebuilt/arm64-v8a; then
+            echo "Committed prebuilts already match the source rebuild; nothing to do."
+            exit 0
+          fi
+          # Loop guard: a refresh commit triggers another PR run; on that run the previous
+          # commit is already a refresh, so never commit a second time.
+          if git log -1 --pretty=%s | grep -q "^Refresh prebuilt arm64"; then
+            echo "Previous commit is already a prebuilt refresh; skipping to avoid a loop."
+            exit 0
+          fi
+          git config user.name "avatarforge-ci"
+          git config user.email "avatarforge-ci@users.noreply.github.com"
+          git add prebuilt/arm64-v8a
+          git commit -m "Refresh prebuilt arm64-v8a native libraries" \
+            -m "Auto-refreshed by the native-compile CI job from the C++ sources at ${GITHUB_SHA:0:7}, so the APK/AAR job packages libraries that include the latest native fixes."
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
 
       - name: Upload freshly built native libraries
         uses: actions/upload-artifact@v4
