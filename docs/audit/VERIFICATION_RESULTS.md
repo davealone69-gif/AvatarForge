@@ -45,7 +45,19 @@ annotations (verified via the check-runs API).
 | Host kernel tests and ABI/GLB validation | **success** | `build_host.sh test` exits 0 (405 checks, 0 failures); ABI manifest drift gate clean; `abi_conformance.py` 47/47; sample GLB and both customization JSONs valid |
 | Build and verify Android packages | **success** | SDK + app compile; `:sdk:testDebugUnitTest` passes (21 tests); debug/release APK and release AAR assemble |
 
-### 2.3 JVM unit tests covered by `:sdk:testDebugUnitTest` (21 total)
+### 2.3 Runs for the Maven publication work (SDK embeddability)
+
+| Run | Head | Outcome | Evidence |
+|---|---|---|---|
+| `40101913345` | `95075cf` | build-apk **failure**: `OutOfMemoryError: Metaspace` in `:sdk:compileDebugUnitTestKotlin` / `:app:compileReleaseKotlin` | check-run annotations; root cause was the 384 MB metaspace cap in `gradle.properties` plus the new `maven-publish` plugin, not a publishing-DSL error (Gradle configured and reached compile) |
+| `40102483374` | `ddb9737` | **all three jobs success** | step conclusions: POM generation + content greps (aar packaging, `com.avatarforge:avatarforge-sdk`, `androidx.core`, `exifinterface`, `kotlinx-coroutines-android`, no `<licenses>`) passed; `publishReleasePublicationToMavenLocal` passed including the `test -s .../avatarforge-sdk-*.pom` assertion; artifact `AvatarForge-Android-<sha>` (19,223,353 B) bundles `maven-repo/` alongside APKs and AAR |
+
+The metaspace fix is CI-only (`-Dorg.gradle.jvmargs` with a 768 MB cap on the 7 GB hosted
+runner); the verified low-RAM local defaults in `gradle.properties` are unchanged. CI log/artifact
+download remains blocked from this sandbox, so the POM file's contents are attested by the
+passing grep/assertion steps, not by a downloaded copy.
+
+### 2.4 JVM unit tests covered by `:sdk:testDebugUnitTest` (21 total)
 
 | Test class | Tests | Defect covered |
 |---|---|---|
