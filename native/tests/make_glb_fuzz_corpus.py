@@ -41,7 +41,7 @@ def make_glb(*, count=1, accessor_offset=0, view_offset=0, view_length=12,
 
 
 def make_sparse_glb(index_offset=0, value_offset=0, sparse_count=1):
-    binary = b"\\x00" * 12 + b"\\x00" + b"\\x00" * 12
+    binary = b"\x00" * 12 + b"\x00" + b"\x00" * 12
     doc = {
         "asset": {"version": "2.0", "generator": "AvatarForge sparse fuzz seed"},
         "buffers": [{"byteLength": len(binary)}],
