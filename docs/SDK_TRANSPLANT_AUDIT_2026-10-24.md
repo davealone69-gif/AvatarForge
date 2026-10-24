@@ -54,3 +54,8 @@ Scope: source/configuration audit only. No Android device or emulator is availab
 - Device runtime: **UNVERIFIED**
 - Signed release: **BLOCKED**
 - `main`: **UNCHANGED**
+
+
+## Follow-up path reconciliation
+
+A broader path check found the repository's canonical on-device sheet at `DEVICE.md` and renderer-specific verification at `docs/RENDERER_FIX.md`; the named `TEST_MATRIX.md` and `RELEASE_CHECKLIST.md` files still were not found on this branch. `DEVICE.md` explicitly says no device step has been executed and current renderer/lifecycle/resource source had not been Android-package-built at the time its status was written. Use the actual ordered checklist in `DEVICE.md` as the current repository evidence, while retaining the user's stated 10-step matrix, Xclipse 940 mip retest and white-head-cap hypothesis as requirements to reconcile, not silently substituting one for the other.
