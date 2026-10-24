@@ -242,9 +242,7 @@ fun collectDiagnostics(
             rendererArea, "Frame loop restarts",
             d.frameLoopRestarts.toString(),
             DiagStatus.INFO,
-            if (d.frameLoopRestarts > 3)
-                "Several restarts while the viewer was open can look like flashing; note this number in any report."
-            else null,
+            RendererDiagnosticNotes.frameLoopRestartHint(d),
         )
         if (d.tierTransitions.isNotEmpty()) {
             items += DiagItem(
@@ -262,6 +260,8 @@ fun collectDiagnostics(
             "${info.backend} · ${info.deviceName} · ${info.apiVersion} · ${info.driver}",
             DiagStatus.OK,
         )
+        // AF-018: say so when Vulkan was requested but a non-Vulkan backend is active.
+        RendererDiagnosticNotes.backendFallbackItem(info, rendererDiagnostics)?.let { items += it }
         items += DiagItem(
             rendererArea, "GPU features",
             "shadows=${info.supportsShadows} · MSAA=${info.supportsMsaa} · " +
