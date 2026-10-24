@@ -220,3 +220,47 @@ The README links to a [renderer recovery note](https://github.com/davealone69-gi
 - Local verification on the current tree after integrating upstream `fff28e3`: `bash tools/verify.sh` passed all 536 native host checks, shader freshness, GLB structural validation, C++ ABI conformance (47/47), Rust workspace tests, all-feature/all-target Rust compilation, Rust-core ABI parity for the 15 implemented symbols, and prompt parity (72/72). Rust workspace tests reported 38 passed, 2 intentionally ignored. `aapt2` was unavailable, so APK manifest/static checks were skipped.
 - Android Gradle/JVM verification did not complete locally: dependency resolution failed before compilation due Maven Central TLS handshake failure. Current APK/AAR files in `artifacts/` predate these edits. Re-run Android CI against the pushed exact SHA before claiming Android package success.
 - Exact-head GitHub CI for these local changes: **PENDING push/run**. The repository now has an ASan/UBSan libFuzzer workflow, but local fuzz execution was unavailable because `clang` is not installed in this environment. Physical Galaxy S24 runtime, visible-frame, FPS, thermal soak, and device import verification remain **UNVERIFIED**.
+
+
+## 2026-10-24 user-device report and branch triage checkpoint
+
+### Latest user-provided on-device evidence
+
+- The user supplied a screenshot of the AvatarForge viewer showing: **Vulkan**, Samsung Xclipse 940 label, **58 FPS**, **17.2 ms**, **417,150 triangles on screen**, **304,797 vertices**, **71 joints**, **52 ARKit blendshapes**, **37.5 MB GLB**, and **18 s to build**. The overlay says "on target".
+- Classification: **USER-REPORTED DEVICE EVIDENCE**. The screenshot is evidence that the pictured session displayed the avatar and non-zero geometry/FPS counters. It is not a sustained performance test, a source/build-to-SHA match, or proof of export/animation stability. Do not turn it into a general "green build" claim.
+- Visual quality is still visibly imperfect in the supplied capture: strong rippling/striping across torso and legs, blocky-looking hands, and an unclear head/neck transition. Diagnose materials/UVs/normals/tangents and geometry from source/asset evidence; do not guess the cause from the screenshot alone.
+- The user reports that an in-app DIY fault-finding and manufacturer-diagnosis flow is now built into AvatarForge. The repository PR #19 diff also shows an in-app Diagnostics dialog/panel, live renderer diagnostics, actionable WARN/FAIL hints, and a copy-report action. **Code presence: observed in PR #19 diff; installed-app interaction: not independently verified in this audit.** Preserve this workflow and make it the first-line troubleshooting path. The existing `docs/DIY_FAULT_FINDING.md` remains the longer reference checklist.
+- The user is happy that the picture is back. Do not disturb the working path with speculative renderer changes. Capture the current visual/FPS baseline before changing rendering, material, geometry, or quality logic.
+
+### Branch triage (live GitHub snapshot, 2026-10-24)
+
+Canonical integration/work branch remains `work/android-engine-dev`; `main` remains protected from wholesale promotion until exact-head CI and selective integration are reviewed. The repository default branch is `main`; GitHub currently grants push/admin permission, but permission is not a reason to force-update history.
+
+The live branch list contained 18 refs. Comparisons against `work/android-engine-dev` show substantial divergence for most feature/fix branches. These are comparison counts, not proof that a branch's changes are missing: shared patches may have been cherry-picked or independently reimplemented. Review diffs and tests before integration.
+
+- **Primary review queue:** `arena/985042e3-avatarforge` (PR #19, open, reported mergeable) contains the latest renderer startup/fallback/diagnostics changes. Its PR head is `bac2168a663858cb0e8341c5fce00f3d93dfca96`; base is `main`. Review the full diff and exact-head Actions, then selectively integrate only after tests pass. Do not merge based only on "mergeable".
+- **Renderer recovery lineage:** `fix/vulkan-frame-recovery`, `fix/renderer-frame-loop-resize-recovery`, `fix/render-loop-visibility-watchdog`, `fix/renderer-recovery-2026-10-21`, `fix/diagnostics-invalid-render-telemetry`, and `fix/restore-self-test-menu-phase4`. Compare each against the primary branch and mark each fix as present/missing/partial before closing or retiring anything.
+- **Avatar quality:** `fix/avatar-head-hands-geometry-pass1`, `fix/avatarforge-overexposed-render`, and `feat/avatar-realism-upgrade`. Preserve unique geometry/material work; screenshot artifacts alone do not identify the root cause.
+- **Assets/schema:** `feat/json-asset-registry`. The prior audit indicates selective integration was preferred over wholesale merging. Confirm the actual current branch content and UI/engine wiring.
+- **Quality gates:** `chore/restore-code-quality-gates`, `chore/quality-gates-ai-review`. Check exact workflows and avoid duplicate/conflicting quality jobs. User preference remains no Qodana, CodeQL, detekt, or ktlintCheck.
+- **Dropbox import:** `chore/apply-dropbox-update-2026-10-21`. Compare actual file-level changes and retain unique fixes.
+- **Integration/audit:** `integrate/audited-branch-work`; inspect for patches already included in the canonical branch before taking any changes.
+- **Likely stale candidate:** `feat/repo-wide-engine-consolidation` compares as behind with no unique commits relative to the canonical branch in the current compare result. Keep it until its head and references are rechecked; only then consider retirement.
+- **Historical baseline:** `main` is significantly behind/diverged from the working branch in the current compare snapshot. Do not force-push or reset it. Keep it as the stable/default branch until a reviewed PR passes.
+- **Other ref:** `arena/985042e3-avatarforge` is the PR #19 head and must be treated as active, not a cleanup target.
+
+### Immediate branch-sorting procedure
+
+1. Record exact HEAD SHA and current CI for `work/android-engine-dev` and every open PR before making any history changes.
+2. Use PR #19 as the candidate for review because it includes the in-app diagnostics path and renderer startup fixes; inspect the full patch for regressions and check the exact head's workflow status.
+3. Compare each branch's unique file patches against the candidate and canonical branch. Label each item **already integrated**, **selectively port**, **keep active**, **superseded**, or **safe to retire after confirmation**.
+4. Merge only reviewed PRs with successful exact-head CI. Do not bulk-merge divergent branches, force-update `main`, or delete any branch containing unpreserved work.
+5. After integration, rerun repository verification and Android package builds. Installed-device runtime verification remains a separate gate; the user screenshot is a positive runtime observation but is not tied to a verified current Git SHA/APK.
+6. Once unique work is preserved and PR references are checked, close duplicate/superseded PRs with a clear explanation. Delete obsolete refs only after explicit confirmation that they contain no unique unpreserved work.
+
+### Status labels
+
+- **REAL + USER-OBSERVED:** avatar visible in the user-provided screenshot with non-zero displayed FPS and geometry counters.
+- **PARTIAL:** in-app DIY/Diagnostics source is visible in PR #19 and the user reports it is built into the app.
+- **UNVERIFIED:** installed version/SHA match, diagnostics copy/report action, long-duration FPS, renderer recovery under resize/background transitions, animation, export/import, and exact-head CI for the current branch/PRs.
+- **NOT DONE:** no branches were merged, force-updated, or deleted during this triage snapshot. Branch sorting must be completed by selective diff review and exact-head CI, not by deleting refs based only on age or ahead/behind counts.
