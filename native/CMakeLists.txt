@@ -93,7 +93,7 @@ if(AF_BUILD_GLB_FUZZ)
     target_include_directories(af_glb_fuzz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_options(af_glb_fuzz PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -Wall -Wextra)
     target_link_options(af_glb_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
-    target_link_libraries(af_glb_fuzz PRIVATE afcore z)
+    # Keep the parser/decoder in this executable so ASan/UBSan instrument the code under test.
 endif()
 
 
