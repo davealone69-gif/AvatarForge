@@ -251,79 +251,113 @@ int applySparse(const uint8_t* bin, size_t binSize, const json::Json& doc, const
     const json::Json& sparse = acc["sparse"];
     if (sparse.isNull()) return AF_OK;
     size_t sparseCount = 0;
-    if (!sparse["count"].asIndex(&sparseCount) || sparseCount == 0) return AF_OK;
-    if (sparseCount > count) {
-        if (error) *error = "glTF: sparse patch larger than its accessor";
+    if (!sparse["count"].asIndex(&sparseCount) || sparseCount == 0 || sparseCount > count) {
+        if (error) *error = "glTF: sparse patch count is invalid";
         return AF_ERR_INVALID_ARG;
     }
-    /* sparse.indices is not an accessor in the document: it is a bufferView plus a componentType,
-       so it gets its own bounds check rather than going through resolveAccessor(). */
+    if (!bin || !buffer || components <= 0) {
+        if (error) *error = "glTF: sparse patch has no valid data buffer";
+        return AF_ERR_INVALID_ARG;
+    }
+
+    auto resolveSparseView = [&](const json::Json& ref, size_t* offset, size_t* length) -> bool {
+        size_t index = 0;
+        if (!ref.asIndex(&index)) return false;
+        const json::Json& bv = doc["bufferViews"].atOrNull(index);
+        if (bv.isNull()) return false;
+        size_t bufferIndex = 0;
+        *offset = 0;
+        if (!bv["buffer"].asIndex(&bufferIndex) || bufferIndex != 0) return false;
+        if (!bv["byteOffset"].isNull() && !bv["byteOffset"].asIndex(offset)) return false;
+        if (!bv["byteLength"].asIndex(length) || !checkedRange(*offset, *length, binSize)) return false;
+        /* glTF sparse index/value bufferViews are tightly packed and may not declare a stride. */
+        if (bv.find("byteStride")) return false;
+        return true;
+    };
+
     const int idxComponent = sparse["indices"]["componentType"].asInt(0);
     const int idxSize = componentSize(idxComponent);
-    if (idxSize == 0 || (idxSize == 4 && idxComponent == 5126)) {
-        if (error) *error = "glTF: sparse indices with an unsupported component type";
+    if (idxComponent != 5121 && idxComponent != 5123 && idxComponent != 5125) {
+        if (error) *error = "glTF: sparse indices must use UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT";
         return AF_ERR_INVALID_ARG;
     }
     size_t idxBvOffset = 0, idxBvLength = 0;
-    const json::Json& idxBv = doc["bufferViews"].atOrNull(static_cast<size_t>(sparse["indices"]["bufferView"].asInt(-1)));
-    if (idxBv.isNull()) {
-        if (error) *error = "glTF: sparse indices reference a missing bufferView";
+    if (!resolveSparseView(sparse["indices"]["bufferView"], &idxBvOffset, &idxBvLength)) {
+        if (error) *error = "glTF: sparse indices reference an invalid bufferView";
         return AF_ERR_INVALID_ARG;
     }
-    idxBv["byteOffset"].asIndex(&idxBvOffset);
-    idxBv["byteLength"].asIndex(&idxBvLength);
-    size_t idxByteOffset = 0;
-    sparse["indices"]["byteOffset"].asIndex(&idxByteOffset);
-    const uint64_t idxStart = static_cast<uint64_t>(idxBvOffset) + static_cast<uint64_t>(idxByteOffset);
-    const uint64_t idxSpan = static_cast<uint64_t>(sparseCount) * static_cast<uint64_t>(idxSize);
-    if (idxStart + idxSpan > static_cast<uint64_t>(binSize) || idxSpan > static_cast<uint64_t>(idxBvLength)) {
-        if (error) *error = "glTF: sparse index data exceeds the binary chunk";
+    size_t idxByteOffset = 0, idxStart = 0, idxSpan = 0;
+    if ((!sparse["indices"]["byteOffset"].isNull() &&
+         !sparse["indices"]["byteOffset"].asIndex(&idxByteOffset)) ||
+        !checkedMul(sparseCount, static_cast<size_t>(idxSize), &idxSpan) ||
+        !checkedRange(idxByteOffset, idxSpan, idxBvLength) ||
+        !checkedAdd(idxBvOffset, idxByteOffset, &idxStart) ||
+        !checkedRange(idxStart, idxSpan, binSize)) {
+        if (error) *error = "glTF: sparse index offset/span overflows or exceeds its bufferView";
         return AF_ERR_INVALID_ARG;
     }
     const uint8_t* idxBase = bin + idxStart;
 
     size_t valBvOffset = 0, valBvLength = 0;
-    const json::Json& valBv = doc["bufferViews"].atOrNull(static_cast<size_t>(sparse["values"]["bufferView"].asInt(-1)));
-    if (valBv.isNull()) {
-        if (error) *error = "glTF: sparse values reference a missing bufferView";
+    if (!resolveSparseView(sparse["values"]["bufferView"], &valBvOffset, &valBvLength)) {
+        if (error) *error = "glTF: sparse values reference an invalid bufferView";
         return AF_ERR_INVALID_ARG;
     }
-    valBv["byteOffset"].asIndex(&valBvOffset);
-    valBv["byteLength"].asIndex(&valBvLength);
-    size_t valByteOffset = 0;
-    sparse["values"]["byteOffset"].asIndex(&valByteOffset);
-    const int csize = componentSize(static_cast<int>(acc["componentType"].asInt(0)));
-    const uint64_t valStart = static_cast<uint64_t>(valBvOffset) + static_cast<uint64_t>(valByteOffset);
-    const uint64_t valSpan = static_cast<uint64_t>(sparseCount) * static_cast<uint64_t>(components) *
-                             static_cast<uint64_t>(csize);
-    if (valStart + valSpan > static_cast<uint64_t>(binSize) || valSpan > static_cast<uint64_t>(valBvLength)) {
-        if (error) *error = "glTF: sparse value data exceeds the binary chunk";
+    size_t valByteOffset = 0, valStart = 0, valSpan = 0, valueComponents = 0;
+    if ((!sparse["values"]["byteOffset"].isNull() &&
+         !sparse["values"]["byteOffset"].asIndex(&valByteOffset)) ||
+        !checkedMul(sparseCount, static_cast<size_t>(components), &valueComponents) ||
+        !checkedMul(valueComponents, static_cast<size_t>(componentSize(static_cast<int>(acc["componentType"].asInt(0)))), &valSpan) ||
+        !checkedRange(valByteOffset, valSpan, valBvLength) ||
+        !checkedAdd(valBvOffset, valByteOffset, &valStart) ||
+        !checkedRange(valStart, valSpan, binSize)) {
+        if (error) *error = "glTF: sparse value offset/span overflows or exceeds its bufferView";
+        return AF_ERR_INVALID_ARG;
+    }
+    const int componentType = static_cast<int>(acc["componentType"].asInt(0));
+    const int csize = componentSize(componentType);
+    if (csize == 0) {
+        if (error) *error = "glTF: sparse values have an unsupported component type";
         return AF_ERR_INVALID_ARG;
     }
     const uint8_t* valBase = bin + valStart;
-    const int componentType = static_cast<int>(acc["componentType"].asInt(0));
     const bool normalized = acc["normalized"].asBool(false);
     for (size_t i = 0; i < sparseCount; ++i) {
         size_t target = 0;
         if (idxSize == 1) target = idxBase[i];
         else if (idxSize == 2) {
             uint16_t v;
-            std::memcpy(&v, idxBase + i * 2, 2);
+            std::memcpy(&v, idxBase + i * static_cast<size_t>(idxSize), sizeof(v));
             target = v;
         } else {
             uint32_t v;
-            std::memcpy(&v, idxBase + i * 4, 4);
+            std::memcpy(&v, idxBase + i * static_cast<size_t>(idxSize), sizeof(v));
             target = v;
         }
         if (target >= count) {
             if (error) *error = "glTF: sparse index beyond the accessor";
             return AF_ERR_INVALID_ARG;
         }
+        size_t targetBase = 0;
+        if (!checkedMul(target, static_cast<size_t>(components), &targetBase)) {
+            if (error) *error = "glTF: sparse destination index overflows";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t sourceBase = 0;
+        if (!checkedMul(i, static_cast<size_t>(components), &sourceBase) ||
+            !checkedMul(sourceBase, static_cast<size_t>(csize), &sourceBase)) {
+            if (error) *error = "glTF: sparse source index overflows";
+            return AF_ERR_INVALID_ARG;
+        }
         for (int c = 0; c < components; ++c) {
-            const uint8_t* p = valBase + (i * static_cast<size_t>(components) + static_cast<size_t>(c)) *
-                                            static_cast<size_t>(csize);
-            buffer[target * static_cast<size_t>(components) + static_cast<size_t>(c)] =
-                readComponent(p, componentType, normalized);
+            size_t sourceComponent = 0, targetComponent = 0, sourceOffset = 0;
+            if (!checkedMul(static_cast<size_t>(c), static_cast<size_t>(csize), &sourceComponent) ||
+                !checkedAdd(sourceBase, sourceComponent, &sourceOffset) ||
+                !checkedAdd(targetBase, static_cast<size_t>(c), &targetComponent)) {
+                if (error) *error = "glTF: sparse component offset overflows";
+                return AF_ERR_INVALID_ARG;
+            }
+            buffer[targetComponent] = readComponent(valBase + sourceOffset, componentType, normalized);
         }
     }
     return AF_OK;
