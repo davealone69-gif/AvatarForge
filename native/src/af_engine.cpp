@@ -1103,7 +1103,9 @@ int32_t af_engine_apply_pose(af_engine* engine, const af_pose* pose) {
 }
 
 float af_engine_clip_duration(const af_engine* engine, int32_t clip) {
-    if (!engine) return 0.0f;
+    /* Duration is immutable clip-library metadata; it does not read engine state. Accept a null
+       handle so callers can populate animation controls while a renderer owns the engine lease. */
+    (void)engine;
     if (clip == AF_CLIP_REST) return 0.0f;   /* the bind pose has no timeline */
     const int idx = clipIndexForId(clip);
     if (idx < 0) return 0.0f;
@@ -1355,6 +1357,11 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     std::vector<uint32_t> poolBase(asset.pools.size(), 0);
     size_t total = 0;
     for (size_t i = 0; i < asset.pools.size(); ++i) {
+        if (total > static_cast<size_t>(INT32_MAX) ||
+            asset.pools[i].size() > static_cast<size_t>(INT32_MAX) - total) {
+            e->lastError = "import: total vertex count exceeds the engine's signed 32-bit range";
+            return static_cast<int32_t>(AF_ERR_UNSUPPORTED);
+        }
         poolBase[i] = static_cast<uint32_t>(total);
         total += asset.pools[i].size();
     }
@@ -1376,6 +1383,11 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     std::vector<Range> ranges;
     ranges.reserve(asset.primitives.size());
     for (const auto& prim : asset.primitives) {
+        if (indices.size() > static_cast<size_t>(INT32_MAX) ||
+            prim.indices.size() > static_cast<size_t>(INT32_MAX) - indices.size()) {
+            e->lastError = "import: total index count exceeds the engine's signed 32-bit range";
+            return static_cast<int32_t>(AF_ERR_UNSUPPORTED);
+        }
         if (prim.pool < 0 || static_cast<size_t>(prim.pool) >= asset.pools.size()) {
             e->lastError = "import: primitive references a missing vertex pool";
             return static_cast<int32_t>(AF_ERR_INVALID_ARG);
@@ -1457,12 +1469,35 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
         submeshes.push_back(sm);
     }
 
+    /* Prepare the remaining allocations before mutating the live engine, so a bad_alloc during
+       staging cannot leave the previous model partially replaced. */
+    std::vector<af_vertex> vertsRest = verts;
+    TextureSet importedTextures;
+    for (size_t i = 0; i < asset.textures.size(); ++i) {
+        const ImportedTexture& t = asset.textures[i];
+        if (t.rgba.empty() || t.width <= 0 || t.height <= 0) continue;
+        bool used = false;
+        for (const auto& m : asset.materials) {
+            if (m.baseColorTexture == static_cast<int>(i)) { used = true; break; }
+        }
+        if (!used) continue;
+        importedTextures.width = t.width;
+        importedTextures.height = t.height;
+        importedTextures.baseColor = t.rgba;
+        break;
+    }
+
     /* ---- swap in ---- */
     e->verts.swap(verts);
-    e->vertsRest = e->verts;      /* imported geometry is already in its bind pose */
+    e->vertsRest.swap(vertsRest); /* imported geometry is already in its bind pose */
     e->indices.swap(indices);
     e->submeshes.swap(submeshes);
     e->materials.swap(materials);
+    e->textures = std::move(importedTextures);
+    for (int i = 0; i < AF_TEX_COUNT; ++i) {
+        e->texViews[i] = af_texture{};
+        e->texValid[i] = false;
+    }
 
     /* The generated state that no longer describes this geometry. Cleared rather than left stale:
        a rig built for a different mesh would skin the new one with nonsense weights. */
@@ -1485,21 +1520,8 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     e->peakFieldBytes = 0;
     e->tFit = e->tGeometry = e->tUv = e->tTex = e->tRig = 0.0;
 
-    /* Textures: base colour only, and only when the file embedded one that decoded. The other
-       slots keep the generated set if there is one - they belong to the engine's own bake. */
-    for (size_t i = 0; i < asset.textures.size(); ++i) {
-        const ImportedTexture& t = asset.textures[i];
-        if (t.rgba.empty() || t.width <= 0) continue;
-        bool used = false;
-        for (const auto& m : asset.materials) {
-            if (m.baseColorTexture == static_cast<int>(i)) { used = true; break; }
-        }
-        if (!used) continue;
-        e->textures.width = t.width;
-        e->textures.height = t.height;
-        e->textures.baseColor = t.rgba;
-        break;
-    }
+    /* Only adopt an embedded base-colour texture that was decoded and referenced by a material;
+       every old generated/imported texture slot was invalidated at the swap above. */
     if (e->textures.width > 0 && !e->textures.baseColor.empty()) {
         af_texture tex{};
         tex.width = e->textures.width;

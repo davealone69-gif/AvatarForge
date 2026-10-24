@@ -371,10 +371,11 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     int width = 0, height = 0, bitDepth = 0, colorType = 0, interlace = 0;
     std::vector<uint8_t> palette;      /* RGB triples */
     std::vector<uint8_t> paletteAlpha;
+    std::vector<uint8_t> transparency; /* grayscale/RGB tRNS sample keys */
     std::vector<uint8_t> idat;
 
     size_t pos = 8;
-    bool sawIhdr = false, sawIend = false, sawIdat = false, idatEnded = false;
+    bool sawIhdr = false, sawIend = false, sawIdat = false, sawTrns = false, idatEnded = false;
     constexpr size_t MAX_COMPRESSED_BYTES = 64u * 1024u * 1024u;
     while (pos <= size && size - pos >= 12 && !sawIend) {
         const uint32_t len = readU32(data + pos);
@@ -443,11 +444,19 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
             }
             palette.assign(body, body + len);
         } else if (std::memcmp(type, "tRNS", 4) == 0) {
-            if (sawIdat || colorType != 3 || len == 0 || len > 256) {
-                if (error) *error = "png: unsupported, misplaced, or oversized tRNS chunk";
+            if (sawIdat || sawTrns) {
+                if (error) *error = "png: duplicate or misplaced tRNS chunk";
                 return false;
             }
-            paletteAlpha.assign(body, body + len);
+            if (colorType == 3 && len > 0 && len <= 256) {
+                paletteAlpha.assign(body, body + len);
+            } else if ((colorType == 0 && len == 2) || (colorType == 2 && len == 6)) {
+                transparency.assign(body, body + len);
+            } else {
+                if (error) *error = "png: invalid tRNS length or colour type";
+                return false;
+            }
+            sawTrns = true;
         } else if (std::memcmp(type, "IDAT", 4) == 0) {
             if (idatEnded || idat.size() > MAX_COMPRESSED_BYTES ||
                 static_cast<size_t>(len) > MAX_COMPRESSED_BYTES - idat.size()) {
@@ -575,12 +584,18 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     auto sample = [&](size_t index, int channel, bool sixteen) -> uint8_t {
         if (bitDepth == 8) return pixels[index * static_cast<size_t>(channels) + static_cast<size_t>(channel)];
         if (sixteen) return pixels[index * static_cast<size_t>(channels) * 2 + static_cast<size_t>(channel) * 2];
-        /* sub-byte depths (only for grey / palette) */
-        const size_t bitPos = index * static_cast<size_t>(bitDepth);
-        const uint8_t byte = pixels[bitPos / 8];
+        /* Packed samples restart at each row; row padding is not part of the pixel stream. */
+        const size_t y = index / static_cast<size_t>(width);
+        const size_t x = index % static_cast<size_t>(width);
+        const size_t bitPos = x * static_cast<size_t>(bitDepth);
+        const uint8_t byte = pixels[y * rowBytes + bitPos / 8];
         const int shift = 8 - bitDepth - static_cast<int>(bitPos % 8);
         const int mask = (1 << bitDepth) - 1;
         return static_cast<uint8_t>((byte >> shift) & mask);
+    };
+    auto sample16 = [&](size_t index, int channel) -> uint16_t {
+        const size_t at = (index * static_cast<size_t>(channels) + static_cast<size_t>(channel)) * 2;
+        return static_cast<uint16_t>((static_cast<uint16_t>(pixels[at]) << 8) | pixels[at + 1]);
     };
 
     const bool sixteen = (bitDepth == 16);
@@ -595,9 +610,11 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
             if (bitDepth == 8) {
                 idx = pixels[i];
             } else {
-                const size_t bitPos = i * static_cast<size_t>(bitDepth);
+                const size_t y = i / static_cast<size_t>(width);
+                const size_t x = i % static_cast<size_t>(width);
+                const size_t bitPos = x * static_cast<size_t>(bitDepth);
                 const int shift = 8 - bitDepth - static_cast<int>(bitPos % 8);
-                idx = (pixels[bitPos / 8] >> shift) & ((1 << bitDepth) - 1);
+                idx = (pixels[y * rowBytes + bitPos / 8] >> shift) & ((1 << bitDepth) - 1);
             }
             if (static_cast<size_t>(idx) >= entries) {
                 if (error) *error = "png: palette index out of range";
@@ -615,19 +632,36 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
     for (size_t i = 0; i < pixelCount; ++i) {
         switch (colorType) {
             case 0: {
-                const uint8_t g = sample(i, 0, sixteen);
+                const uint16_t rawGray = sixteen ? sample16(i, 0) : sample(i, 0, false);
+                const uint8_t g = sixteen ? static_cast<uint8_t>(rawGray >> 8)
+                    : bitDepth == 8 ? static_cast<uint8_t>(rawGray)
+                    : static_cast<uint8_t>(rawGray * 255u / ((1u << bitDepth) - 1u));
                 out->rgba[i * 4 + 0] = g;
                 out->rgba[i * 4 + 1] = g;
                 out->rgba[i * 4 + 2] = g;
-                out->rgba[i * 4 + 3] = 255;
+                bool transparent = false;
+                if (transparency.size() == 2) {
+                    const uint16_t key = static_cast<uint16_t>((static_cast<uint16_t>(transparency[0]) << 8) | transparency[1]);
+                    transparent = rawGray == key;
+                }
+                out->rgba[i * 4 + 3] = transparent ? 0 : 255;
                 break;
             }
-            case 2:
-                out->rgba[i * 4 + 0] = sample(i, 0, sixteen);
-                out->rgba[i * 4 + 1] = sample(i, 1, sixteen);
-                out->rgba[i * 4 + 2] = sample(i, 2, sixteen);
-                out->rgba[i * 4 + 3] = 255;
+            case 2: {
+                bool transparent = transparency.size() == 6;
+                for (int c = 0; c < 3; ++c) {
+                    out->rgba[i * 4 + static_cast<size_t>(c)] = sample(i, c, sixteen);
+                    if (transparent) {
+                        const size_t keyAt = static_cast<size_t>(c) * 2;
+                        const uint16_t key = static_cast<uint16_t>((static_cast<uint16_t>(transparency[keyAt]) << 8) |
+                                                                   transparency[keyAt + 1]);
+                        const uint16_t value = sixteen ? sample16(i, c) : sample(i, c, false);
+                        if (value != key) transparent = false;
+                    }
+                }
+                out->rgba[i * 4 + 3] = transparent ? 0 : 255;
                 break;
+            }
             case 4: {
                 const uint8_t g = sample(i, 0, sixteen);
                 out->rgba[i * 4 + 0] = g;

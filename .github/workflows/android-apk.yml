@@ -115,12 +115,17 @@ jobs:
           # "tools" is no longer a valid sdkmanager package on current SDK repositories.
           packages: "platform-tools"
 
+      - name: Install Rust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cargo rustc
+
       - name: Install Android build packages
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
 
-      - name: Run full host regression, shader, GLB, and ABI checks
+      - name: Run full host regression, shader, GLB, ABI, and Rust workspace checks
         run: bash tools/verify.sh
 
       - name: Configure optional release signing

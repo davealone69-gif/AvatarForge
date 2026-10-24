@@ -204,6 +204,13 @@ impl Engine {
         &self.spec
     }
 
+    /// Raw handle for the optional renderer binding. The renderer API requires the caller to keep
+    /// this engine alive and avoid mutating it while attached.
+    #[cfg(feature = "renderer")]
+    pub(crate) fn as_raw_handle(&self) -> *mut sys::af_engine {
+        self.handle
+    }
+
     /// A cheap, cloneable progress/cancel handle for this engine.
     pub fn job(&self) -> JobHandle {
         JobHandle { state: std::sync::Arc::clone(&self.bridge.state) }

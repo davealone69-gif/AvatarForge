@@ -53,7 +53,9 @@
 #include <atomic>
 #include <chrono>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
+#include <zlib.h>
 
 using namespace af;
 
@@ -71,6 +73,77 @@ static int g_checks = 0;
     if (std::fabs(_a - _b) > (tol)) { ++g_failures; std::printf("  \x1b[31mFAIL\x1b[0m %s:%d  ", __FILE__, __LINE__); std::printf(__VA_ARGS__); \
         std::printf("  (got %.6f, expected %.6f +/- %.6f)\n", _a, _b, (double)(tol)); } \
 } while (0)
+
+static void appendBe32(std::vector<uint8_t>* out, uint32_t value) {
+    out->push_back(static_cast<uint8_t>(value >> 24));
+    out->push_back(static_cast<uint8_t>(value >> 16));
+    out->push_back(static_cast<uint8_t>(value >> 8));
+    out->push_back(static_cast<uint8_t>(value));
+}
+
+static void appendPngChunk(std::vector<uint8_t>* png, const char type[4],
+                           const std::vector<uint8_t>& bytes) {
+    appendBe32(png, static_cast<uint32_t>(bytes.size()));
+    const size_t crcStart = png->size();
+    png->insert(png->end(), type, type + 4);
+    png->insert(png->end(), bytes.begin(), bytes.end());
+    uLong crc = crc32(0L, Z_NULL, 0);
+    crc = crc32(crc, reinterpret_cast<const Bytef*>(png->data() + crcStart),
+                static_cast<uInt>(4 + bytes.size()));
+    appendBe32(png, static_cast<uint32_t>(crc));
+}
+
+static std::vector<uint8_t> makeGlbFixture(const std::string& jsonText, std::vector<uint8_t> binary = {}) {
+    auto appendLe32 = [](std::vector<uint8_t>* out, uint32_t value) {
+        out->push_back(static_cast<uint8_t>(value));
+        out->push_back(static_cast<uint8_t>(value >> 8));
+        out->push_back(static_cast<uint8_t>(value >> 16));
+        out->push_back(static_cast<uint8_t>(value >> 24));
+    };
+    const size_t jsonBytes = (jsonText.size() + 3u) & ~size_t(3u);
+    const size_t binBytes = (binary.size() + 3u) & ~size_t(3u);
+    const uint64_t total64 = 12u + 8u + jsonBytes + (binary.empty() ? 0u : 8u + binBytes);
+    if (total64 > std::numeric_limits<uint32_t>::max()) return {};
+    std::vector<uint8_t> glb{'g', 'l', 'T', 'F'};
+    appendLe32(&glb, 2);
+    appendLe32(&glb, static_cast<uint32_t>(total64));
+    appendLe32(&glb, static_cast<uint32_t>(jsonBytes));
+    appendLe32(&glb, 0x4E4F534A);
+    glb.insert(glb.end(), jsonText.begin(), jsonText.end());
+    glb.resize(20u + jsonBytes, ' ');
+    if (!binary.empty()) {
+        appendLe32(&glb, static_cast<uint32_t>(binBytes));
+        appendLe32(&glb, 0x004E4942);
+        glb.insert(glb.end(), binary.begin(), binary.end());
+        glb.resize(glb.size() + binBytes - binary.size(), 0);
+    }
+    return glb;
+}
+
+static std::vector<uint8_t> makePngFixture(int width, int height, int bitDepth, int colorType,
+                                           const std::vector<uint8_t>& raw,
+                                           const std::vector<uint8_t>& palette = {},
+                                           const std::vector<uint8_t>& transparency = {}) {
+    static const uint8_t signature[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    std::vector<uint8_t> png(signature, signature + sizeof(signature));
+    std::vector<uint8_t> ihdr;
+    appendBe32(&ihdr, static_cast<uint32_t>(width));
+    appendBe32(&ihdr, static_cast<uint32_t>(height));
+    ihdr.push_back(static_cast<uint8_t>(bitDepth));
+    ihdr.push_back(static_cast<uint8_t>(colorType));
+    ihdr.insert(ihdr.end(), {0, 0, 0});
+    appendPngChunk(&png, "IHDR", ihdr);
+    if (!palette.empty()) appendPngChunk(&png, "PLTE", palette);
+    if (!transparency.empty()) appendPngChunk(&png, "tRNS", transparency);
+    uLongf compressedSize = compressBound(static_cast<uLong>(raw.size()));
+    std::vector<uint8_t> compressed(static_cast<size_t>(compressedSize));
+    if (compress2(compressed.data(), &compressedSize, raw.data(), static_cast<uLong>(raw.size()),
+                  Z_BEST_SPEED) != Z_OK) return {};
+    compressed.resize(static_cast<size_t>(compressedSize));
+    appendPngChunk(&png, "IDAT", compressed);
+    appendPngChunk(&png, "IEND", {});
+    return png;
+}
 
 static const char* PASS = "\x1b[32mPASS\x1b[0m";
 
@@ -1159,6 +1232,10 @@ static bool allShellsOutward(const af::Mesh& mesh) {
 
 static void testRig() {
     std::printf("\n[7] rig, skinning and animation\n");
+    CHECK(af_engine_clip_duration(nullptr, AF_CLIP_WALK) > 0.0f,
+          "immutable clip duration is readable without an engine lease");
+    CHECK(af_engine_clip_duration(nullptr, AF_CLIP_REST) == 0.0f,
+          "rest pose has no duration without an engine lease");
     af_spec spec;
     af_spec_init(&spec);
     spec.sex = AF_SEX_FEMALE; spec.build = AF_BUILD_ATHLETIC; spec.height_m = 1.70f;
@@ -2138,6 +2215,65 @@ static void testGlbImport() {
         CHECK(!deep, "JSON: excessive nesting is refused, not stack-overflowed");
     }
 
+    /* ---- 14a.1 hostile GLB accessor arithmetic and unsigned index decoding ---- */
+    {
+        const std::string hugeAccessorJson =
+            "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteLength\":12,\"byteStride\":9007199254740992}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,"
+            "\"count\":2049,\"type\":\"VEC3\"}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],"
+            "\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        const std::vector<uint8_t> tinyBinary(12, 0);
+        const std::vector<uint8_t> oversized = makeGlbFixture(hugeAccessorJson, tinyBinary);
+        GlbAsset hostileAccessor;
+        std::string err;
+        const int oversizedRc = importGlb(oversized.data(), oversized.size(), &hostileAccessor, &err);
+        CHECK(oversizedRc != AF_OK && !err.empty(),
+              "GLB: accessor count/stride overflow is rejected before allocation or pointer arithmetic");
+
+        std::string indexJson =
+            "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":48}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        std::vector<uint8_t> binary(48, 0);
+        binary[36] = binary[37] = binary[38] = binary[39] = 0xFF;
+        const std::vector<uint8_t> badIndexGlb = makeGlbFixture(indexJson, binary);
+        GlbAsset hostileIndex;
+        err.clear();
+        const int indexRc = importGlb(badIndexGlb.data(), badIndexGlb.size(), &hostileIndex, &err);
+        CHECK(indexRc != AF_OK && err.find("index") != std::string::npos,
+              "GLB: UINT32 indices are decoded as integers and out-of-range values rejected");
+
+        const std::string sparseIndexJson =
+            "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":52}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":3},"
+            "{\"buffer\":0,\"byteOffset\":40,\"byteLength\":6}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\","
+            "\"sparse\":{\"count\":3,\"indices\":{\"bufferView\":1,\"componentType\":5121},"
+            "\"values\":{\"bufferView\":2}}}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        std::vector<uint8_t> sparseBinary(52, 0);
+        const float triangle[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        std::memcpy(sparseBinary.data(), triangle, sizeof(triangle));
+        sparseBinary[36] = 0; sparseBinary[37] = 1; sparseBinary[38] = 2;
+        sparseBinary[42] = 1; sparseBinary[44] = 2;
+        const std::vector<uint8_t> sparseGlb = makeGlbFixture(sparseIndexJson, sparseBinary);
+        GlbAsset sparseAsset;
+        err.clear();
+        const int sparseRc = importGlb(sparseGlb.data(), sparseGlb.size(), &sparseAsset, &err);
+        CHECK(sparseRc == AF_OK && !sparseAsset.primitives.empty() &&
+              sparseAsset.primitives[0].indices == std::vector<uint32_t>({0, 1, 2}),
+              "GLB: sparse-only UINT16 index accessors decode directly without float rounding");
+    }
+
     /* ---- 14b. PNG encode -> decode is lossless for an 8-bit RGBA image ---- */
     {
         const int w = 37, h = 19;   /* deliberately not a power of two, odd width per row */
@@ -2158,6 +2294,73 @@ static void testGlbImport() {
             CHECK(img.rgba == pixels, "PNG: every RGBA byte survives the round trip");
         }
 
+        /* Packed samples start afresh on every row, scale to RGBA8, and preserve tRNS keys. */
+        {
+            const std::vector<uint8_t> raw = {0, 0x55, 0x00, 0, 0xAA, 0x80};
+            const std::vector<uint8_t> packed = makePngFixture(9, 2, 1, 0, raw);
+            DecodedImage packedImage;
+            const bool packedOk = decodePng(packed.data(), packed.size(), &packedImage, &err);
+            CHECK(packedOk, "PNG: one-bit grayscale packed rows decode");
+            if (packedOk) {
+                bool pattern = true;
+                for (int y = 0; y < 2; ++y) for (int x = 0; x < 9; ++x) {
+                    const uint8_t expected = ((x + y) & 1) ? 255 : 0;
+                    pattern = pattern && packedImage.rgba[(static_cast<size_t>(y) * 9 + x) * 4] == expected;
+                }
+                CHECK(pattern, "PNG: sub-byte grayscale reads each row with its own pad bits");
+            }
+        }
+        {
+            const std::vector<uint8_t> raw = {0, 0x1B, 0x80}; /* 0, 1, 2, 3, 2 at 2 bits */
+            const std::vector<uint8_t> packed = makePngFixture(5, 1, 2, 0, raw);
+            DecodedImage packedImage;
+            const bool packedOk = decodePng(packed.data(), packed.size(), &packedImage, &err);
+            const uint8_t expected[5] = {0, 85, 170, 255, 170};
+            bool scaled = packedOk;
+            for (size_t i = 0; packedOk && i < 5; ++i)
+                scaled = scaled && packedImage.rgba[i * 4] == expected[i];
+            CHECK(scaled, "PNG: 2-bit grayscale samples scale correctly to 8-bit");
+        }
+        {
+            const std::vector<uint8_t> raw = {0, 64};
+            const std::vector<uint8_t> packed = makePngFixture(1, 1, 8, 0, raw, {}, {0, 64});
+            DecodedImage transparentImage;
+            const bool transparentOk = decodePng(packed.data(), packed.size(), &transparentImage, &err);
+            CHECK(transparentOk && transparentImage.rgba.size() == 4 && transparentImage.rgba[0] == 64 &&
+                  transparentImage.rgba[3] == 0, "PNG: grayscale tRNS transparency key is honored");
+        }
+        {
+            const std::vector<uint8_t> raw = {0, 12, 34, 56};
+            const std::vector<uint8_t> packed = makePngFixture(1, 1, 8, 2, raw, {}, {0, 12, 0, 34, 0, 56});
+            DecodedImage transparentImage;
+            const bool transparentOk = decodePng(packed.data(), packed.size(), &transparentImage, &err);
+            CHECK(transparentOk && transparentImage.rgba.size() == 4 &&
+                  transparentImage.rgba[0] == 12 && transparentImage.rgba[1] == 34 &&
+                  transparentImage.rgba[2] == 56 && transparentImage.rgba[3] == 0,
+                  "PNG: RGB tRNS transparency key is compared against all source channels");
+        }
+        {
+            const std::vector<uint8_t> raw = {0, 0x55, 0x00, 0, 0xAA, 0x80};
+            const std::vector<uint8_t> palette = {10, 20, 30, 200, 210, 220};
+            const std::vector<uint8_t> alpha = {255, 0};
+            const std::vector<uint8_t> packed = makePngFixture(9, 2, 1, 3, raw, palette, alpha);
+            DecodedImage paletteImage;
+            const bool paletteOk = decodePng(packed.data(), packed.size(), &paletteImage, &err);
+            CHECK(paletteOk && paletteImage.rgba[4] == 200 && paletteImage.rgba[7] == 0 &&
+                  paletteImage.rgba[0] == 10 && paletteImage.rgba[3] == 255,
+                  "PNG: packed palette row offsets and per-index tRNS are correct");
+        }
+        {
+            /* A compressed 1 MiB stream claims only one RGBA pixel. The inflater must stop at the
+               header-derived 5-byte scanline bound rather than expanding attacker-controlled data. */
+            std::vector<uint8_t> bombRaw(1024u * 1024u, 0);
+            const std::vector<uint8_t> bomb = makePngFixture(1, 1, 8, 6, bombRaw);
+            DecodedImage rejected;
+            const bool bombAccepted = decodePng(bomb.data(), bomb.size(), &rejected, &err);
+            CHECK(!bombAccepted && err.find("bound") != std::string::npos,
+                  "PNG: decompression output is bounded by its dimensions");
+        }
+
         /* Truncation and corruption must fail cleanly, never crash. */
         DecodedImage junk;
         int cleanFailures = 0;
@@ -2171,12 +2374,11 @@ static void testGlbImport() {
             CHECK(false, "PNG: encoded fixture is non-empty before corruption");
             return;
         }
-        corrupt[corrupt.size() / 2] ^= 0xFF;
+        corrupt.back() ^= 0xFF;  /* corrupt the IEND CRC deterministically */
         DecodedImage corrupted;
         const bool survived = decodePng(corrupt.data(), corrupt.size(), &corrupted, &err);
-        /* Either outcome is acceptable; a crash is not. */
-        (void)survived;
-        CHECK(true, "PNG: a corrupted IDAT is survived (decoded or clean error, no crash)");
+        CHECK(!survived && err.find("CRC mismatch") != std::string::npos,
+              "PNG: chunk CRC corruption is rejected explicitly");
     }
 
     /* ---- 14c. the real thing: export a model, import it, compare ---- */

@@ -590,8 +590,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return -1
     }
 
-    fun clipDuration(clip: Int): Float =
-        withNativeHandle { h -> NativeBridge.engineClipDuration(h, clip) }
+    /** Reads immutable clip-library metadata; safe while the renderer holds the engine lease. */
+    fun clipDuration(clip: Int): Float = NativeBridge.engineClipDuration(clip)
 
     fun blendshapeNames(): List<String> = NativeBridge.engineBlendshapeNames().toList()
 

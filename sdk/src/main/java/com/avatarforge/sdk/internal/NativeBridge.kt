@@ -102,7 +102,7 @@ internal object NativeBridge {
     external fun engineBlendshapeNames(): Array<String>
     external fun engineClipCount(): Int
     external fun engineClipName(clip: Int): String
-    external fun engineClipDuration(handle: Long, clip: Int): Float
+    external fun engineClipDuration(clip: Int): Float
     external fun engineRegionName(region: Int): String
 
     /* ------------------------------------------------------------------ mesh views ----------- */

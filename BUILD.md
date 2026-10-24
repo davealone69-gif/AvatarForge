@@ -230,7 +230,8 @@ the renderer's budget controller steps quality down if frames run long rather th
 ```bash
 cd rust
 AF_CORE_LIB_DIR=/home/user/AvatarForge/build-host cargo build --offline
-cargo test --offline                       # unit tests
+cargo test --offline --workspace          # all three Rust crates
+cargo check --offline --workspace --all-features --all-targets  # includes af::render
 AF_CORE_LIB_DIR=/home/user/AvatarForge/build-host \
   cargo test --offline --release -p af --test engine -- --ignored --nocapture --test-threads=1
 ```

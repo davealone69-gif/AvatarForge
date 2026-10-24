@@ -120,6 +120,21 @@ export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export PATH="$CARGO_HOME/bin:$PATH"
 if command -v cargo >/dev/null 2>&1; then
+    # The Android package workflow used to build/test only af-core. That misses the raw FFI and
+    # safe wrapper crates (and the optional renderer module), so exercise the complete workspace.
+    if ( cd rust && cargo test --offline --workspace ) > /tmp/af_rust_workspace_test.txt 2>&1; then
+        RUST_TEST_TARGETS="$(grep -c 'test result: ok\.' /tmp/af_rust_workspace_test.txt || true)"
+        ok "Rust workspace tests passed across $RUST_TEST_TARGETS test targets"
+    else
+        bad "Rust workspace tests failed - see /tmp/af_rust_workspace_test.txt"
+        tail -12 /tmp/af_rust_workspace_test.txt | sed 's/^/      /'
+    fi
+    if ( cd rust && cargo check --offline --workspace --all-features --all-targets ) > /tmp/af_rust_all_features.txt 2>&1; then
+        ok "Rust workspace compiles with every feature and target enabled"
+    else
+        bad "Rust workspace/all-features compile failed - see /tmp/af_rust_all_features.txt"
+        tail -12 /tmp/af_rust_all_features.txt | sed 's/^/      /'
+    fi
     if ( cd rust && cargo build --release --offline -q -p af-core ) > /tmp/af_rust_build.txt 2>&1; then
         if python3 tools/abi_conformance.py rust/target/release/libafcore_rust.so \
                 --reference build-host/libafcore.so > /tmp/af_abi_rust.txt 2>&1; then

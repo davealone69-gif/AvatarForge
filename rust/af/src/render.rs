@@ -13,6 +13,7 @@
 
 use af_sys::af_engine;
 use core::ffi::{c_char, c_void, CStr};
+use core::marker::PhantomData;
 
 use crate::error::{Error, Result};
 
@@ -77,7 +78,7 @@ impl Default for RenderOptions {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub yaw_deg: f32,
     pub pitch_deg: f32,
@@ -201,11 +202,13 @@ extern "C" {
 }
 
 /// Owns one backend instance (Vulkan or GLES) for one Android window.
-pub struct Renderer {
+pub struct Renderer<'engine> {
     handle: *mut c_void,
+    /* An attached engine must outlive this renderer. */
+    _engine: PhantomData<&'engine crate::Engine>,
 }
 
-impl Renderer {
+impl Renderer<'static> {
     /// `native_window` is an `ANativeWindow*` - on Android, the pointer behind a `Surface`.
     /// Returns the reason string from `Renderer::create` on failure, never a null renderer.
     pub fn create(native_window: *mut c_void, options: RenderOptions) -> Result<Self> {
@@ -224,27 +227,32 @@ impl Renderer {
             };
             return Err(Error::Unsupported(message));
         }
-        Ok(Self { handle })
+        Ok(Self { handle, _engine: PhantomData })
     }
 
+    /// Binds an engine handle. Consuming the unbound renderer and returning one tied to the
+    /// engine's lifetime prevents safe Rust code from dropping the engine while native rendering
+    /// uses it.
+    pub fn attach_engine<'engine>(self, engine: &'engine crate::Engine) -> Result<Renderer<'engine>> {
+        let handle = self.handle;
+        let code = unsafe { af_renderer_attach_engine(handle, engine.as_raw_handle()) };
+        if code == af_sys::AF_OK {
+            /* Transfer native-handle ownership to the result without destroying it here. */
+            core::mem::forget(self);
+            Ok(Renderer { handle, _engine: PhantomData })
+        } else {
+            Err(Error::Internal(format!("attach_engine failed with code {code}")))
+        }
+    }
+}
+
+impl<'engine> Renderer<'engine> {
     pub fn resize(&self, width: i32, height: i32) -> Result<()> {
         let code = unsafe { af_renderer_resize(self.handle, width, height) };
         if code == af_sys::AF_OK {
             Ok(())
         } else {
             Err(Error::Internal(format!("resize failed with code {code}")))
-        }
-    }
-
-    /// Binds an engine handle, whose lifetime must exceed the renderer's.
-    pub fn attach_engine(&self, engine: &crate::Engine) -> Result<()> {
-        // SAFETY: the caller guarantees the engine outlives the renderer (documented on
-        // Renderer::create and enforced by the app's ownership structure).
-        let code = unsafe { af_renderer_attach_engine(self.handle, engine.as_raw_handle()) };
-        if code == af_sys::AF_OK {
-            Ok(())
-        } else {
-            Err(Error::Internal(format!("attach_engine failed with code {code}")))
         }
     }
 
@@ -306,7 +314,7 @@ impl Renderer {
     }
 }
 
-impl Drop for Renderer {
+impl Drop for Renderer<'_> {
     fn drop(&mut self) {
         unsafe { af_renderer_destroy(self.handle) };
     }

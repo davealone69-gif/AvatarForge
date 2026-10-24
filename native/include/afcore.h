@@ -256,9 +256,11 @@ int32_t af_engine_apply_pose(af_engine* engine, const af_pose* pose);
 int32_t af_engine_sample_clip(af_engine* engine, int32_t clip, float time_seconds, af_pose* out_pose);
 int32_t af_engine_apply_clip(af_engine* engine, int32_t clip, float time_seconds);
 
-/* Clip metadata for the UI's animation picker. Both are pure introspection.
-   `af_engine_clip_duration` returns 0 for AF_CLIP_REST (a static pose, not a timed clip) and for
-   ids outside the built-in library. `af_engine_clip_name` writes the canonical authored name
+/* Clip metadata for the UI's animation picker. Both are pure introspection; duration reads only
+   the immutable built-in clip table, so it may be queried with a null engine handle while a
+   renderer owns the live engine lease. `af_engine_clip_duration` returns 0 for AF_CLIP_REST (a
+   static pose, not a timed clip) and for ids outside the built-in library. `af_engine_clip_name`
+   writes the canonical authored name
    ("walk", "t_pose", ...) and returns its length, or 0 if the id is unknown. */
 float   af_engine_clip_duration(const af_engine* engine, int32_t clip);
 int32_t af_engine_clip_name(int32_t clip, char* out_name, int32_t max_bytes);

@@ -347,7 +347,7 @@ pub const AF_TEX_SUBSURFACE: c_int = 4;
 pub const AF_TEX_COUNT: c_int = 5;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct af_texture {
     pub width: i32,
     pub height: i32,
@@ -355,6 +355,35 @@ pub struct af_texture {
     pub mip_levels: i32,
     pub byte_size: u64,
     pub data: *const u8,
+}
+
+impl Default for af_texture {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            channels: 0,
+            mip_levels: 0,
+            byte_size: 0,
+            data: core::ptr::null(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::af_texture;
+
+    #[test]
+    fn texture_default_is_empty_and_null() {
+        let texture = af_texture::default();
+        assert_eq!(texture.width, 0);
+        assert_eq!(texture.height, 0);
+        assert_eq!(texture.channels, 0);
+        assert_eq!(texture.mip_levels, 0);
+        assert_eq!(texture.byte_size, 0);
+        assert!(texture.data.is_null());
+    }
 }
 
 /* ------------------------------------------------------------------ stats ----------------- */
@@ -512,9 +541,3 @@ extern "C" {
 const _: () = assert!(core::mem::size_of::<af_vertex>() == 88);
 const _: () = assert!(core::mem::align_of::<af_vertex>() == 4);
 const _: () = assert!(core::mem::size_of::<af_submesh>() == 48);
-const _: () = assert!(core::mem::size_of::<af_camera_guard_placeholder>() > 0);
-
-/// Placeholder used only by the size assertion above; keeps the layout arithmetic documented in
-/// one place without exposing an empty struct to users of the crate.
-#[repr(C)]
-struct af_camera_guard_placeholder(u8);

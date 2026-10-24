@@ -30,10 +30,18 @@ constexpr uint32_t GLB_MAGIC = 0x46546C67u;   /* 'glTF' little-endian */
 constexpr uint32_t CHUNK_JSON = 0x4E4F534Au;
 constexpr uint32_t CHUNK_BIN = 0x004E4942u;
 constexpr int MAX_NODE_DEPTH = 256;
+constexpr size_t MAX_ACCESSOR_FLOATS = 8u * 1024u * 1024u;
+constexpr size_t MAX_ACCESSOR_INDICES = 8u * 1024u * 1024u;
 
 uint32_t rd32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+uint32_t readUnsignedLE(const uint8_t* p, int size) {
+    if (size == 1) return p[0];
+    if (size == 2) return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8);
+    return rd32(p);
 }
 
 int componentSize(int componentType) {
@@ -396,7 +404,6 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
         return AF_ERR_INVALID_ARG;
     }
     size_t floatCount = 0;
-    constexpr size_t MAX_ACCESSOR_FLOATS = size_t{1} << 24; /* bound sparse-only hostile allocations too */
     if (!checkedMul(view.count, static_cast<size_t>(components), &floatCount) ||
         floatCount > out->max_size() || floatCount > MAX_ACCESSOR_FLOATS) {
         if (error) *error = "glTF: accessor output allocation size overflows or exceeds the importer limit";
@@ -424,35 +431,122 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
         }
     }
     if (applySparse(bin, binSize, doc, acc, view.count, components, out->data(), error) != AF_OK) return AF_ERR_INVALID_ARG;
+    for (float value : *out) {
+        if (!std::isfinite(value)) {
+            if (error) *error = "glTF: accessor contains a non-finite value";
+            return AF_ERR_INVALID_ARG;
+        }
+    }
     *outCount = view.count;
     return AF_OK;
 }
 
-/* Indices as u32, whatever their stored width. */
+/* Decode index accessors as integer data end-to-end. Going through float loses UINT32 low bits
+   and can invoke undefined float-to-integer conversion for 0xffffffff. */
 int readIndices(const uint8_t* bin, size_t binSize, const json::Json& doc, int accessorIndex,
                 std::vector<uint32_t>* out, std::string* error) {
-    const json::Json& accessor = doc["accessors"].atOrNull(static_cast<size_t>(accessorIndex < 0 ? 0 : accessorIndex));
-    const int componentType = accessor["componentType"].asInt(0);
-    if (accessorIndex < 0 || accessor.isNull() ||
-        (componentType != 5121 && componentType != 5123 && componentType != 5125) ||
-        accessor["type"].stringOr("") != "SCALAR") {
-        if (error) *error = "glTF: indices accessor must be an unsigned integer SCALAR";
+    if (!out || accessorIndex < 0) return AF_ERR_INVALID_ARG;
+    const json::Json& accessor = doc["accessors"].atOrNull(static_cast<size_t>(accessorIndex));
+    if (accessor.isNull() || accessor["type"].stringOr("") != "SCALAR") {
+        if (error) *error = "glTF: index accessor must be an unsigned integer SCALAR";
         return AF_ERR_INVALID_ARG;
     }
-    std::vector<float> raw;
-    size_t count = 0;
-    const int rc = readAccessorFloats(bin, binSize, doc, accessorIndex, 1, &raw, &count, error);
+    AccessorView view;
+    const int rc = resolveAccessor(bin, binSize, doc, accessorIndex, &view, error);
     if (rc != AF_OK) return rc;
-    out->resize(count);
-    for (size_t i = 0; i < count; ++i) {
-        const float v = raw[i];
-        if (!std::isfinite(v) || v < 0.0f ||
-            static_cast<double>(v) > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
-            if (error) *error = "glTF: index is negative, non-finite, or outside the u32 range";
+    const int valueType = view.componentType;
+    const int valueSize = componentSize(valueType);
+    if ((valueType != 5121 && valueType != 5123 && valueType != 5125) || view.normalized ||
+        view.components != 1 || view.stride != static_cast<size_t>(valueSize)) {
+        if (error) *error = "glTF: indices must be tightly packed unsigned scalar values";
+        return AF_ERR_INVALID_ARG;
+    }
+    if (view.count > MAX_ACCESSOR_INDICES) {
+        if (error) *error = "glTF: index accessor exceeds the bounded importer limit";
+        return AF_ERR_UNSUPPORTED;
+    }
+    std::vector<uint32_t> decoded(view.count, 0);
+    if (view.base) {
+        for (size_t i = 0; i < view.count; ++i) {
+            size_t offset = 0, elementEnd = 0;
+            if (!checkedMul(i, view.stride, &offset) ||
+                !checkedAdd(offset, static_cast<size_t>(valueSize), &elementEnd)) {
+                if (error) *error = "glTF: index element offset overflows";
+                return AF_ERR_INVALID_ARG;
+            }
+            (void)elementEnd; /* resolveAccessor already proved every element is inside its bufferView. */
+            decoded[i] = readUnsignedLE(view.base + offset, valueSize);
+        }
+    }
+
+    const json::Json& sparse = accessor["sparse"];
+    if (!sparse.isNull()) {
+        if (!bin) {
+            if (error) *error = "glTF: sparse index accessor requires a binary chunk";
             return AF_ERR_INVALID_ARG;
         }
-        (*out)[i] = static_cast<uint32_t>(v);
+        size_t sparseCount = 0;
+        if (!sparse["count"].asIndex(&sparseCount) || sparseCount == 0 || sparseCount > view.count) {
+            if (error) *error = "glTF: invalid sparse index accessor count";
+            return AF_ERR_INVALID_ARG;
+        }
+        const int sparseIndexType = sparse["indices"]["componentType"].asInt(0);
+        const int sparseIndexSize = componentSize(sparseIndexType);
+        if (sparseIndexType != 5121 && sparseIndexType != 5123 && sparseIndexType != 5125) {
+            if (error) *error = "glTF: sparse index positions use an unsupported component type";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t sparseIndexView = 0, sparseValueView = 0;
+        if (!sparse["indices"]["bufferView"].asIndex(&sparseIndexView) ||
+            !sparse["values"]["bufferView"].asIndex(&sparseValueView)) {
+            if (error) *error = "glTF: sparse index accessor has an invalid bufferView reference";
+            return AF_ERR_INVALID_ARG;
+        }
+        const json::Json& idxBv = doc["bufferViews"].atOrNull(sparseIndexView);
+        const json::Json& valBv = doc["bufferViews"].atOrNull(sparseValueView);
+        if (idxBv.isNull() || valBv.isNull() || idxBv.find("byteStride") || valBv.find("byteStride")) {
+            if (error) *error = "glTF: sparse index bufferViews are invalid";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t idxViewOffset = 0, idxViewLength = 0, valViewOffset = 0, valViewLength = 0;
+        size_t idxBuffer = 0, valBuffer = 0;
+        if ((!idxBv["byteOffset"].isNull() && !idxBv["byteOffset"].asIndex(&idxViewOffset)) ||
+            !idxBv["byteLength"].asIndex(&idxViewLength) ||
+            !idxBv["buffer"].asIndex(&idxBuffer) || idxBuffer != 0 ||
+            !checkedRange(idxViewOffset, idxViewLength, binSize) ||
+            (!valBv["byteOffset"].isNull() && !valBv["byteOffset"].asIndex(&valViewOffset)) ||
+            !valBv["byteLength"].asIndex(&valViewLength) ||
+            !valBv["buffer"].asIndex(&valBuffer) || valBuffer != 0 ||
+            !checkedRange(valViewOffset, valViewLength, binSize)) {
+            if (error) *error = "glTF: sparse index bufferView range is invalid";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t idxOffset = 0, valOffset = 0, idxSpan = 0, valSpan = 0;
+        size_t idxStart = 0, valStart = 0;
+        if ((!sparse["indices"]["byteOffset"].isNull() && !sparse["indices"]["byteOffset"].asIndex(&idxOffset)) ||
+            (!sparse["values"]["byteOffset"].isNull() && !sparse["values"]["byteOffset"].asIndex(&valOffset)) ||
+            !checkedMul(sparseCount, static_cast<size_t>(sparseIndexSize), &idxSpan) ||
+            !checkedMul(sparseCount, static_cast<size_t>(valueSize), &valSpan) ||
+            !checkedRange(idxOffset, idxSpan, idxViewLength) || !checkedRange(valOffset, valSpan, valViewLength) ||
+            !checkedAdd(idxViewOffset, idxOffset, &idxStart) || !checkedAdd(valViewOffset, valOffset, &valStart) ||
+            !checkedRange(idxStart, idxSpan, binSize) || !checkedRange(valStart, valSpan, binSize)) {
+            if (error) *error = "glTF: sparse index data offset/span overflows or exceeds its bufferView";
+            return AF_ERR_INVALID_ARG;
+        }
+        const uint8_t* idxBase = bin + idxStart;
+        const uint8_t* valBase = bin + valStart;
+        size_t previous = 0;
+        for (size_t i = 0; i < sparseCount; ++i) {
+            const size_t target = static_cast<size_t>(readUnsignedLE(idxBase + i * static_cast<size_t>(sparseIndexSize), sparseIndexSize));
+            if (target >= view.count || (i > 0 && target <= previous)) {
+                if (error) *error = "glTF: sparse index positions must be increasing and within the accessor";
+                return AF_ERR_INVALID_ARG;
+            }
+            previous = target;
+            decoded[target] = readUnsignedLE(valBase + i * static_cast<size_t>(valueSize), valueSize);
+        }
     }
+    out->swap(decoded);
     return AF_OK;
 }
 

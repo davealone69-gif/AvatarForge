@@ -524,10 +524,8 @@ JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineC
 }
 
 JNIEXPORT jfloat JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineClipDuration(
-    JNIEnv*, jobject, jlong h, jint clip) {
-    EngineHandle* handle = asHandle(h);
-    if (!handle || !handle->engine) return 0.0f;
-    return af_engine_clip_duration(handle->engine, clip);
+    JNIEnv*, jobject, jint clip) {
+    return af_engine_clip_duration(nullptr, clip);
 }
 
 JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineRegionName(JNIEnv* env, jobject, jint region) {
