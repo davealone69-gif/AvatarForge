@@ -2146,7 +2146,9 @@ static void testGlbImport() {
             pixels[i] = static_cast<uint8_t>((i * 37 + (i >> 5) * 11) & 0xFF);
         }
         std::vector<uint8_t> png;
-        CHECK(encodePng(pixels.data(), w, h, 4, &png), "PNG: encoder produced a file");
+        const bool encoded = encodePng(pixels.data(), w, h, 4, &png);
+        CHECK(encoded && !png.empty(), "PNG: encoder produced a file");
+        if (!encoded || png.empty()) return;
         DecodedImage img;
         std::string err;
         const bool decoded = decodePng(png.data(), png.size(), &img, &err);
@@ -2165,6 +2167,10 @@ static void testGlbImport() {
         CHECK(cleanFailures > 0, "PNG: truncated files are rejected");
 
         std::vector<uint8_t> corrupt = png;
+        if (corrupt.empty()) {
+            CHECK(false, "PNG: encoded fixture is non-empty before corruption");
+            return;
+        }
         corrupt[corrupt.size() / 2] ^= 0xFF;
         DecodedImage corrupted;
         const bool survived = decodePng(corrupt.data(), corrupt.size(), &corrupted, &err);
@@ -2194,8 +2200,14 @@ static void testGlbImport() {
 
     uint8_t* bytes = nullptr;
     size_t byteCount = 0;
-    CHECK(af_engine_export_glb_to_memory(engine, &bytes, &byteCount) == AF_OK && bytes && byteCount > 0,
+    const int32_t exportRc = af_engine_export_glb_to_memory(engine, &bytes, &byteCount);
+    CHECK(exportRc == AF_OK && bytes != nullptr && byteCount > 0,
           "GLB import: exporter produced a file");
+    if (exportRc != AF_OK || bytes == nullptr || byteCount == 0) {
+        if (bytes) af_arena_free(bytes);
+        af_engine_destroy(engine);
+        return;
+    }
     std::vector<uint8_t> glb(bytes, bytes + byteCount);
     std::printf("     exported %zu bytes (%.1f MB)\n", glb.size(), glb.size() / 1048576.0);
 
@@ -2676,8 +2688,14 @@ static void testEngineImport() {
 
     uint8_t* bytes = nullptr;
     size_t byteCount = 0;
-    CHECK(af_engine_export_glb_to_memory(e, &bytes, &byteCount) == AF_OK && bytes != nullptr,
+    const int32_t exportRc = af_engine_export_glb_to_memory(e, &bytes, &byteCount);
+    CHECK(exportRc == AF_OK && bytes != nullptr && byteCount > 0,
           "import: exported the generated model to memory");
+    if (exportRc != AF_OK || bytes == nullptr || byteCount == 0) {
+        if (bytes) af_arena_free(bytes);
+        af_engine_destroy(e);
+        return;
+    }
 
     /* ---- (a) a hostile file must be refused without touching the engine ---- */
     {
