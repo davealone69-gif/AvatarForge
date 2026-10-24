@@ -9,7 +9,8 @@ close it.
 
 ## 1. What you get
 
-An Android library (`com.avatarforge:sdk`) containing:
+An Android library (Maven coordinates `com.avatarforge:avatarforge-sdk`, packaging `aar`)
+containing:
 
 - `AvatarEngine` — procedural avatar generation (anatomy → geometry → UV/PBR bake → rig →
   blendshapes → animation → glTF binary export), running in-process on SDK-owned threads;
