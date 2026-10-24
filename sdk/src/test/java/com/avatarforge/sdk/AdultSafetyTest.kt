@@ -7,8 +7,16 @@ import org.junit.Test
 class AdultSafetyTest {
     @Test
     fun `adult nude anatomical base is accepted`() {
-        val spec = AvatarSpec(outfit = Outfit.NONE, ageYears = 22f)
+        val spec = AvatarSpec(outfit = Outfit.NONE, ageYears = 22f, adultModeConfirmed = true)
         assertSame(spec, spec.requireGeneratable("adult woman, nude"))
+    }
+
+    @Test
+    fun `unclothed base requires explicit adult confirmation`() {
+        val spec = AvatarSpec(outfit = Outfit.NONE, ageYears = 22f)
+        assertThrows(IllegalArgumentException::class.java) {
+            spec.requireGeneratable("adult woman, nude")
+        }
     }
 
     @Test
