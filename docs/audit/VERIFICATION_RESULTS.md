@@ -80,15 +80,20 @@ Status: REAL + VERIFIED in CI — the first five classes were green from run `40
 the full 28-test set (six classes) is green on run `40107047136`, after one red run
 (`40106628640`, cross-module smart cast) caught and fixed in `d5e397a`.
 
-### 2.6 AF-020 camera-UBO slot fix (host-verified; CI/device pending)
+### 2.6 AF-020 camera-UBO slot fix (host-verified; CI green; device pending)
 
 The fix touches the two renderer translation units (`af_gl.cpp`, `af_vk.cpp`), a new
 dependency-free header `native/src/render/af_align.h`, and the host harness. The sandbox has no
 EGL/Vulkan headers, so renderer-TU compilation is verified only by the CI NDK jobs; the slot
 arithmetic itself is pure constexpr maths and IS host-verified by harness section [17]
-(34 new checks, 439 total, 0 failures locally). CI run IDs for this change set are recorded here
-after the push completes; until then CI status is UNVERIFIED, and any device-level claim about
-the full-screen atlas stays UNVERIFIED regardless of CI colour.
+(34 new checks, 439 total, 0 failures locally).
+
+CI: run `40115970765` on commits `1944aee` + `5c63996` — all three jobs **success**, so the
+GLES and Vulkan renderer TUs compile under the NDK on every ABI, the host job passes, and the
+APK/AAR still assemble. Sandbox log downloads remain blocked, so the CI harness's exact
+"439 checks" line is not directly observable here; the 439/0 result is attested by the local
+full run, and CI green attests the job exited 0. Any device-level claim about the full-screen
+atlas stays UNVERIFIED regardless of CI colour — see the device backlog step 11.
 
 ## 3. Local verification actually performed
 
