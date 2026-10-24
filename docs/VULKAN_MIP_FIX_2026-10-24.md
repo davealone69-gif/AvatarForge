@@ -66,6 +66,12 @@ The mip-chain and depth-format changes are C++ and only reach devices after
 `tools/build_android.sh` regenerates `prebuilt/arm64-v8a/libavatarforge.so`. The Kotlin counter
 and wording fixes ship in the APK regardless.
 
+This rebuild was performed by the `native-compile` CI job (runner NDK r26, CMake 3.22) and
+committed as `e9bc49b` ("Refresh prebuilt arm64-v8a native libraries"), so APK/AAR builds from
+that commit onward package the corrected Vulkan path. The same job now blocks merges on any C++
+that does not compile and refreshes the prebuilts automatically on PR branches when sources are
+newer (one commit per source change, with a loop guard).
+
 ## Device retest checklist
 
 1. Install a build whose prebuilt `.so` includes this change (check the Backend row now ends with
