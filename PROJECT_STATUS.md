@@ -279,3 +279,13 @@ Source-level audit recorded in [`docs/SDK_TRANSPLANT_AUDIT_2026-10-24.md`](docs/
 - `main` was not modified. No runtime, Android build, or AAR consumer build was performed in this audit.
 
 Next action: implement a separate consumer smoke-test app/module, build and inspect the AAR/native ABI payload, then run the canonical 10-step device matrix when hardware is available.
+
+
+## SDK distribution follow-up — 2026-10-24
+
+- Added `docs/SDK_HOST_INTEGRATION.md`: local Maven coordinates, raw-AAR dependency requirements, ABI/manifest notes, process-wide singleton/resource constraints, and an explicitly unpassed 10-step host smoke-test protocol.
+- Added `maven-publish` to `:sdk`. Release publication defaults to `com.avatarforge:avatarforge-sdk:0.10.2-SNAPSHOT`, can be versioned with `-Paf.sdkVersion=...`, and writes a local Maven repository under `sdk/build/repo`. Coroutines is declared as `api` because public API types expose StateFlow/suspend; AndroidX Core and ExifInterface remain declared dependencies. No remote repository or credentials are configured.
+- README links the host integration guide and warns against treating the archived AAR as current.
+- GitHub Actions Android APK run [#40102319017](https://github.com/davealone69-gif/AvatarForge/actions/runs/40102319017) was automatically queued for HEAD `ab525440c81ea307a583d0dc87a595794391ca21`; at checkpoint time it is **QUEUED**, not passed. Its build job includes `:sdk:assembleRelease` and uploads the newly built SDK AAR as an artifact if the workflow succeeds.
+- Not yet done: independent consumer sample app, external AAR consumption build, publication/POM inspection, fresh artifact size/hash, and physical-device lifecycle/render tests. Do not claim these passed until the workflow and consumer checks provide evidence.
+- Runtime remains **UNVERIFIED**; production signing remains **BLOCKED** without a valid keystore. Deferred work remains tracked. `main` unchanged.
