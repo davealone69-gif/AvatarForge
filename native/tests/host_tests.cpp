@@ -2759,9 +2759,11 @@ static void testScene() {
         scene.buildVisibility(cam, 1.0f, &high);
         scene.buildVisibility(cam, 0.0f, &low);
         CHECK(!high.draws.empty() && !low.draws.empty(), "scene: both qualities produced a draw");
-        CHECK(!low.draws.empty() && low.draws[0].lod >= high.draws[0].lod,
-              "scene: lower quality never chooses a finer level (%d vs %d)",
-              low.draws[0].lod, high.draws[0].lod);
+        if (!high.draws.empty() && !low.draws.empty()) {
+            CHECK(low.draws[0].lod >= high.draws[0].lod,
+                  "scene: lower quality never chooses a finer level (%d vs %d)",
+                  low.draws[0].lod, high.draws[0].lod);
+        }
     }
 
     /* ---- 15d. light culling and deterministic ordering ---- */
