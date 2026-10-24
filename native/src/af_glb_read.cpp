@@ -18,6 +18,7 @@
 
 #include "af_json.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -969,9 +970,9 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
     /* This engine currently flattens imported geometry into vertex pools and does not apply
        per-node matrices at draw time. Refuse transformed mesh nodes rather than silently rendering
        geometry in the wrong place. Identity transforms remain supported. */
-    for (const auto& primitive : out->primitives) {
-        if (primitive.node < 0 || static_cast<size_t>(primitive.node) >= out->nodes.size()) continue;
-        const Mat4& world = out->nodes[static_cast<size_t>(primitive.node)].world;
+    for (const auto& node : out->nodes) {
+        if (node.mesh < 0) continue;
+        const Mat4& world = node.world;
         for (size_t i = 0; i < 16; ++i) {
             const float expected = (i == 0 || i == 5 || i == 10 || i == 15) ? 1.0f : 0.0f;
             if (!std::isfinite(world.m[i]) || std::fabs(world.m[i] - expected) > 1e-5f) {
