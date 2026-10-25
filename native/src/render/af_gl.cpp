@@ -118,6 +118,13 @@ private:
     int surfaceWidth_ = 0;
     int surfaceHeight_ = 0;
     uint32_t uboAlignment_ = 256;
+    /* Per-frame camera UBO slice stride. CameraUbo is 448 bytes but UBO slices may only begin at
+       multiples of uboAlignment_ (typically 256), so a single 448-byte block does not fit in one
+       quantum. Striding each frame's slice up to the next alignment multiple keeps consecutive
+       frames from overlapping and keeps the last slice inside the buffer - otherwise the
+       view-projection matrix is torn or written out of bounds and the avatar stretches across the
+       screen. */
+    uint32_t cameraSliceStride_ = 0;
 
     /* ---- programs and uniform locations ---- */
     GLuint forwardProgram_ = 0, shadowProgram_ = 0, groundProgram_ = 0, lineProgram_ = 0;
@@ -230,6 +237,9 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     GLint align = 256;
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     uboAlignment_ = uint32_t(align > 0 ? align : 256);
+    /* CameraUbo is 448 bytes (static_assert in af_render_common.h); stride each frame's slice up
+       to the next alignment multiple so slices never overlap or overrun the buffer. */
+    cameraSliceStride_ = (uint32_t(sizeof(CameraUbo)) + uboAlignment_ - 1u) / uboAlignment_ * uboAlignment_;
 
     /* Floating-point colour attachments: ES 3.2 has them in core, ES 3.0/3.1 need the extension. */
     bool floatColour = (major > 3 || (major == 3 && minor >= 2));
@@ -487,6 +497,16 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     glGenVertexArrays(1, &emptyVao_);
     glGenVertexArrays(1, &lineVao_);
 
+    /* Generate all GPU buffers before configuring VAO attribute pointers so
+       the VAOs capture the real buffer objects rather than buffer 0. Buffer
+       0 has no vertex data; if the VAOs record it as the source for every
+       attribute, the renderer draws uninitialized/garbage memory and the
+       avatar explodes across the screen. */
+    if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
+    if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
+    if (groundVbo_ == 0) glGenBuffers(1, &groundVbo_);
+    if (lineVbo_ == 0) glGenBuffers(1, &lineVbo_);
+
     /* Avatar VAO: the engine's interleaved af_vertex, stride 88. */
     glBindVertexArray(avatarVao_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
@@ -526,19 +546,17 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
 
     const float quad[12] = {-1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f,
                             -1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f};
-    glGenBuffers(1, &groundVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 
     lineCapacity_ = GLint64(4096 * 28);
-    glGenBuffers(1, &lineVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     glBufferData(GL_ARRAY_BUFFER, lineCapacity_, nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glGenBuffers(1, &cameraUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
-    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 2, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(cameraSliceStride_) * 2, nullptr, GL_DYNAMIC_DRAW);
     glGenBuffers(1, &postUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 16, nullptr, GL_DYNAMIC_DRAW);
@@ -776,7 +794,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
 
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     const int frame = int(stats_.frames % 2);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo), &scene_.camera);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraSliceStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
@@ -878,7 +896,7 @@ void GlRenderer::drawForwardPass() {
     glClearColor(0.055f, 0.075f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo));
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraSliceStride_, sizeof(CameraUbo));
 
     /* ---- studio ground ---- */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
