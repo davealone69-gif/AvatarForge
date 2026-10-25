@@ -42,6 +42,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -100,22 +101,37 @@ fun ViewerScreen(
         /* Model gestures: drag to orbit, pinch to zoom, tap to identify what is under the finger.
            The tap is forwarded to the host, which owns the render surface and turns it into a real
            ray/mesh intersection (af_engine_pick_region) using the same camera the frame was drawn
-           with - so what is picked is what is on screen. */
+           with - so what is picked is what is on screen.
+
+           The transform gesture must NOT read the `camera` parameter directly: pointerInput(Unit)
+           runs its block once, at first composition, and keeps that composition's captures for the
+           life of the handler. Reading the parameter there would compute every drag from the pose
+           the viewer had when the screen first appeared, so each new drag snapped the camera back
+           to the front view and the user could never orbit freely. The gesture therefore reads and
+           writes the camera through [liveCamera], which is stable across recompositions; the sync
+           effect keeps it following the host's value when it changes from outside this screen. */
+        val liveCamera = remember { mutableStateOf(camera) }
+        LaunchedEffect(camera) { if (liveCamera.value != camera) liveCamera.value = camera }
+
         Box(
             Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        val yaw = camera.yawDeg - pan.x * 0.25f
-                        val pitch = (camera.pitchDeg + pan.y * 0.20f).coerceIn(-80f, 80f)
-                        val distance = (camera.distance / zoom).coerceIn(0.6f, 8f)
-                        onCamera(
-                            camera.copy(
-                                yawDeg = ((yaw % 360f) + 360f) % 360f,
-                                pitchDeg = pitch,
-                                distance = distance,
-                            )
+                        /* pan and zoom are per-event deltas, so they are applied to the camera
+                           where the previous event left it - which is liveCamera, not the pose
+                           from first composition. */
+                        val current = liveCamera.value
+                        val yaw = current.yawDeg - pan.x * 0.25f
+                        val pitch = (current.pitchDeg + pan.y * 0.20f).coerceIn(-80f, 80f)
+                        val distance = (current.distance / zoom).coerceIn(0.6f, 8f)
+                        val next = current.copy(
+                            yawDeg = ((yaw % 360f) + 360f) % 360f,
+                            pitchDeg = pitch,
+                            distance = distance,
                         )
+                        liveCamera.value = next
+                        onCamera(next)
                     }
                 }
                 .pointerInput(onTapModel) {
