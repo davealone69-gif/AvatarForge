@@ -301,7 +301,10 @@ fn builds_a_watertight_avatar_end_to_end() {
     engine.apply_clip(walk, duration * 0.25).expect("apply clip");
     let posed = engine.vertices().to_vec();
     engine.apply_clip(af::af_sys::AF_CLIP_REST, 0.0).expect("rest pose");
-    let rest = engine.vertices();
+    /* Compare against the bind pose stored in restMesh, not the re-deformed buffer:
+       vertices() runs LBS with identity rotations which can introduce tiny
+       floating-point drift from restMesh.positions. vertices_rest() is exact. */
+    let rest = engine.vertices_rest();
     let moved = posed
         .iter()
         .zip(rest.iter())
