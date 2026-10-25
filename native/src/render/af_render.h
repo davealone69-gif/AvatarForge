@@ -62,7 +62,9 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
-    bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
+    bool  preferVulkan         = false;  /* false = GLES 3.1 primary (default: several mobile
+                                            Vulkan drivers - e.g. Samsung Xclipse 940 - corrupt
+                                            forward-pass output; opt in per device via settings) */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
@@ -106,6 +108,8 @@ struct RendererStats {
     uint64_t textureBytes = 0;
     int   qualityLevel   = 2;      /* effective QualityPreset after automatic stepping        */
     int   frames         = 0;
+    int   glErrorsTotal  = 0;      /* cumulative GL errors seen (GLES backend; 0 on Vulkan)   */
+    int   lastGlError    = 0;      /* most recent GL error (a GLenum), 0 when none pending    */
 };
 
 struct RendererInfo {

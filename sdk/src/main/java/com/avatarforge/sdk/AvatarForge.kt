@@ -93,9 +93,9 @@ object AvatarForge {
             msaa = if (preset == Quality.HIGH) 4 else if (preset == Quality.MEDIUM) 2 else 1,
             shadowMapSize = if (preset == Quality.HIGH) 2048 else if (preset == Quality.MEDIUM) 2048 else 1024,
             bloomLevels = if (preset == Quality.HIGH) 5 else if (preset == Quality.MEDIUM) 4 else 3,
-            /* Vulkan first; the renderer falls back to GLES 3.1 by itself if the device's Vulkan
-               driver refuses the surface (some older Mali drivers do). */
-            preferVulkan = true,
+            /* GLES 3.1 first: several mobile Vulkan drivers (notably Samsung Xclipse 940) corrupt
+               the forward pass, so Vulkan is left as an opt-in toggle rather than the default. */
+            preferVulkan = false,
         )
     }
 

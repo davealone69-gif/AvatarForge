@@ -41,22 +41,41 @@
 #include <vector>
 
 /* ------------------------------------------------------------------ GL error checking ----------
-   checkGLErrors() can be called after any group of GL calls to detect silent
-   driver errors (out of memory, invalid enum, invalid operation) that would
-   otherwise produce garbage pixels. It returns true when no error is pending.
-   The check is cheap when no error has occurred and runs in all builds so
-   corruption can be diagnosed on any device, not just debug builds. */
-inline bool checkGLErrors(const char* file, int line, const char* context) {
-    GLint err = glGetError();
-    if (err != GL_NO_ERROR) {
-        /* We intentionally do not abort: a single transient error should not
-           destroy the whole renderer. The caller can decide to tear down. */
-        return false;
+   drainGlErrors() flushes the WHOLE GL error queue (a single glGetError only clears one entry,
+   and the rest would stay pending for the next check) and records every code in stats_ for the
+   diagnostics panel.
+
+   Two very different situations must not be conflated:
+
+     * a LOST CONTEXT is signalled by the EGL layer (eglSwapBuffers / eglMakeCurrent returning
+       EGL_CONTEXT_LOST). Nothing context-owned survives; the only remedy is a full rebuild;
+     * a plain GL error (invalid enum / value / operation, out of memory) means one specific
+       call was rejected. It does NOT mean the context is gone.
+
+   Tearing the context down in reaction to a plain GL error is what turned a driver quirk into
+   a flicker loop: error -> full teardown/rebuild -> same error next frame -> rebuild again,
+   every frame. So in steady-state frames the sweep counts and records and keeps drawing; the
+   diagnostics panel shows the count and the last code. On setup paths (init / recoverContext)
+   GL_CHECK() drains and reports whether the queue was clean, because a setup sequence that
+   emits errors really does leave the renderer unusable. */
+inline GLenum drainGlErrors(af::RendererStats* stats) {
+    GLenum first = GL_NO_ERROR;
+    for (GLenum e; (e = glGetError()) != GL_NO_ERROR;) {
+        if (first == GL_NO_ERROR) first = e;
+        if (stats) {
+            stats->glErrorsTotal++;
+            stats->lastGlError = (int)e;
+        }
     }
-    return true;
+    return first;
 }
 
-#define GL_CHECK(ctx) checkGLErrors(__FILE__, __LINE__, ctx)
+inline bool checkGLErrors(const char* file, int line, const char* context, af::RendererStats* stats) {
+    (void)file; (void)line; (void)context;
+    return drainGlErrors(stats) == GL_NO_ERROR;
+}
+
+#define GL_CHECK(ctx) checkGLErrors(__FILE__, __LINE__, ctx, &stats_)
 
 namespace af {
 namespace {
@@ -202,6 +221,7 @@ private:
     int triangles_ = 0;
     bool targetsDirty_ = false;
     bool contextLost_ = false;
+    int recoverAttempts_ = 0;    /* consecutive failed recoverContext() calls; 0 = healthy */
 };
 
 /* ============================================================================================
@@ -1082,15 +1102,18 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     if (contextLost_) {
         /* Attempt to rebuild the EGL context and all GPU objects from scratch.
            The surface is still valid (the window didn't change), so we can
-           re-create the context, programs, buffers and targets and resume. */
+           re-create the context, programs, buffers and targets and resume.
+           Bounded: five consecutive failed recoveries stop the attempts rather than
+           flickering half-rebuilt frames forever; the error stays surfaced via EGL. */
+        if (recoverAttempts_ >= 5) return;
         std::string error;
         if (!recoverContext(&error)) {
-            /* Recovery failed this frame: stop drawing and surface the error.
-               contextRecoverable_ stays true so a future surface change can retry. */
-            contextLost_ = true;
+            recoverAttempts_++;
+            contextLost_ = true;   /* retry next frame until the bound is hit */
             return;
         }
         contextLost_ = false;
+        recoverAttempts_ = 0;
         meshDirty_ = true;       /* all GPU buffers were lost, re-upload everything */
         atlasUploaded_ = false;  /* atlas textures were lost, re-upload from engine */
     }
@@ -1144,16 +1167,21 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     drawComposite();
 
     if (!eglSwapBuffers(display_, surface_)) {
-        /* A lost context cannot be recovered by this backend: report it and stop drawing rather
-           than rendering into nothing. AvatarEngine.health() surfaces the flag. */
+        /* Only the EGL layer can tell us the context or surface is really gone. Those are the
+           only two signals that may trigger a rebuild. */
         const EGLint err = eglGetError();
-        if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) contextLost_ = true;
+        if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) {
+            contextLost_ = true;
+        } else if (err != EGL_SUCCESS) {
+            /* Transient present failure (compositor back-pressure, EGL_TRY_AGAIN): count it and
+               keep drawing the next frame. */
+            stats_.glErrorsTotal++;
+        }
     }
 
-    /* End-of-frame validation: catch any GL error generated during this frame's draws. */
-    if (!GL_CHECK("GlRenderer::renderFrame")) {
-        contextLost_ = true;
-    }
+    /* Steady-state error sweep: drain, count, record - never tear down. A plain GL error is a
+       diagnostic clue (surfaced in the diagnostics panel via stats_), not a context loss. */
+    drainGlErrors(&stats_);
 
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
@@ -1195,11 +1223,10 @@ bool GlRenderer::resize(int width, int height) {
     std::string error;
     if (!createTargets(&error)) return false;
     activeTargetOptions_ = options_;
-    /* The surface was recreated: all GPU-side render targets are gone. Mark
-       geometry, atlas and material blocks dirty so they are re-uploaded on
-       the next frame instead of drawing stale or unbound handles. */
-    meshDirty_ = true;
-    atlasUploaded_ = false;
+    /* Render targets are gone but vertex/index VBOs, UBOs and atlas textures are NOT
+       destroyed by destroyTargets() - they live in the context, and the context survived.
+       Forcing a re-upload here would re-push the whole mesh and every texture on each
+       size change (rotation, inset changes) for no benefit. */
     return true;
 }
 

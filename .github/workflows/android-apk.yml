@@ -19,7 +19,7 @@ jobs:
   build-apk:
     name: Build and verify Android packages
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -56,23 +56,20 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000
           fi
 
-      - name: Verify required ARM64 native libraries exist
-        run: |
-          set -euo pipefail
-          for lib in libafcore.so libafrender.so libavatarforge.so; do
-            test -s "prebuilt/arm64-v8a/$lib" || {
-              echo "::error::Missing prebuilt/arm64-v8a/$lib. Build native libraries with tools/build_android.sh and commit the outputs."
-              exit 1
-            }
-          done
+      # NOTE: the native libraries are compiled from source in the step below (Gradle drives
+      # CMake via :sdk's externalNativeBuild). The prebuilt/arm64-v8a/*.so committed to the repo
+      # are a convenience for low-RAM local machines (see BUILD.md) and are deliberately NOT
+      # used in CI: they go stale the moment native/ changes, and shipping them is exactly how
+      # the 2026-10-25 device-corruption bug survived "fixed" renderer commits (see
+      # docs/AUDIT_2026-10-25.md, finding F1).
 
-      - name: Build debug APK, release APK, and SDK AAR
+      - name: Build debug APK, release APK, and SDK AAR (native from source)
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace --console=plain \
             :app:assembleDebug :app:assembleRelease :sdk:assembleRelease \
             -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+            -Paf.parallel=4
 
       - name: Stage easy-download artifacts
         run: |

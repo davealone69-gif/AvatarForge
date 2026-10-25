@@ -52,14 +52,31 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
+    val glErrorsTotal: Int = 0,
+    val lastGlError: Int = 0,
 ) {
     val meetsTarget: Boolean get() = fps >= 30f
+
+    /** Human-readable name for [lastGlError] (a GLenum), for the diagnostics panel. */
+    val glErrorName: String
+        get() = when (lastGlError) {
+            0 -> "none"
+            0x0500 -> "GL_INVALID_ENUM"
+            0x0501 -> "GL_INVALID_VALUE"
+            0x0502 -> "GL_INVALID_OPERATION"
+            0x0503 -> "GL_STACK_OVERFLOW"
+            0x0504 -> "GL_STACK_UNDERFLOW"
+            0x0505 -> "GL_OUT_OF_MEMORY"
+            else -> "0x%04X".format(lastGlError)
+        }
 }
 
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
-    val preferVulkan: Boolean = true,
+    /* GLES 3.1 is the default backend: several mobile Vulkan drivers (Samsung Xclipse 940 among
+       them) corrupt the forward pass, so Vulkan is an opt-in per device, not the default. */
+    val preferVulkan: Boolean = false,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -135,12 +152,13 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     fun stats(): RendererStats {
         val floats = FloatArray(4)
-        val ints = IntArray(7)
+        val ints = IntArray(9)
         NativeBridge.rendererStats(handle, floats, ints)
         return RendererStats(
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
             msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
+            glErrorsTotal = ints.getOrNull(7) ?: 0, lastGlError = ints.getOrNull(8) ?: 0,
         )
     }
 

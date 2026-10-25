@@ -21,18 +21,22 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -62,7 +66,7 @@ import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 
 /** Which editing panel is open. Only one at a time: this is a phone, not a workstation. */
-enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER }
+enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER, DIAGNOSTICS }
 
 @Composable
 fun ViewerScreen(
@@ -91,6 +95,9 @@ fun ViewerScreen(
     onPickRegion: (Int) -> Unit,
     /** View-space tap, forwarded to the host which performs the pick against the live camera. */
     onTapModel: (Float, Float) -> Unit,
+    /** One-paragraph device report, computed once by the host (AvatarForge.deviceReport). */
+    deviceReport: String,
+    onCopyReport: (String) -> Unit,
     modifier: Modifier = Modifier,
     /** The SurfaceView, hoisted so this screen stays previewable in Compose tooling. */
     surface: @Composable () -> Unit,
@@ -160,6 +167,32 @@ fun ViewerScreen(
             }
         }
 
+        /* The ≡ MENU from the 0.10.1 viewer, restored: diagnostics, renderer settings and the
+           one-paragraph device report in one place, without a second screen to navigate to. */
+        var showMenu by remember { mutableStateOf(false) }
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(8.dp),
+        ) {
+            TextButton(onClick = { showMenu = true }) { Text("≡ MENU") }
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Diagnostics") },
+                    onClick = { onPanel(ViewerPanel.DIAGNOSTICS); showMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Renderer settings") },
+                    onClick = { onPanel(ViewerPanel.RENDER); showMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Copy device report") },
+                    onClick = { onCopyReport(deviceReport); showMenu = false },
+                )
+            }
+        }
+
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -195,6 +228,8 @@ fun ViewerScreen(
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
                         ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
+                        ViewerPanel.DIAGNOSTICS ->
+                            DiagnosticsPanel(result, stats, rendererInfo, deviceReport, onCopyReport)
                         ViewerPanel.CAMERA -> Unit
                     }
                 }
@@ -370,7 +405,9 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
     ToggleRow("Ground plane", settings.groundPlane) { onSettings(settings.copy(groundPlane = it)) }
-    ToggleRow("Prefer Vulkan (else GLES 3.1)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
+    /* Backend choice: off (default) = GLES 3.1. Some mobile Vulkan drivers corrupt the image;
+       turning this on takes effect when the viewer restarts (the backend is created once). */
+    ToggleRow("Native Vulkan (off = GLES 3.1)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
     Text("Exposure %.2f".format(settings.exposure), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.exposure, onValueChange = { onSettings(settings.copy(exposure = it)) }, valueRange = 0.3f..2.5f)
     Text("Sun azimuth %.0f°".format(settings.sunAzimuthDeg), style = MaterialTheme.typography.bodySmall)
@@ -388,5 +425,85 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/**
+ * The diagnostics panel (the old settings-screen diagnostics card, restored). Everything here is
+ * read from the running engine/renderer - nothing is guessed or cached:
+ *
+ *   * backend line + GPU features, straight from the driver the frame is running on;
+ *   * live frame stats, including the cumulative GL error count and the last error code, so a
+ *     driver that rejects a call shows up here instead of silently smearing the image;
+ *   * the model's own counters (vertices/tris/submeshes/joints/blendshapes) from the result;
+ *   * the host's device report paragraph (kernel version, ABI, RAM, thermal state, storage).
+ *
+ * "Copy report" puts a single paragraph on the clipboard that is enough to diagnose a device
+ * problem without the device.
+ */
+@Composable
+private fun DiagnosticsPanel(
+    result: EngineResult,
+    stats: RendererStats,
+    info: RendererInfo?,
+    deviceReport: String,
+    onCopyReport: (String) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 400.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Diagnostics", style = MaterialTheme.typography.titleSmall)
+
+        Text(
+            if (info != null) "%s · %s · %s · %s".format(info.backend, info.deviceName, info.apiVersion, info.driver)
+            else "renderer initialising…",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        info?.let {
+            Text(
+                "shadows %s · MSAA %s · float HDR %s · anisotropy %s".format(
+                    if (it.supportsShadows) "on" else "off", if (it.supportsMsaa) "supported" else "off",
+                    if (it.supportsFloatHdr) "yes" else "no", if (it.supportsAnisotropy) "yes" else "no",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        /* GPU error state: the two numbers that matter when the image is corrupt. A healthy
+           renderer sits at 0/none; a non-zero count names the last rejected GL call. */
+        val glHealthy = stats.glErrorsTotal == 0
+        Text(
+            "GL errors: %d total · last %s".format(stats.glErrorsTotal, stats.glErrorName),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (glHealthy) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+        )
+
+        Text(
+            "%.0f FPS (%.1f ms) · tier %d · %d draws · %d tris · %d verts · shadow %d · %d MiB tex".format(
+                stats.fps, stats.frameMs, stats.qualityLevel, stats.drawCalls, stats.triangles,
+                stats.vertices, stats.shadowMapSize, stats.textureMiB,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Text(
+            "Model: %d verts · %d tris · %d submeshes · %d joints · %d blendshapes · %.1f MB .glb · %.1f s to build".format(
+                result.vertexCount, result.triangleCount, result.submeshCount, result.jointCount,
+                result.blendshapeCount, result.glbBytes / 1048576.0,
+                result.timings.values.sum() / 1000.0,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Text("Device report", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+        Text(deviceReport, style = MaterialTheme.typography.bodySmall)
+
+        TextButton(onClick = { onCopyReport(deviceReport) }) { Text("Copy device report") }
     }
 }

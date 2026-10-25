@@ -316,6 +316,12 @@ class MainActivity : ComponentActivity() {
                             surfaceView?.setOverlays(false, false, pickedRegion)
                             panel = ViewerPanel.INSPECT
                         },
+                        deviceReport = remember { AvatarForge.deviceReport(context) },
+                        onCopyReport = { report ->
+                            val clip = context.getSystemService(android.content.ClipboardManager::class.java)
+                            clip?.setPrimaryClip(android.content.ClipData.newPlainText("AvatarForge diagnostics", report))
+                            Toast.makeText(context, "Diagnostics copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
                         surface = {
                             /* The generated avatar exists before the surface does, so the attach
                                happens here, once per result - not on every recomposition. */

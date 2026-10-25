@@ -65,7 +65,10 @@ android {
                     arguments.add("-DAF_OPT_FLAGS=-O1")
                     arguments.add("-DCMAKE_BUILD_PARALLEL_LEVEL=1")
                 } else {
-                    arguments.add("-DCMAKE_BUILD_PARALLEL_LEVEL=2")
+                    /* -Paf.parallel=N raises the native compile parallelism on machines that can
+                       afford it (CI uses 4); the default of 2 keeps local low-RAM builds stable. */
+                    val parallel = (project.findProperty("af.parallel") as String?)?.toIntOrNull() ?: 2
+                    arguments.add("-DCMAKE_BUILD_PARALLEL_LEVEL=$parallel")
                 }
             }
         }
