@@ -189,6 +189,13 @@ private:
     uint32_t queueFamily_ = 0;
     VkPhysicalDeviceMemoryProperties memProps_{};
     uint32_t uboAlignment_ = 256;
+    /* Per-frame camera UBO slice stride. CameraUbo is 448 bytes but UBO dynamic offsets must be
+       multiples of uboAlignment_ (typically 256), so a single 448-byte block does not fit in one
+       quantum. Striding each frame's slice up to the next alignment multiple keeps consecutive
+       frames from overlapping and keeps the last slice inside the buffer - otherwise the
+       view-projection matrix is torn or written out of bounds and the avatar stretches across the
+       screen. */
+    uint32_t cameraSliceStride_ = 0;
     bool deviceSupportsCompareSamplerLinear_ = false;
 
     /* swapchain */
@@ -365,6 +372,9 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(phys_, &props);
     uboAlignment_ = props.limits.minUniformBufferOffsetAlignment ? props.limits.minUniformBufferOffsetAlignment : 256;
+    /* CameraUbo is 448 bytes (static_assert in af_render_common.h); stride each frame's slice up
+       to the next alignment multiple so slices never overlap or overrun the buffer. */
+    cameraSliceStride_ = (uint32_t(sizeof(CameraUbo)) + uboAlignment_ - 1u) / uboAlignment_ * uboAlignment_;
 
     /* Sample count: clamp to what the device allows for both colour and depth. */
     VkSampleCountFlags counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
@@ -704,7 +714,7 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
 
         /* Camera uniform buffer: one slice per frame in flight, bound with a dynamic offset. The
            two slices are what keep frame N+1 from overwriting the camera frame N is still using. */
-        const uint64_t camSize = uint64_t(uboAlignment_) * kFramesInFlight;
+        const uint64_t camSize = uint64_t(cameraSliceStride_) * kFramesInFlight;
         if (!createBuffer(camSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &cameraUbos_.emplace_back(), &cameraUboMem_.emplace_back(),
@@ -2074,9 +2084,31 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
     scene_.camera.uiParams[3] = 1.0f / float(swapExtent_.height ? swapExtent_.height : 1);
     scene_.camera.envFlags[0] = options_.enableShadows ? 1.0f : 0.0f;
 
-    if (!cameraUboMapped_.empty() && cameraUboMapped_[0])
-        std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * uboAlignment_,
-                    &scene_.camera, sizeof(CameraUbo));
+    /* Validate the camera matrix before uploading: a NaN or infinity in the
+       view-projection matrix projects every vertex to garbage. Refuse to upload
+       a bad frame and substitute a safe identity instead. */
+    bool cameraValid = true;
+    for (int i = 0; i < 16 && cameraValid; ++i) {
+        const float v = scene_.camera.viewProj[i];
+        if (!(v == v) || std::isinf(v)) cameraValid = false;
+    }
+    for (int i = 0; i < 16 && cameraValid; ++i) {
+        const float v = scene_.camera.view[i];
+        if (!(v == v) || std::isinf(v)) cameraValid = false;
+    }
+
+    if (!cameraUboMapped_.empty() && cameraUboMapped_[0]) {
+        if (cameraValid) {
+            std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * cameraSliceStride_,
+                        &scene_.camera, sizeof(CameraUbo));
+        } else {
+            CameraUbo safe = scene_.camera;
+            for (int i = 0; i < 16; ++i) safe.viewProj[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+            safe.view[0] = 1.0f; safe.view[5] = 1.0f; safe.view[10] = 1.0f; safe.view[15] = 1.0f;
+            std::memcpy(static_cast<char*>(cameraUboMapped_[0]) + size_t(frameIndex_) * cameraSliceStride_,
+                        &safe, sizeof(CameraUbo));
+        }
+    }
 
     /* ---- post-process slices ------------------------------------------------------------------ */
     if (postUboMapped_) {
@@ -2132,6 +2164,8 @@ void VulkanRenderer::rebuildMaterialBlocks() {
     const uint32_t stride = uboAlignment_ > sizeof(MaterialUbo) ? uboAlignment_
                                                                  : uint32_t(sizeof(MaterialUbo) + 15u) / 16u * 16u;
     materialStride_ = stride;
+    /* Sanity bound: a corrupt engine must not force an impossibly large UBO. */
+    if (submeshCount > 4096) return;
     const uint64_t needed = uint64_t(submeshCount + 1) * stride;
     if (needed > materialUboSize_) {
         /* Grow once and for all: the descriptor points at the buffer object, so it has to be
@@ -2207,7 +2241,7 @@ void VulkanRenderer::buildSkeletonLines() {
     lineVertexCount_ = 0;
     if (!engine_ || !skeletonVisible_ || !lineMapped_) return;
     const int J = af_engine_joint_count(engine_);
-    if (J <= 0) return;
+    if (J <= 0 || J > 4096) return;
     std::vector<float> matrices(size_t(J) * 16);
     if (af_engine_joint_matrices(engine_, matrices.data(), J) != AF_OK) return;
 
@@ -2273,6 +2307,7 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
 
     /* ---- vertex buffer (host visible, re-created only when the mesh grows) ---- */
     const uint64_t need = uint64_t(vcount) * VertexLayout::stride;
+    if (vcount > 10'000'000) return;   /* sanity bound: corrupt engine must not allocate huge buffers */
     if (need > vertexCapacity_) {
         if (vertexBuffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, vertexBuffer_, nullptr);
@@ -2295,6 +2330,7 @@ void VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
 
     /* ---- index buffer: only re-uploaded when the topology itself changed ---- */
     if (icount > 0 && indices) {
+        if (icount > 30'000'000) return;   /* sanity bound */
         const uint64_t ineed = uint64_t(icount) * sizeof(uint32_t);
         if (ineed > indexCapacity_ || indexCount_ != icount) {
             if (indexBuffer_ != VK_NULL_HANDLE && ineed > indexCapacity_) {
@@ -2396,7 +2432,7 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
         vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
         const VkDescriptorSet set = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
         if (set != VK_NULL_HANDLE) {
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSliceStride_, uint32_t(2 * bloomLevels_) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1, &set, 2, offsets);
         }
         const af_submesh* submeshes = af_engine_submeshes(engine_);
@@ -2440,7 +2476,7 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdSetScissor(cmd, 0, 1, &sc);
 
     const VkDescriptorSet set0 = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
-    const uint32_t offsets0[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+    const uint32_t offsets0[2] = {frameIndex_ * cameraSliceStride_, uint32_t(2 * bloomLevels_) * uboAlignment_};
 
     /* ---- studio ground ------------------------------------------------------------------------ */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
@@ -2520,7 +2556,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
        the explicit barrier keeps the result ordered before any fragment stage consumes it. */
     if (forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusPipeline_);
-        const uint32_t cameraOffset = frameIndex_ * uboAlignment_;
+        const uint32_t cameraOffset = frameIndex_ * cameraSliceStride_;
         VkDescriptorSet sets[3] = {cameraSets_[0], materialSet_, forwardPlusSet_};
         const uint32_t dynamicOffsets[2] = {cameraOffset, 0};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusLayout_, 0, 3,
@@ -2560,7 +2596,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomDownPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSliceStride_, uint32_t(i) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomDownSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2580,7 +2616,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
             VkRect2D sc{{0, 0}, {bloom_[i].width, bloom_[i].height}};
             vkCmdSetScissor(cmd, 0, 1, &sc);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomUpPipeline_);
-            const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(bloomLevels_ + i) * uboAlignment_};
+            const uint32_t offsets[2] = {frameIndex_ * cameraSliceStride_, uint32_t(bloomLevels_ + i) * uboAlignment_};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                     &bloomUpSets_[i], 2, offsets);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2602,7 +2638,7 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
-        const uint32_t offsets[2] = {frameIndex_ * uboAlignment_, uint32_t(2 * bloomLevels_) * uboAlignment_};
+        const uint32_t offsets[2] = {frameIndex_ * cameraSliceStride_, uint32_t(2 * bloomLevels_) * uboAlignment_};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout_, 0, 1,
                                 &compositeSet_, 2, offsets);
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -2637,6 +2673,11 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
+    if (acquired == VK_ERROR_DEVICE_LOST) {
+        /* The Vulkan device is unrecoverable without full re-initialisation.
+           Surface the error and stop drawing until the host recreates the renderer. */
+        return;
+    }
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
         framebufferResized_ = true;
         return;
@@ -2660,7 +2701,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) == VK_ERROR_DEVICE_LOST) return;
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -2670,6 +2711,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
+    if (presented == VK_ERROR_DEVICE_LOST) return;
     if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;

@@ -40,6 +40,24 @@
 #include <string>
 #include <vector>
 
+/* ------------------------------------------------------------------ GL error checking ----------
+   checkGLErrors() can be called after any group of GL calls to detect silent
+   driver errors (out of memory, invalid enum, invalid operation) that would
+   otherwise produce garbage pixels. It returns true when no error is pending.
+   The check is cheap when no error has occurred and runs in all builds so
+   corruption can be diagnosed on any device, not just debug builds. */
+inline bool checkGLErrors(const char* file, int line, const char* context) {
+    GLint err = glGetError();
+    if (err != GL_NO_ERROR) {
+        /* We intentionally do not abort: a single transient error should not
+           destroy the whole renderer. The caller can decide to tear down. */
+        return false;
+    }
+    return true;
+}
+
+#define GL_CHECK(ctx) checkGLErrors(__FILE__, __LINE__, ctx)
+
 namespace af {
 namespace {
 
@@ -93,6 +111,7 @@ private:
     bool createPrograms(std::string* error);
     bool createTargets(std::string* error);
     bool createAtlas(std::string* error);
+    bool recoverContext(std::string* error);   /* re-init after EGL context loss */
     void uploadAtlas(std::string* error);
     void ensureGeometryBuffers();
     void rebuildMaterialBlocks();
@@ -115,6 +134,7 @@ private:
     EGLSurface surface_ = EGL_NO_SURFACE;
     EGLContext context_ = EGL_NO_CONTEXT;
     EGLConfig config_ = nullptr;
+    ANativeWindow* window_ = nullptr;   /* kept so recoverContext can recreate the EGL surface */
     int surfaceWidth_ = 0;
     int surfaceHeight_ = 0;
     uint32_t uboAlignment_ = 256;
@@ -489,6 +509,7 @@ bool GlRenderer::createTargets(std::string* error) {
  * ============================================================================================ */
 bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
     options_ = options;
+    window_ = window;
     if (!createContext(window, error)) return false;
     if (!createPrograms(error)) return false;
 
@@ -592,6 +613,12 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
         uploadAtlas(error);
         rebuildMaterialBlocks();
     }
+    /* Validate the whole initialisation path: any silent GL error here means
+       the renderer is in an undefined state and will produce garbage. */
+    if (!GL_CHECK("GlRenderer::init")) {
+        if (error) *error = "OpenGL error during renderer initialisation";
+        return false;
+    }
     return true;
 }
 
@@ -605,6 +632,10 @@ void GlRenderer::ensureGeometryBuffers() {
     const af_vertex* verts = af_engine_vertices(engine_);
     const uint32_t* indices = af_engine_indices(engine_);
     if (vcount <= 0 || !verts) return;
+
+    /* Sanity-check the engine's vertex count against a sane upper bound so a
+       corrupted engine cannot allocate an impossibly large buffer. */
+    if (vcount > 10'000'000) return;
 
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
     if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
@@ -620,6 +651,8 @@ void GlRenderer::ensureGeometryBuffers() {
     }
 
     if (icount > 0 && indices) {
+        /* Sanity-check index count: each index must reference a valid vertex. */
+        if (icount > 30'000'000) return;
         const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
         if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
@@ -677,6 +710,7 @@ void GlRenderer::rebuildMaterialBlocks() {
     const af_material* materials = af_engine_materials(engine_);
     const int materialCount = af_engine_material_count(engine_);
     if (submeshCount <= 0 || !submeshes) { materialCount_ = 0; return; }
+    if (submeshCount > 4096) return;   /* sanity bound: corrupt engine must not force huge UBO */
 
     materialStride_ = uboAlignment_ > sizeof(MaterialUbo) ? uboAlignment_
                                                           : (sizeof(MaterialUbo) + 15u) / 16u * 16u;
@@ -733,7 +767,7 @@ void GlRenderer::buildSkeletonLines() {
     lineVertexCount_ = 0;
     if (!engine_ || !skeletonVisible_) return;
     const int J = af_engine_joint_count(engine_);
-    if (J <= 0) return;
+    if (J <= 0 || J > 4096) return;
     std::vector<float> matrices(size_t(J) * 16);
     if (af_engine_joint_matrices(engine_, matrices.data(), J) != AF_OK) return;
 
@@ -792,10 +826,34 @@ void GlRenderer::updateScene(float deltaSeconds) {
                                 float(options_.shadowMapSize ? options_.shadowMapSize : 2048);
     scene_.camera.uiParams[3] = 1.0f / float(surfaceHeight_ ? surfaceHeight_ : 1);
 
+    /* Validate the camera matrix before uploading: a NaN or infinity in the
+       view-projection matrix projects every vertex to garbage and is exactly
+       the "vertex explosion" symptom. Refuse to upload a bad frame rather than
+       drawing corrupted geometry. */
+    bool cameraValid = true;
+    for (int i = 0; i < 16 && cameraValid; ++i) {
+        const float v = scene_.camera.viewProj[i];
+        if (!(v == v) || std::isinf(v)) cameraValid = false;   /* NaN or +/-inf */
+    }
+    for (int i = 0; i < 16 && cameraValid; ++i) {
+        const float v = scene_.camera.view[i];
+        if (!(v == v) || std::isinf(v)) cameraValid = false;
+    }
+
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     const int frame = int(stats_.frames % 2);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraSliceStride_, sizeof(CameraUbo), &scene_.camera);
+    if (cameraValid) {
+        glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraSliceStride_, sizeof(CameraUbo), &scene_.camera);
+    } else {
+        /* Upload an identity-like safe matrix instead of the corrupt one so the
+           frame still renders something instead of exploding. */
+        CameraUbo safe = scene_.camera;
+        for (int i = 0; i < 16; ++i) safe.viewProj[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+        safe.view[0] = 1.0f; safe.view[5] = 1.0f; safe.view[10] = 1.0f; safe.view[15] = 1.0f;
+        glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraSliceStride_, sizeof(CameraUbo), &safe);
+    }
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    GL_CHECK("camera UBO upload");
 
     /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
     if (bloomLevels_ > 0) {
@@ -1020,7 +1078,22 @@ void GlRenderer::drawComposite() {
 }
 
 void GlRenderer::renderFrame(float deltaSeconds) {
-    if (contextLost_ || display_ == EGL_NO_DISPLAY) return;
+    if (display_ == EGL_NO_DISPLAY) return;
+    if (contextLost_) {
+        /* Attempt to rebuild the EGL context and all GPU objects from scratch.
+           The surface is still valid (the window didn't change), so we can
+           re-create the context, programs, buffers and targets and resume. */
+        std::string error;
+        if (!recoverContext(&error)) {
+            /* Recovery failed this frame: stop drawing and surface the error.
+               contextRecoverable_ stays true so a future surface change can retry. */
+            contextLost_ = true;
+            return;
+        }
+        contextLost_ = false;
+        meshDirty_ = true;       /* all GPU buffers were lost, re-upload everything */
+        atlasUploaded_ = false;  /* atlas textures were lost, re-upload from engine */
+    }
     if (targetsDirty_) {
         targetsDirty_ = false;
         const RendererOptions rollback = activeTargetOptions_;
@@ -1077,6 +1150,11 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) contextLost_ = true;
     }
 
+    /* End-of-frame validation: catch any GL error generated during this frame's draws. */
+    if (!GL_CHECK("GlRenderer::renderFrame")) {
+        contextLost_ = true;
+    }
+
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
     stats_.vertices = vertexCount_;
@@ -1117,6 +1195,11 @@ bool GlRenderer::resize(int width, int height) {
     std::string error;
     if (!createTargets(&error)) return false;
     activeTargetOptions_ = options_;
+    /* The surface was recreated: all GPU-side render targets are gone. Mark
+       geometry, atlas and material blocks dirty so they are re-uploaded on
+       the next frame instead of drawing stale or unbound handles. */
+    meshDirty_ = true;
+    atlasUploaded_ = false;
     return true;
 }
 
@@ -1159,6 +1242,99 @@ void GlRenderer::destroyAll() {
 }
 
 GlRenderer::~GlRenderer() { destroyAll(); }
+
+bool GlRenderer::recoverContext(std::string* error) {
+    /* Tear down everything the EGL context owned. destroyAll() nulls surface_, so save the
+       native window first - the ANativeWindow is still valid (the window didn't change, only
+       the EGL context was lost) and we need it to recreate the EGL surface. */
+    ANativeWindow* savedWindow = window_;
+    destroyAll();
+    window_ = savedWindow;
+
+    /* Re-create the context, programs and targets exactly as in init(). The engine
+       handle, camera state and options are still valid, so we can re-attach and
+       re-upload everything on the next frame. */
+    if (!createContext(window_, error)) return false;
+    if (!createPrograms(error)) return false;
+
+    glGenVertexArrays(1, &avatarVao_);
+    glGenVertexArrays(1, &groundVao_);
+    glGenVertexArrays(1, &emptyVao_);
+    glGenVertexArrays(1, &lineVao_);
+
+    if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
+    if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
+    if (groundVbo_ == 0) glGenBuffers(1, &groundVbo_);
+    if (lineVbo_ == 0) glGenBuffers(1, &lineVbo_);
+
+    glBindVertexArray(avatarVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, VertexLayout::stride,
+                          reinterpret_cast<const void*>(size_t(VertexLayout::posOffset)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, VertexLayout::stride,
+                          reinterpret_cast<const void*>(size_t(VertexLayout::normalOffset)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, VertexLayout::stride,
+                          reinterpret_cast<const void*>(size_t(VertexLayout::tangentOffset)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, VertexLayout::stride,
+                          reinterpret_cast<const void*>(size_t(VertexLayout::uvOffset)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, VertexLayout::stride,
+                          reinterpret_cast<const void*>(size_t(VertexLayout::colorOffset)));
+    glBindVertexArray(0);
+
+    glBindVertexArray(groundVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+    glBindVertexArray(0);
+
+    glBindVertexArray(lineVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 7, nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(float) * 7,
+                          reinterpret_cast<const void*>(sizeof(float) * 3));
+    glBindVertexArray(0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glGenBuffers(1, &cameraUbo_);
+    glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(cameraSliceStride_) * 2, nullptr, GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &postUbo_);
+    glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 16, nullptr, GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &materialUbo_);
+    glBindBuffer(GL_UNIFORM_BUFFER, materialUbo_);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 32, nullptr, GL_DYNAMIC_DRAW);
+    materialCapacity_ = GLint64(uboAlignment_) * 32;
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    if (!createTargets(error)) return false;
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+
+    /* Re-upload engine data now that all GPU objects are fresh. */
+    if (engine_) {
+        uploadAtlas(error);
+        rebuildMaterialBlocks();
+    }
+
+    if (!GL_CHECK("GlRenderer::recoverContext")) {
+        if (error) *error = "OpenGL error during context recovery";
+        return false;
+    }
+    return true;
+}
 
 } /* namespace */
 
