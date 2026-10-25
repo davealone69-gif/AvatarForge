@@ -53,21 +53,28 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.AvatarEngine
+import com.avatarforge.sdk.DiagnosticsReport
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.Quality
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
+import com.avatarforge.sdk.render.RendererStartupState
 import com.avatarforge.sdk.render.RendererStats
 
 /** Which editing panel is open. Only one at a time: this is a phone, not a workstation. */
-enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER }
+enum class ViewerPanel { CAMERA, POSE, FACE, INSPECT, EXPORT, RENDER, DIAG }
 
 @Composable
 fun ViewerScreen(
     result: EngineResult,
     engine: AvatarEngine,
     rendererError: String?,
+    /** Drives the failure card's colour: red only after the bounded attempts give up, so the
+     *  automatic Vulkan -> GLES fallbacks no longer strobe a red "failed" card during start-up. */
+    rendererState: RendererStartupState?,
+    onRetryRenderer: () -> Unit,
     onBack: () -> Unit,
     rendererInfo: RendererInfo?,
     stats: RendererStats,
@@ -90,6 +97,9 @@ fun ViewerScreen(
     onPickRegion: (Int) -> Unit,
     /** View-space tap, forwarded to the host which performs the pick against the live camera. */
     onTapModel: (Float, Float) -> Unit,
+    /** Snapshot report for the diagnostics panel; null keeps the panel honest ("not measured yet"). */
+    diagnosticsReport: DiagnosticsReport?,
+    onCopyReport: () -> Unit,
     modifier: Modifier = Modifier,
     /** The SurfaceView, hoisted so this screen stays previewable in Compose tooling. */
     surface: @Composable () -> Unit,
@@ -131,13 +141,28 @@ fun ViewerScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
-            Header(result, rendererInfo, stats)
-            if (rendererError != null) {
+            Header(result, rendererInfo, stats, settings.quality)
+            if (rendererState == RendererStartupState.FAILED && rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 ) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("3D viewer failed to start", fontWeight = FontWeight.SemiBold)
+                        Text(rendererError, style = MaterialTheme.typography.bodySmall)
+                        /* Without this the only recovery was leaving the viewer and regenerating
+                           the avatar; this re-runs the bounded Vulkan -> GLES create sequence. */
+                        TextButton(onClick = onRetryRenderer) { Text("Retry renderer") }
+                    }
+                }
+            } else if (rendererState != RendererStartupState.RUNNING && rendererError != null) {
+                /* A transient message from an in-flight automatic fallback (e.g. "Vulkan
+                   unavailable; trying OpenGL ES 3.1"). Neutral, not red: recovery is still
+                   working and the bounded attempts have not been exhausted. */
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Starting GPU…", fontWeight = FontWeight.SemiBold)
                         Text(rendererError, style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -179,6 +204,22 @@ fun ViewerScreen(
                         ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                         ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
                         ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
+                        ViewerPanel.DIAG -> {
+                            val report = diagnosticsReport
+                            if (report == null) {
+                                Text(
+                                    "Diagnostics are not measured yet. Reopen this panel in a moment.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                DiagnosticsContent(
+                                    report = report,
+                                    onRetryRenderer = onRetryRenderer,
+                                    onCopy = onCopyReport,
+                                )
+                            }
+                        }
                         ViewerPanel.CAMERA -> Unit
                     }
                 }
@@ -188,18 +229,24 @@ fun ViewerScreen(
 }
 
 @Composable
-private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats) {
+private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, quality: Quality) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
         Column(Modifier.padding(10.dp)) {
             Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
             val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
+            /* Before the first frame exists, 0 FPS is not a performance verdict - do not show a
+               red "below target" warning for a renderer that is still starting up. */
+            val status = when {
+                info == null -> "waiting for the first frame"
+                stats.meetsTarget -> "on target"
+                quality == Quality.AUTO -> "below 30 FPS - auto quality will step down"
+                else -> "below 30 FPS - fixed ${quality.name.lowercase()} preset, emergency step-down only"
+            }
             Text(
-                "$backend · %.0f FPS (%.1f ms) · %s".format(
-                    stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
-                ),
+                "$backend · %.0f FPS (%.1f ms) · %s".format(stats.fps, stats.frameMs, status),
                 style = MaterialTheme.typography.labelSmall,
-                color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (info == null || stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
             )
             Text(
                 "%.0f s to build · %d tris on screen".format(

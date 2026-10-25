@@ -22,6 +22,7 @@
 
 #include "af_render.h"
 #include "af_environment.h"
+#include "af_align.h"
 
 namespace af {
 
@@ -163,6 +164,7 @@ struct VertexLayout {
     static constexpr uint32_t colorOffset = 48;
 };
 static_assert(VertexLayout::stride == 88, "af_vertex must stay 88 bytes for the renderer's stride");
+/* afRoundUp() lives in af_align.h so host tests can include it without the renderer math types. */
 
 /* Local copies of the shader-side constants, so af_render_common.h does not depend on GLSL. */
 enum {

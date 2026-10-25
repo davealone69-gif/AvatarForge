@@ -16,6 +16,9 @@
  */
 package com.avatarforge.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -50,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.avatarforge.app.ui.AppBitmaps
+import com.avatarforge.app.ui.DiagnosticsDialog
 import com.avatarforge.app.ui.InputScreen
 import com.avatarforge.app.ui.ProgressScreen
 import com.avatarforge.app.ui.ViewerPanel
@@ -59,15 +63,21 @@ import com.avatarforge.app.ui.poseClipName
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.AvatarForge
 import com.avatarforge.sdk.AvatarSpec
+import com.avatarforge.sdk.DiagnosticsReport
 import com.avatarforge.sdk.EngineResult
+import com.avatarforge.sdk.collectDiagnostics
 import com.avatarforge.sdk.GenerationRequest
+import com.avatarforge.sdk.ImageAnalysisNotes
 import com.avatarforge.sdk.ImageReference
 import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.JobHandle
 import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.SettingsStore
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.RendererDiagnostics
+import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 import kotlinx.coroutines.launch
 
@@ -114,13 +124,31 @@ class MainActivity : ComponentActivity() {
         var result by remember { mutableStateOf<EngineResult?>(null) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
-        var settings by remember { mutableStateOf(AvatarForge.recommendedSettings(context)) }
+        /* AF-004: renderer settings survive process death; null store means first run, so the
+           device-resource recommendation remains the default. */
+        val settingsStore = remember { SettingsStore(context) }
+        var settings by remember {
+            mutableStateOf(settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context))
+        }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
         var pickedRegion by remember { mutableStateOf(-1) }
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
+        var showDiagnostics by remember { mutableStateOf(false) }
+
+        /* Collected once at the host scope so both the viewer screen and the global MENU ->
+           Diagnostics dialog see the same live renderer data, including before a Surface exists
+           (each flow then resolves to null and the report says so honestly). */
+        val liveRendererInfo by surfaceViewState?.rendererInfo?.collectAsState()
+            ?: remember { mutableStateOf<RendererInfo?>(null) }
+        val liveStats by surfaceViewState?.stats?.collectAsState()
+            ?: remember { mutableStateOf<RendererStats?>(null) }
+        val liveRendererError by surfaceViewState?.error?.collectAsState()
+            ?: remember { mutableStateOf<String?>(null) }
+        val liveRendererDiagnostics by surfaceViewState?.diagnostics?.collectAsState()
+            ?: remember { mutableStateOf<RendererDiagnostics?>(null) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -202,19 +230,14 @@ class MainActivity : ComponentActivity() {
                     val a = imageA ?: return@InputScreen
                     val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
                     val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                    val analysed = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
-                    analysisNote = analysed?.joinToString("\n") { ref ->
-                        val an = ref.analysis
-                        if (an == null) "no analysis available" else buildString {
-                            append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
-                            append(" · ")
-                            append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
-                            append(" · skin L* %.0f".format(an.skinLab[0]))
-                            append(" · hair L* %.0f".format(an.hairLab[0]))
-                            append(" · garment metalness %.2f".format(an.metalConfidence))
-                            append(" · key light %.2f".format(an.keyLightIntensity))
-                        }
-                    }
+                    /* AF-003: a failure must be visible. The outcome maps to an honest note via
+                       the tested ImageAnalysisNotes mapper; generation still proceeds text-only. */
+                    val outcome = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }
+                    val analysed = outcome.getOrNull()
+                    analysisNote = ImageAnalysisNotes.describe(
+                        analysed,
+                        outcome.exceptionOrNull()?.message,
+                    )
                     val resolved = analysed?.let { engine.specFromImages(it, spec) } ?: spec
                     spec = resolved
                     begin(
@@ -243,21 +266,37 @@ class MainActivity : ComponentActivity() {
                 if (finished == null) {
                     screen = Screen.INPUT
                 } else {
-                    val rendererInfo by surfaceViewState?.rendererInfo?.collectAsState() ?: remember { mutableStateOf(null) }
-                    val stats by surfaceViewState?.stats?.collectAsState()
-                        ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
-                    val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
+                    val rendererInfo: RendererInfo? = liveRendererInfo
+                    val stats: RendererStats = liveStats
+                        ?: RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
+                    val rendererError: String? = liveRendererError
+                    val rendererDiagnostics: RendererDiagnostics? = liveRendererDiagnostics
+                    /* Rebuilt on renderer lifecycle changes and integer-FPS crossings only, so the
+                       60 Hz stats flow does not rebuild this report every frame. */
+                    val diagnosticsReport: DiagnosticsReport = remember(
+                        rendererDiagnostics, rendererInfo, stats.fps.toInt(),
+                    ) {
+                        collectDiagnostics(context, rendererDiagnostics, rendererInfo, stats)
+                    }
                     ViewerScreen(
                         result = finished,
                         engine = engine,
                         rendererError = rendererError,
+                        rendererState = rendererDiagnostics?.state,
+                        onRetryRenderer = { surfaceView?.restart() },
+                        diagnosticsReport = diagnosticsReport,
+                        onCopyReport = { copyDiagnostics(context, diagnosticsReport) },
                         onBack = { screen = Screen.INPUT },
                         rendererInfo = rendererInfo,
                         stats = stats,
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
-                        onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onSettings = {
+                            settings = it
+                            surfaceView?.applySettings(it)
+                            settingsStore.saveRenderSettings(it)
+                        },
                         panel = panel,
                         onPanel = { panel = it },
                         clipIndex = clipIndex,
@@ -381,9 +420,40 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Diagnostics") },
+                        onClick = {
+                            menuExpanded = false
+                            showDiagnostics = true
+                        },
+                    )
                 }
             }
         }
+
+        /* The same composable as the viewer's diag tab. With no viewer open the renderer rows
+           honestly report "not started"; with one open, live state is passed in above. */
+        if (showDiagnostics) {
+            /* Same live data as the viewer's diag tab: opening this from the menu no longer
+               produces a renderer-free report while a viewer exists behind the dialog. */
+            val report = remember(
+                liveRendererDiagnostics, liveRendererInfo, liveStats?.fps?.toInt(),
+            ) {
+                collectDiagnostics(context, liveRendererDiagnostics, liveRendererInfo, liveStats)
+            }
+            DiagnosticsDialog(
+                report = report,
+                onDismiss = { showDiagnostics = false },
+                onCopy = { copyDiagnostics(context, report) },
+            )
+        }
     }
 }
+}
+
+/** Copies the full diagnostics report to the clipboard without any permission prompt. */
+private fun copyDiagnostics(context: Context, report: DiagnosticsReport) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("AvatarForge diagnostics", report.plainText))
+    Toast.makeText(context, "Diagnostics copied to clipboard", Toast.LENGTH_SHORT).show()
 }
