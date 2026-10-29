@@ -57,6 +57,12 @@ data class RendererStats(
     val frameFatal: Boolean = false,
     /** Wrapping native accepted-frame sequence; not evidence of physical display/GPU completion. */
     val frameSequence: Int = 0,
+    /** Actual selected avatar LOD (0 is full detail). */
+    val activeLod: Int = 0,
+    /** Number of valid generated avatar LOD levels, including full detail. */
+    val availableLods: Int = 0,
+    /** True when even the coarsest generated LOD exceeds the mobile triangle budget. */
+    val triangleBudgetExceeded: Boolean = false,
 ) {
     val meetsTarget: Boolean get() = fps >= 30f
 }
@@ -138,13 +144,14 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     fun stats(): RendererStats {
         val floats = FloatArray(4)
-        val ints = IntArray(10)
+        val ints = IntArray(13)
         NativeBridge.rendererStats(handle, floats, ints)
         return RendererStats(
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
             msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
             lastBackendError = ints[7], frameFatal = ints[8] != 0, frameSequence = ints[9],
+            activeLod = ints[10], availableLods = ints[11], triangleBudgetExceeded = ints[12] != 0,
         )
     }
 
