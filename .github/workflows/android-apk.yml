@@ -20,6 +20,8 @@ jobs:
     name: Build and verify Android packages
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -128,8 +130,9 @@ jobs:
           shader_files = ['native/src/render/af_shaders_gl.h', 'native/src/render/af_shaders_vk.h']
           provenance = {
               'repository': os.environ['GITHUB_REPOSITORY'],
+              'head_commit': os.environ.get('HEAD_SHA', os.environ['GITHUB_SHA']),
               'shader_tables': {p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in shader_files},
-              'commit': os.environ['GITHUB_SHA'],
+              'merge_or_push_commit': os.environ['GITHUB_SHA'],
               'ref': os.environ['GITHUB_REF'],
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -144,7 +147,7 @@ jobs:
       - name: Upload verified artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AvatarForge-Android-${{ github.sha }}
+          name: AvatarForge-Android-${{ github.event.pull_request.head.sha || github.sha }}
           path: dist/*
           if-no-files-found: error
           retention-days: 30
