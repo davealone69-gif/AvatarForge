@@ -17,6 +17,6 @@
 ## CI compile artifact — not a production release
 
 - [x] Source-defined fail-closed signing policy.
-- [ ] CI builds debug APK + explicitly unsigned AAB.
-- [ ] Artifact labelled UNSIGNED and not published to GitHub Release.
-- [ ] Provenance ties files to commit/run/attempt.
+- [x] CI builds debug APK + explicitly unsigned AAB (run 40858597544).
+- [x] Artifact labelled UNSIGNED and not published to GitHub Release.
+- [x] Provenance ties files to PR head SHA/run/attempt.

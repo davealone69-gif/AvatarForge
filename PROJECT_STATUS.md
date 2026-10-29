@@ -1,10 +1,10 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft.
+Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`, head `5e2f990`. PR #20 remains draft.
 
 ## Active checkpoint
 
-Maximum evidence-backed stability/integrity pass in progress. No AI was added. Source changes are saved on the Arena branch; exact-head CI is pending at this checkpoint.
+Maximum evidence-backed stability/integrity pass delivered. No AI was added. Exact-head CI is green: https://github.com/davealone69-gif/AvatarForge/actions/runs/40858597544.
 
 ## Implemented this pass
 
@@ -16,14 +16,18 @@ Maximum evidence-backed stability/integrity pass in progress. No AI was added. S
 - Native GLB/PNG import limits; removed dead GLB VIEW advertisement.
 - Audit docs under `docs/audit/`.
 
+## CI artifact
+
+`AvatarForge-Android-5e2f990b5435cfdfa5ee709b905e675b0478a2cb` (id 12890980765, 18,226,242 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not installable production release.
+
 ## Still not proven
 
-- Current-head Android CI, device camera movement, Vulkan device recovery, thermal cap effect, settings persistence on Android, moiré pixel improvement, sustained performance/memory.
+- Device camera movement, Vulkan device recovery, thermal cap effect, settings persistence on Android, moiré pixel improvement, sustained performance/memory.
 - Production signed AAB/APK: BLOCKED, no credentials.
 - Full engine/render thread ownership fence and diagnostic scene ladder: MISSING.
 
 ## Next exact steps
 
-1. Commit/push; watch exact-head CI; update docs with run/artifact evidence.
-2. Device-retest camera + diagnostics on SM-S921B using the CI debug APK.
-3. Implement P0 ownership fence and scene ladder from `REMEDIATION_PLAN.md`.
+1. Device-retest camera + diagnostics on SM-S921B using the CI debug APK from run 40858597544.
+2. Implement P0 ownership fence and diagnostic scene ladder from `REMEDIATION_PLAN.md`.
+3. Supply production signing credentials through GitHub secrets to unblock signed AAB/APK release.

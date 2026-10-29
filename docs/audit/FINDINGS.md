@@ -4,7 +4,7 @@ Labels: **REAL + VERIFIED** = evidence in this repo/environment; **PARTIAL** = i
 
 | ID | Severity | Finding | Status | Evidence / action |
 |---|---|---|---|---|
-| AF-001 | Critical | Release silently fell back to debug keystore; no AAB/provenance gate | PARTIAL | `app/build.gradle.kts` now fail-closed; CI builds explicitly unsigned AAB for compile proof; signed tag job requires secrets. CI/device signature proof pending |
+| AF-001 | Critical | Release silently fell back to debug keystore; no AAB/provenance gate | PARTIAL | Fail-closed signing + CI unsigned AAB/provenance verified in run 40858597544; production signature still BLOCKED without credentials |
 | AF-002 | Critical | Vulkan frame loop ignored fatal VkResults and counted frames before present | PARTIAL | `af_vk.cpp` records `frameError_`, fatal halt, attempts/submissions/accepted presents; JNI throws into bounded recovery. GLES host fault test passes; Vulkan device unverified |
 | AF-003 | High | FPS/frameMs were presented as GPU-side truth; cpuMs never measured | PARTIAL | Stats renamed semantically; `gpuMs=-1` unknown; BudgetRenderer measures CPU wall time; UI report labels interval/CPU/unknown GPU |
 | AF-004 | High | Severe thermal device reports did not constrain renderer | PARTIAL | `RenderThermalPolicy` + API-29 monitor cap quality and pace to 30 FPS at severe; JVM tests added; device thermal behaviour unverified |
@@ -12,7 +12,7 @@ Labels: **REAL + VERIFIED** = evidence in this repo/environment; **PARTIAL** = i
 | AF-006 | High | Overall progress added weight×fraction on every callback, overcounting stages | PARTIAL | `GenerationProgress` computes prior completed stages + current fraction; JVM tests added |
 | AF-007 | Critical | `release()` could destroy native handle while jobs ran; job IDs/list not concurrency-safe | PARTIAL | Single engine dispatcher, atomic IDs, completed-job pruning, release waits for cancellation before destroy. Cross-thread renderer/kernel mutation fence still MISSING |
 | AF-008 | High | Manifest advertised GLB VIEW target with no import handler | PARTIAL | Dead filter removed; native import limits added (128 MiB GLB, 16 MiB JSON, 2 M verts, PNG caps). User-facing import still MISSING |
-| AF-009 | High | Shader embedder could overwrite SPIR-V with an empty table when glslc missing | PARTIAL | Embedder preserves existing table and fails if absent/empty; CI compiles shaders and diffs generated headers |
+| AF-009 | High | Shader embedder could overwrite SPIR-V with an empty table when glslc missing | PARTIAL | Embedder guard verified; CI compiles shaders, GLES table matches, SPIR-V drift is warned and regenerated for CI builds |
 | AF-010 | High | Camera drag/pinch/panel fix not proven on device | UNVERIFIED | CI-green source fix exists; require SM-S921B retest with before/after diagnostics |
 | AF-011 | Medium | Moiré band-limit lacks pixel comparison | UNVERIFIED | Bake-time prefilter implemented earlier; no matched before/after device pixels |
 | AF-012 | High | Repository has no LICENSE | MISSING | GitHub metadata license null; do not assume reuse rights |

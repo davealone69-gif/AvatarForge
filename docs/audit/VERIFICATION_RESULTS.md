@@ -19,4 +19,11 @@ Checkpoint: 2026-10-29, branch `arena/aaf85469-avatarforge`.
 
 ## CI
 
-Pending push. The workflow now compiles shaders, diffs generated headers, builds ARM64 native libraries, runs SDK JVM tests, builds a debug APK and explicitly unsigned release AAB, verifies permissions/ABI/signature status, and writes SHA-256/provenance files.
+**REAL + VERIFIED:** run https://github.com/davealone69-gif/AvatarForge/actions/runs/40858597544 succeeded on head `5e2f990b5435cfdfa5ee709b905e675b0478a2cb` in 2m20s.
+
+- Shader source compile check passed; GLES table matched. CI warned that regenerated SPIR-V differs from the checked-in table and used the regenerated table for that build.
+- Renderer host tests, ARM64 native build, SDK JVM tests, debug APK, unsigned release AAB, SDK AAR, artifact verification and upload all passed.
+- Artifact: `AvatarForge-Android-5e2f990b5435cfdfa5ee709b905e675b0478a2cb`, id `12890980765`, 18,226,242 bytes. It contains a debug APK, an explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS and PROVENANCE.json.
+- Earlier red runs were fixed, not hidden: `40857157931` failed on strict SPIR-V diff; `40857486764` failed on Gradle signing-variable scope. Both are superseded by the green run.
+
+Production signed release remains **BLOCKED**: the signed-release job is skipped on PRs and requires production secrets on a tag.
