@@ -439,7 +439,7 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     Slider(value = settings.shadowSoftness, onValueChange = { onSettings(settings.copy(shadowSoftness = it)) }, valueRange = 0.5f..3f)
 }
 
-private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val thermal: Int?, val availableRamBytes: Long, val availableStorageBytes: Long, val resourceState: String)
+private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val frameSequence: Int, val thermal: Int?, val availableRamBytes: Long, val availableStorageBytes: Long, val resourceState: String)
 
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
@@ -504,7 +504,7 @@ private fun SystemCheckPanel(
                 val s = latestStats.value
                 runCatching { governor.snapshot() }.getOrNull()?.let { resources = it }
                 val snapshot = resources
-                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
+                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, s.frameSequence, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
             }
             running = false
         } else {
@@ -562,11 +562,15 @@ private fun SystemCheckPanel(
         val tierChanges = samples.zipWithNext().count { (a, b) -> a.tier != b.tier }
         // A single good sample cannot validate a 15-second adaptation window. Every sample must
         // have finite, positive frame cadence and renderer-call time before the verdict can pass.
-        val hasValidRenderTelemetry = samples.size == 15 && samples.all { sample ->
-            sample.fps.isFinite() && sample.fps > 0f &&
-                sample.frameMs.isFinite() && sample.frameMs > 0f &&
-                sample.cpuMs.isFinite() && sample.cpuMs > 0f
-        }
+        val hasValidRenderTelemetry = samples.size == 15 &&
+            samples.all { sample ->
+                sample.fps.isFinite() && sample.fps > 0f &&
+                    sample.frameMs.isFinite() && sample.frameMs > 0f &&
+                    sample.cpuMs.isFinite() && sample.cpuMs > 0f
+            } &&
+            // Positive cached FPS is not proof of a live renderer. Each one-second sample must
+            // show accepted-frame progress, otherwise a stalled renderer could "pass" adaptation.
+            samples.zipWithNext().all { (a, b) -> a.frameSequence != b.frameSequence }
         val averageFps = samples.map { it.fps }.average()
         DiagnosticLine("Samples", "${samples.size}/15 · average %.1f FPS".format(averageFps))
         DiagnosticLine("Start → end", "%.1f → %.1f FPS · tier %d → %d".format(first.fps, last.fps, first.tier, last.tier))
@@ -577,7 +581,7 @@ private fun SystemCheckPanel(
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
             info == null -> "SYSTEM ONLY · no active renderer; adaptive behaviour cannot be proven here"
-            !hasValidRenderTelemetry -> "INCONCLUSIVE · one or more samples have invalid/zero FPS, frame interval or renderer-call time"
+            !hasValidRenderTelemetry -> "INCONCLUSIVE · invalid cadence/timing or no accepted-frame progress between samples"
             settings.quality != Quality.AUTO -> "RECORDED ONLY · valid telemetry observed; adaptive tier changes require AUTO mode"
             tierChanges > 0 -> "ADAPTATION OBSERVED · valid telemetry and an effective tier transition were recorded"
             else -> "RECORDED ONLY · valid telemetry but no tier change observed; adaptation was not demonstrated"
