@@ -124,6 +124,18 @@ jobs:
       - name: Run full host regression, shader, GLB, ABI, and Rust workspace checks
         run: bash tools/verify.sh
 
+      - name: Preserve host verification logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvatarForge-host-verification-failures-${{ github.sha }}
+          path: |
+            build-host/host_tests_run.txt
+            build-host/host_tests_run.clean.txt
+            /tmp/af_*.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Configure optional release signing
         if: github.event_name != 'pull_request'
         id: release_signing
