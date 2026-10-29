@@ -223,7 +223,7 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
             Text(
                 "$backend · %.0f FPS (%.1f ms frame interval) · %s".format(
                     stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else if (settings.quality == Quality.AUTO) "below 30 FPS; AUTO can reduce effects" else "below 30 FPS; selected preset is fixed",
+                    if (stats.meetsTarget) "on target" else if (settings.quality == Quality.AUTO) "below 30 FPS · AUTO tier ${stats.qualityLevel}/3 · MSAA ${stats.msaaSamples}x · shadow ${stats.shadowMapSize}px" else "below 30 FPS · selected preset is fixed",
                 ),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
