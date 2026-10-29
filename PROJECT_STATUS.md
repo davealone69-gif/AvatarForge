@@ -35,7 +35,12 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## Verified now (local, this pass)
 
-- Exact-head GLES-only + eye/hair/chest model-detail CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40895347516 succeeded on `39c8cf6` in 7m52s.
+- Exact-head CI for this pass: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40900908327
+  **succeeded** on `d7822b7` in 12m00s — shader compile/diff, model + kernel + renderer host tests,
+  ARM64 native build, SDK JVM tests, debug APK, explicitly UNSIGNED release AAB, SDK AAR and the GLES
+  artifact guard. Artifact `12910680693` (17,657,509 bytes): `AvatarForge-Android-d7822b7…`.
+  The signed-release job was skipped (no credentials).
+- Previous checkpoint CI: run 40895347516 succeeded on `39c8cf6` in 7m52s.
 - Renderer host fault injection: **64 checks, 0 failures** (was 57; seven new option-sanitisation checks).
 - Focused model-detail regressions: **33 checks, 0 failures** (eyes, extracted eye symmetry, chest plate, hair eye-line, palms, garments).
 - Full kernel host harness: **406 checks, 0 failures**.
@@ -56,7 +61,10 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## CI artifact
 
-Exact-head artifact: `AvatarForge-Android-39c8cf68663e6b22419d392780095c74fb08bd3f` (id 12905983840, 17,610,882 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not an installable production release.
+Exact-head artifact: `AvatarForge-Android-d7822b751fd79f1defc50264d6a70edb16d08410` (id 12910680693,
+17,657,509 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json.
+The unsigned AAB is compile proof only, not an installable production release. The older
+`39c8cf6` artifact (12905983840) is superseded.
 
 ## Still not proven
 

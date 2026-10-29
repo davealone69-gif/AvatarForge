@@ -2,6 +2,34 @@
 
 Checkpoint: 2026-10-29, branch `arena/aaf85469-avatarforge`.
 
+## Zero-trust pass (code head `d7822b7`)
+
+### Executed locally
+
+- `bash tools/test_renderer_host.sh`: **64 checks, 0 failures** (57 before this pass). The seven new
+  checks cover option sanitisation (AF-025): a 65536² shadow map and 64× MSAA request are clamped,
+  NaN exposure is replaced, and a later `setOptions` with a 100000² map still renders a frame.
+- `bash tools/test_model_host.sh`: **33 checks, 0 failures** (unchanged; no model code was touched).
+- `bash tools/build_host.sh test`: **406 checks, 0 failures** (unchanged).
+- `git diff --check`: clean.
+- `python3 tools/embed_shaders.py --check`: exit 1 with `--check requires glslc; no compiler
+  validation is claimed`. Expected in this container; CI performed the real shader gate and passed.
+
+### CI
+
+**REAL + VERIFIED:** run https://github.com/davealone69-gif/AvatarForge/actions/runs/40900908327
+succeeded on head `d7822b751fd79f1defc50264d6a70edb16d08410` (12m00s), including the shader
+compile/diff gate, model + kernel + renderer host tests, ARM64 native build, SDK JVM tests (new codec
+clamping cases), debug APK, explicitly UNSIGNED release AAB, SDK AAR, GLES artifact guard and upload.
+Artifact: `AvatarForge-Android-d7822b7…`, id `12910680693`, 17,657,509 bytes. The signed-release job
+was skipped (no credentials).
+
+### Not proven by this pass
+
+- Kotlin concurrency correctness (AF-020) cannot be proven by a JVM test; device soak required.
+- Device pixels, thermals and frame pacing remain UNVERIFIED.
+- Rust crates remain uncompiled here (metadata only updated).
+
 ## Executed locally
 
 - `bash tools/test_renderer_host.sh`: **57 checks, 0 failures**. GLES/EGL are stateful host doubles; this proves API sequencing, error propagation, cleanup and C ABI telemetry layout, not pixels.

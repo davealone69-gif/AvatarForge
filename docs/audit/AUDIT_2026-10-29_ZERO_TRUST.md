@@ -125,8 +125,9 @@ items:
 
 Filled in after the final commit and CI run; see `PROJECT_STATUS.md` for the same values.
 
-- Branch: `arena/aaf85469-avatarforge`
-- Commit: `HEAD` of this document's commit (see the handover summary in `PROJECT_STATUS.md`)
+- Branch: `arena/aaf85469-avatarforge` (pushed; `main` untouched at `40ef65b`)
+- Code head: **`d7822b751fd79f1defc50264d6a70edb16d08410`** (this document's commit follows it and
+  changes documentation only)
 - Full kernel host harness: **406 checks, 0 failures** (unchanged count; no kernel behaviour was
   modified in this pass)
 - Model-detail regressions: **33 checks, 0 failures**
@@ -135,7 +136,10 @@ Filled in after the final commit and CI run; see `PROJECT_STATUS.md` for the sam
 - `tools/embed_shaders.py --check`: exit 1 with `--check requires glslc; no compiler validation is
   claimed` — the expected local result, not a pass
 - `git diff --check`: clean
-- CI: recorded in `PROJECT_STATUS.md` once the exact-head run completes
+- CI: run [40900908327](https://github.com/davealone69-gif/AvatarForge/actions/runs/40900908327)
+  **SUCCESS** on `d7822b7` in 12m00s; artifact `12910680693` (17,657,509 bytes) contains the debug
+  APK, the explicitly UNSIGNED release AAB, SDK AAR, `SHA256SUMS` and `PROVENANCE.json`. The
+  `signed-release` job was skipped because no credentials exist.
 
 ## 8. Remaining risks and blockers
 
