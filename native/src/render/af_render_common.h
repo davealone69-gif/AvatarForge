@@ -3,15 +3,14 @@
  *  AvatarForge :: af_render_common.h  --  maths, camera, light fitting and material mapping
  * ============================================================================================
  *
- *  Everything in here is backend-independent and header-only, so the Vulkan and GLES backends
- *  cannot disagree about a matrix convention, a material mapping or a UBO layout. The uniform
+ *  Shared GLES renderer maths, header-only, keeps camera projection, material mapping and
+ *  uniform-buffer layout in one place. The uniform
  *  block structs below are the C++ mirror of the std140 blocks in shaders/common.glsl; a static
  *  assert on each size keeps the two in step (std140 rounds every member up to 16 bytes, which
  *  is why the blocks are written as arrays of vec4 rather than as matrices plus scalars).
  *
  *  Matrix convention matches the kernel: column-major, translation in m[12..14], +Y up, -Z
- *  forward, right-handed, and the only difference between the two backends is the depth range
- *  of the projection (Vulkan [0,1] vs OpenGL [-1,1]) and the clip-space Y direction.
+ *  forward, right-handed, OpenGL clip-space depth [-1,1] and +Y up.
  */
 #ifndef AF_RENDER_COMMON_H
 #define AF_RENDER_COMMON_H
@@ -73,32 +72,27 @@ inline Mat4 matLookAt(const float eye[3], const float target[3], const float up[
     return r;
 }
 
-/** Perspective projection. `depthZeroToOne` selects the Vulkan depth convention. */
-inline Mat4 matPerspective(float fovYDeg, float aspect, float znear, float zfar, bool depthZeroToOne) {
+/** Right-handed OpenGL perspective projection with clip-space depth [-1,1]. */
+inline Mat4 matPerspective(float fovYDeg, float aspect, float znear, float zfar) {
     const float f = 1.0f / std::tan(fovYDeg * 3.14159265358979f / 360.0f);
     Mat4 r{};
     r.m[0] = f / (aspect > 1e-5f ? aspect : 1.0f);
     r.m[5] = f;
-    r.m[10] = depthZeroToOne ? (zfar / (znear - zfar)) : -((zfar + znear) / (zfar - znear));
+    r.m[10] = -((zfar + znear) / (zfar - znear));
     r.m[11] = -1.0f;
-    r.m[14] = depthZeroToOne ? (zfar * znear / (znear - zfar)) : -((2.0f * zfar * znear) / (zfar - znear));
+    r.m[14] = -((2.0f * zfar * znear) / (zfar - znear));
     return r;
 }
 
 /** Orthographic projection used by the sun's shadow map. */
-inline Mat4 matOrtho(float l, float r_, float b, float t, float zn, float zf, bool depthZeroToOne) {
+inline Mat4 matOrtho(float l, float r_, float b, float t, float zn, float zf) {
     Mat4 r{};
     r.m[0] = 2.0f / (r_ - l);
     r.m[5] = 2.0f / (t - b);
     r.m[12] = -(r_ + l) / (r_ - l);
     r.m[13] = -(t + b) / (t - b);
-    if (depthZeroToOne) {
-        r.m[10] = -1.0f / (zf - zn);
-        r.m[14] = -zn / (zf - zn);
-    } else {
-        r.m[10] = -2.0f / (zf - zn);
-        r.m[14] = -(zf + zn) / (zf - zn);
-    }
+    r.m[10] = -2.0f / (zf - zn);
+    r.m[14] = -(zf + zn) / (zf - zn);
     r.m[15] = 1.0f;
     return r;
 }
@@ -262,8 +256,7 @@ inline void modelBounds(const af_engine* engine, float outMin[3], float outMax[3
 
 /* Builds the camera UBO for one frame: orbit camera, sun direction, SH irradiance and flags. */
 inline void buildCameraUbo(FrameScene* scene, const CameraState& cam, const RendererOptions& opt,
-                           const EnvironmentParams& env, const ShGlobal& sh, int width, int height,
-                           bool depthZeroToOne) {
+                           const EnvironmentParams& env, const ShGlobal& sh, int width, int height) {
     const float aspect = float(width) / float(height > 0 ? height : 1);
     const float yaw = cam.yawDeg * 3.14159265358979f / 180.0f;
     const float pitch = cam.pitchDeg * 3.14159265358979f / 180.0f;
@@ -278,10 +271,7 @@ inline void buildCameraUbo(FrameScene* scene, const CameraState& cam, const Rend
     const float eyeArr[3] = {eye.x, eye.y, eye.z};
     const float up[3] = {0.0f, 1.0f, 0.0f};
 
-    /* The only backend difference in the whole camera: Vulkan's clip space is [0,1] in depth with
-       +Y down, GL's is [-1,1] with +Y up. The Y direction is reconciled in the vertex shader
-       (AF_CLIP_Y) so a single projection formula serves both. */
-    const Mat4 proj = matPerspective(cam.fovDeg, aspect, 0.05f, 60.0f, depthZeroToOne);
+    const Mat4 proj = matPerspective(cam.fovDeg, aspect, 0.05f, 60.0f);
     const Mat4 view = matLookAt(eyeArr, target, up);
     const Mat4 vp = matMul(proj, view);
 
@@ -312,7 +302,7 @@ inline void buildCameraUbo(FrameScene* scene, const CameraState& cam, const Rend
     const Vec3 upRef = (std::fabs(sun.y) > 0.98f) ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
     const float upArr[3] = {upRef.x, upRef.y, upRef.z};
     const Mat4 lightView = matLookAt(le, centre, upArr);
-    const Mat4 lightProj = matOrtho(-extent, extent, -extent, extent, 0.05f, extent * 5.0f, depthZeroToOne);
+    const Mat4 lightProj = matOrtho(-extent, extent, -extent, extent, 0.05f, extent * 5.0f);
     const Mat4 lightVp = matMul(lightProj, lightView);
     std::memcpy(scene->camera.lightViewProj, lightVp.m, sizeof(lightVp.m));
 
