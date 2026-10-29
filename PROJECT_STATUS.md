@@ -289,3 +289,18 @@ Next action: implement a separate consumer smoke-test app/module, build and insp
 - GitHub Actions Android APK run [#40102319017](https://github.com/davealone69-gif/AvatarForge/actions/runs/40102319017) was automatically queued for HEAD `ab525440c81ea307a583d0dc87a595794391ca21`; at checkpoint time it is **QUEUED**, not passed. Its build job includes `:sdk:assembleRelease` and uploads the newly built SDK AAR as an artifact if the workflow succeeds.
 - Not yet done: independent consumer sample app, external AAR consumption build, publication/POM inspection, fresh artifact size/hash, and physical-device lifecycle/render tests. Do not claim these passed until the workflow and consumer checks provide evidence.
 - Runtime remains **UNVERIFIED**; production signing remains **BLOCKED** without a valid keystore. Deferred work remains tracked. `main` unchanged.
+
+
+## Deep renderer audit checkpoint — 2026-10-29
+
+- Isolated audit branch: `fix/avatarforge-visual-quality-performance-2026-10-29`; do not merge into `main` until source-linked CI and device gates pass.
+- Latest code checkpoint before this status update: `966246a3f598bb11bb59929cec9e7ebebbbd8de2`.
+- Draft PR: [#21](https://github.com/davealone69-gif/AvatarForge/pull/21).
+- Audit record: [docs/FULL_ENGINE_AUDIT_2026-10-29.md](docs/FULL_ENGINE_AUDIT_2026-10-29.md).
+- The screenshot says `tris submitted`; the current canonical source says `tris selected for rendering` and reads the selected-triangle counter. Treat the screenshot's APK/source revision as **UNVERIFIED** until an artifact is tied to a commit SHA. The duplicated 426,170 total/selected count is suspicious and must be checked against actual selected LOD telemetry, not assumed to be a rendering bug.
+- Source review confirmed that Vulkan currently waits for **all** in-flight fences every frame because geometry/material/post/Forward+ mapped buffers are shared and CPU-written. This protects correctness but serializes frames and is a significant performance concern. **Do not remove this wait without first introducing safe per-frame ownership for all mutable GPU-read buffers and regression tests.**
+- AUTO changes MSAA/shadow/bloom; the LOD system separately aims for a 50,000-triangle mobile budget. The actual generated avatar's selected LOD and whether the target is met remain **UNVERIFIED**.
+- Added diagnostic honesty to `ViewerScreen.kt`: invalid/zero telemetry is not called healthy; a 15-sample adaptation window requires every sample to have finite positive timing and advancing accepted-frame sequence before it can claim adaptation.
+- Latest relevant workflow run for the prior head: [40862690988](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862690988) was cancelled by a newer push. Run [40862621045](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862621045) was still in progress when last checked and was for an older head. The latest code head's Actions run is pending; **no green claim** until checks complete for the exact current SHA.
+- Headless GLES/Vulkan and importer sanitizer jobs passed for earlier SHA `fd1e34d014e7c42a43190902f985d57052b8b97b`, but that run was cancelled before the Android package job completed. These are not current-head build verification.
+- Physical Samsung S24 runtime remains **UNVERIFIED**.
