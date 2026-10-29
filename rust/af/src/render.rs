@@ -120,7 +120,7 @@ impl Default for RenderInfo {
 }
 
 impl RenderInfo {
-    /// "vulkan" or "gles31" - what the renderer actually initialised, never a guess.
+    /// "gles31" - the GLES renderer actually initialised, never a guess.
     pub fn backend(&self) -> String {
         cstr(&self.backend)
     }
