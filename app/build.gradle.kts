@@ -13,6 +13,25 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+/*
+ * Release signing is fail-closed. A production release/AAB requires a real keystore supplied
+ * through keystore.properties (ignored by git) or AF_RELEASE_* environment variables. CI may
+ * compile an explicitly unsigned release artifact with -Paf.allowUnsignedRelease=true, but that
+ * artifact is labelled UNSIGNED, is never published, and is not installable as an update.
+ * There is no silent debug-keystore fallback for release.
+ */
+val keystoreProps = rootProject.file("keystore.properties")
+val props = Properties().apply { if (keystoreProps.exists()) keystoreProps.inputStream().use { load(it) } }
+fun signingValue(propKey: String, envKey: String): String? =
+    (props.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
+val releaseStorePath = signingValue("storeFile", "AF_RELEASE_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "AF_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "AF_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "AF_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+    .all { it != null } && file(releaseStorePath!!).isFile
+val allowUnsignedRelease = providers.gradleProperty("af.allowUnsignedRelease").orNull == "true"
+
 android {
     namespace = "com.avatarforge.app"
     compileSdk = 34
@@ -34,24 +53,6 @@ android {
         ndk { abiFilters += abis }
     }
 
-    /*
-     * Release signing is fail-closed. A production release/AAB requires a real keystore supplied
-     * through keystore.properties (ignored by git) or AF_RELEASE_* environment variables. CI may
-     * compile an explicitly unsigned release artifact with -Paf.allowUnsignedRelease=true, but that
-     * artifact is labelled UNSIGNED, is never published, and is not installable as an update.
-     * There is no silent debug-keystore fallback for release.
-     */
-    val keystoreProps = rootProject.file("keystore.properties")
-    val props = Properties().apply { if (keystoreProps.exists()) keystoreProps.inputStream().use { load(it) } }
-    fun signingValue(propKey: String, envKey: String): String? =
-        (props.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
-    val releaseStorePath = signingValue("storeFile", "AF_RELEASE_STORE_FILE")
-    val releaseStorePassword = signingValue("storePassword", "AF_RELEASE_STORE_PASSWORD")
-    val releaseKeyAlias = signingValue("keyAlias", "AF_RELEASE_KEY_ALIAS")
-    val releaseKeyPassword = signingValue("keyPassword", "AF_RELEASE_KEY_PASSWORD")
-    val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
-        .all { it != null } && file(releaseStorePath!!).isFile
-    val allowUnsignedRelease = providers.gradleProperty("af.allowUnsignedRelease").orNull == "true"
     if (hasReleaseSigning) {
         signingConfigs.create("release") {
             storeFile = file(releaseStorePath!!)

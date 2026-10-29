@@ -2652,7 +2652,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         const VkResult capResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps);
         if (capResult != VK_SUCCESS) { fail(capResult, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"); return false; }
         int w = int(caps.currentExtent.width), h = int(caps.currentExtent.height);
-        if (w <= 0 || h <= 0 || w == int(UINT32_MAX) || h == int(UINT32_MAX)) {
+        if (w <= 0 || h <= 0 || caps.currentExtent.width == 0xFFFFFFFFu || caps.currentExtent.height == 0xFFFFFFFFu) {
             w = int(swapExtent_.width); h = int(swapExtent_.height);
         }
         if (w <= 0 || h <= 0) { fail(VK_ERROR_INITIALIZATION_FAILED, "surface extent"); return false; }
