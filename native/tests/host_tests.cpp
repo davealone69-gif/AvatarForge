@@ -1460,7 +1460,7 @@ static void testShaderTables() {
 static void testGpuProfilesAndTextureCompression() {
     std::printf("[10c] per-device GPU profiles and ASTC/ETC2 atlas encoding\n");
     GpuDeviceCaps caps;
-    caps.backend = "vulkan";
+    caps.backend = "gles31";
     caps.vendorId = 0x5143u;
     caps.deviceName = "Adreno (TM) 650";
     caps.maxTextureDimension2D = 16384;
