@@ -9,6 +9,15 @@ arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the 
 statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
 what that means and what is outstanding.
 
+### 2026-10-29 device fault
+
+A supplied phone screenshot shows successful generation (417,150 triangles) followed by a viewer
+startup failure: Vulkan was disabled in settings and GLES initialization failed. The GLES path had
+invalid sampler/VAO setup ordering and discarded useful driver diagnostics. Those paths now have
+host fault-injection coverage, explicit retry/backend switching, and conservative MSAA/HDR fallback.
+**The phone has not been retested; visible rendering and FPS remain unverified.** See
+[the fault report](docs/RENDERER_FAULT_2026-10-29.md).
+
 ### 2026-10-18 continuation status
 
 - The complete 28-float image-analysis wire format and 1–4 record regressions pass. The full native

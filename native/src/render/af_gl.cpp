@@ -43,10 +43,71 @@
 namespace af {
 namespace {
 
+std::string hexCode(unsigned int value) {
+    char text[16];
+    std::snprintf(text, sizeof(text), "0x%04X", value);
+    return text;
+}
+
+const char* glErrorName(GLenum error) {
+    switch (error) {
+        case GL_INVALID_ENUM: return "GL_INVALID_ENUM";
+        case GL_INVALID_VALUE: return "GL_INVALID_VALUE";
+        case GL_INVALID_OPERATION: return "GL_INVALID_OPERATION";
+        case GL_OUT_OF_MEMORY: return "GL_OUT_OF_MEMORY";
+        case GL_INVALID_FRAMEBUFFER_OPERATION: return "GL_INVALID_FRAMEBUFFER_OPERATION";
+        default: return "GL error";
+    }
+}
+
+const char* eglErrorName(EGLint error) {
+    switch (error) {
+        case EGL_NOT_INITIALIZED: return "EGL_NOT_INITIALIZED";
+        case EGL_BAD_ACCESS: return "EGL_BAD_ACCESS";
+        case EGL_BAD_ALLOC: return "EGL_BAD_ALLOC";
+        case EGL_BAD_ATTRIBUTE: return "EGL_BAD_ATTRIBUTE";
+        case EGL_BAD_CONFIG: return "EGL_BAD_CONFIG";
+        case EGL_BAD_CONTEXT: return "EGL_BAD_CONTEXT";
+        case EGL_BAD_CURRENT_SURFACE: return "EGL_BAD_CURRENT_SURFACE";
+        case EGL_BAD_DISPLAY: return "EGL_BAD_DISPLAY";
+        case EGL_BAD_MATCH: return "EGL_BAD_MATCH";
+        case EGL_BAD_NATIVE_WINDOW: return "EGL_BAD_NATIVE_WINDOW";
+        case EGL_BAD_PARAMETER: return "EGL_BAD_PARAMETER";
+        case EGL_BAD_SURFACE: return "EGL_BAD_SURFACE";
+        case EGL_CONTEXT_LOST: return "EGL_CONTEXT_LOST";
+        default: return "EGL error";
+    }
+}
+
+bool checkGlError(const char* operation, std::string* error) {
+    /* Drain the queue so a failure cannot leak into the next initialization stage. Keep the
+       first error: it is the cause, while subsequent errors are often its consequences. */
+    GLenum first = GL_NO_ERROR;
+    int count = 0;
+    for (GLenum current = glGetError(); current != GL_NO_ERROR; current = glGetError()) {
+        if (first == GL_NO_ERROR) first = current;
+        if (++count == 16) break;
+    }
+    if (first == GL_NO_ERROR) return true;
+    if (error) {
+        *error = std::string(operation) + ": " + glErrorName(first) + " (" + hexCode(first) + ")";
+        if (count > 1) *error += " and " + std::to_string(count - 1) + " further error(s)";
+    }
+    return false;
+}
+
+void failEgl(const char* operation, std::string* error) {
+    if (!error) return;
+    const EGLint code = eglGetError();
+    *error = std::string(operation) + ": " + eglErrorName(code) + " (" + hexCode(code) + ")";
+}
+
 bool compileShader(GLenum type, const char* source, const char* label, GLuint* out, std::string* error) {
+    const char* stage = type == GL_VERTEX_SHADER ? "vertex shader " : "fragment shader ";
     const GLuint shader = glCreateShader(type);
-    if (!shader) {
-        if (error) *error = std::string("glCreateShader failed for ") + label;
+    if (!shader || !checkGlError("glCreateShader", error)) {
+        if (error && error->empty()) *error = std::string("glCreateShader returned zero for ") + stage + label;
+        if (shader) glDeleteShader(shader);
         return false;
     }
     glShaderSource(shader, 1, &source, nullptr);
@@ -58,7 +119,11 @@ bool compileShader(GLenum type, const char* source, const char* label, GLuint* o
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
         std::string log(size_t(len > 1 ? len : 1), '\0');
         glGetShaderInfoLog(shader, len, nullptr, &log[0]);
-        if (error) *error = std::string(label) + ": " + log;
+        if (error) *error = std::string(stage) + label + ": " + log;
+        glDeleteShader(shader);
+        return false;
+    }
+    if (!checkGlError("glCompileShader", error)) {
         glDeleteShader(shader);
         return false;
     }
@@ -91,8 +156,10 @@ public:
 private:
     bool createContext(ANativeWindow* window, std::string* error);
     bool createPrograms(std::string* error);
+    bool createGeometryResources(std::string* error);
+    bool createUniformBuffers(std::string* error);
+    bool createPlaceholderAtlas(std::string* error);
     bool createTargets(std::string* error);
-    bool createAtlas(std::string* error);
     void uploadAtlas(std::string* error);
     void ensureGeometryBuffers();
     void rebuildMaterialBlocks();
@@ -106,7 +173,7 @@ private:
     void destroyTargets();
     void destroyAll();
     bool makeFramebufferWithTexture(GLuint* fbo, GLuint* texture, int w, int h, GLenum internalFormat,
-                                    GLenum format, GLenum type, bool depth);
+                                    GLenum format, GLenum type, const char* label, std::string* error);
 
     GLuint linkProgram(const char* vsName, const char* fsName, std::string* error);
 
@@ -181,9 +248,10 @@ private:
  *  Context
  * ============================================================================================ */
 bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
+    (void)eglGetError();   /* Do not attribute an older thread-local error to this operation. */
     display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (display_ == EGL_NO_DISPLAY) { *error = "eglGetDisplay failed"; return false; }
-    if (!eglInitialize(display_, nullptr, nullptr)) { *error = "eglInitialize failed"; return false; }
+    if (display_ == EGL_NO_DISPLAY) { failEgl("eglGetDisplay", error); return false; }
+    if (!eglInitialize(display_, nullptr, nullptr)) { failEgl("eglInitialize", error); return false; }
 
     /* Require ES 3.1: ES3_BIT_KHR with a 3.x context, plus a depth buffer for the shadow pass and
        a window surface that EGL itself considers RGB-capable. Multisampling is done with
@@ -196,24 +264,32 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
         EGL_NONE
     };
     EGLint configCount = 0;
-    if (!eglChooseConfig(display_, configAttribs, &config_, 1, &configCount) || configCount == 0) {
+    if (!eglChooseConfig(display_, configAttribs, &config_, 1, &configCount)) {
+        failEgl("eglChooseConfig", error);
+        return false;
+    }
+    if (configCount == 0) {
         *error = "no EGL config with an ES3 renderable type and a 24-bit depth buffer";
         return false;
     }
 
     const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
     context_ = eglCreateContext(display_, config_, EGL_NO_CONTEXT, contextAttribs);
-    if (context_ == EGL_NO_CONTEXT) { *error = "eglCreateContext(ES3) failed"; return false; }
+    if (context_ == EGL_NO_CONTEXT) { failEgl("eglCreateContext(ES3)", error); return false; }
 
     surface_ = eglCreateWindowSurface(display_, config_, window, nullptr);
-    if (surface_ == EGL_NO_SURFACE) { *error = "eglCreateWindowSurface failed"; return false; }
+    if (surface_ == EGL_NO_SURFACE) { failEgl("eglCreateWindowSurface", error); return false; }
 
     if (!eglMakeCurrent(display_, surface_, surface_, context_)) {
-        *error = "eglMakeCurrent failed";
+        failEgl("eglMakeCurrent", error);
         return false;
     }
-    eglQuerySurface(display_, surface_, EGL_WIDTH, &surfaceWidth_);
-    eglQuerySurface(display_, surface_, EGL_HEIGHT, &surfaceHeight_);
+    if (!eglQuerySurface(display_, surface_, EGL_WIDTH, &surfaceWidth_) ||
+        !eglQuerySurface(display_, surface_, EGL_HEIGHT, &surfaceHeight_)) {
+        failEgl("eglQuerySurface(size)", error);
+        return false;
+    }
+    (void)glGetError();   /* GL error state becomes valid only after eglMakeCurrent. */
 
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const char* rendererName = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -231,24 +307,36 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     uboAlignment_ = uint32_t(align > 0 ? align : 256);
 
-    /* Floating-point colour attachments: ES 3.2 has them in core, ES 3.0/3.1 need the extension. */
-    bool floatColour = (major > 3 || (major == 3 && minor >= 2));
-    if (!floatColour) {
-        const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-        floatColour = ext && std::strstr(ext, "GL_EXT_color_buffer_float") != nullptr;
-    }
+    /* Match complete extension tokens, not prefixes of similarly named extensions. */
+    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    auto hasExtension = [extensions](const char* name) {
+        if (!extensions) return false;
+        const size_t length = std::strlen(name);
+        for (const char* token = extensions; *token; ) {
+            while (*token == ' ') ++token;
+            const char* end = std::strchr(token, ' ');
+            if (!end) end = token + std::strlen(token);
+            if (size_t(end - token) == length && std::strncmp(token, name, length) == 0) return true;
+            token = end;
+        }
+        return false;
+    };
+    /* ES 3.2 makes half-float colour attachments renderable in core. */
+    const bool floatColour = major > 3 || (major == 3 && minor >= 2) ||
+                             hasExtension("GL_EXT_color_buffer_float") ||
+                             hasExtension("GL_EXT_color_buffer_half_float");
     hdrInternalFormat_ = floatColour ? GL_RGBA16F : GL_RGBA8;
-
+    GLint maxSamples = 1;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
     info_.backend = "gles31";
     info_.deviceName = rendererName ? rendererName : "unknown GPU";
     info_.apiVersion = version;
     info_.driver = vendor ? vendor : "unknown vendor";
     info_.supportsFloatHdr = floatColour;
-    info_.supportsMsaa = true;
+    info_.supportsMsaa = maxSamples > 1;
     info_.supportsShadows = true;
-    info_.supportsAnisotropy = true;   /* queried properly below; ES 3.0 has anisotropy via the
-                                          same enum, and the sampler clamps to the driver limit */
-    return true;
+    info_.supportsAnisotropy = hasExtension("GL_EXT_texture_filter_anisotropic");
+    return checkGlError("context capability queries", error);
 }
 
 /* ============================================================================================
@@ -268,6 +356,13 @@ GLuint GlRenderer::linkProgram(const char* vsName, const char* fsName, std::stri
         return 0;
     }
     const GLuint program = glCreateProgram();
+    if (!program || !checkGlError("glCreateProgram", error)) {
+        if (error && error->empty()) *error = std::string("glCreateProgram returned zero for ") + vsName;
+        if (program) glDeleteProgram(program);
+        glDeleteShader(vsobj);
+        glDeleteShader(fsobj);
+        return 0;
+    }
     glAttachShader(program, vsobj);
     glAttachShader(program, fsobj);
     glLinkProgram(program);
@@ -282,6 +377,10 @@ GLuint GlRenderer::linkProgram(const char* vsName, const char* fsName, std::stri
         std::string log(size_t(len > 1 ? len : 1), '\0');
         glGetProgramInfoLog(program, len, nullptr, &log[0]);
         *error = std::string("link ") + vsName + "/" + fsName + ": " + log;
+        glDeleteProgram(program);
+        return 0;
+    }
+    if (!checkGlError("glLinkProgram", error)) {
         glDeleteProgram(program);
         return 0;
     }
@@ -318,11 +417,19 @@ bool GlRenderer::createPrograms(std::string* error) {
         return false;
     }
 
-    /* Sampler units. The GLES dialect of common.glsl declares the samplers without a binding
-       qualifier, so the units are assigned here, next to the code that binds them. */
+    if (!checkGlError("uniform block bindings", error)) return false;
+
+    /* Sampler uniforms belong to the CURRENT program, not to the program returned by
+       glGetUniformLocation. Without glUseProgram these writes raise GL_INVALID_OPERATION;
+       a later error check then misreports the failure as a render-target/init failure. */
+    GLint previousProgram = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     auto unit = [](GLuint p, const char* name, GLint value) {
         const GLint loc = glGetUniformLocation(p, name);
-        if (loc >= 0) glUniform1i(loc, value);
+        if (loc >= 0) {
+            glUseProgram(p);
+            glUniform1i(loc, value);
+        }
     };
     unit(forwardProgram_, "uBaseColorTex", 0);
     unit(forwardProgram_, "uNormalTex", 1);
@@ -336,6 +443,8 @@ bool GlRenderer::createPrograms(std::string* error) {
     unit(compositeProgram_, "uSourceTex", 6);
     unit(compositeProgram_, "uBloomTex", 7);
     unit(shadowProgram_, "uBaseColorTex", 0);   /* present only to keep the block uniform */
+    glUseProgram(GLuint(previousProgram));
+    if (!checkGlError("sampler uniform assignments", error)) return false;
 
     uForward_.baseColor = glGetUniformLocation(forwardProgram_, "uBaseColorTex");
     uForward_.normal = glGetUniformLocation(forwardProgram_, "uNormalTex");
@@ -351,7 +460,7 @@ bool GlRenderer::createPrograms(std::string* error) {
  * ============================================================================================ */
 bool GlRenderer::makeFramebufferWithTexture(GLuint* fbo, GLuint* texture, int w, int h,
                                             GLenum internalFormat, GLenum format, GLenum type,
-                                            bool depth) {
+                                            const char* label, std::string* error) {
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_2D, *texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GLint(internalFormat), w, h, 0, format, type, nullptr);
@@ -363,16 +472,18 @@ bool GlRenderer::makeFramebufferWithTexture(GLuint* fbo, GLuint* texture, int w,
     glGenFramebuffers(1, fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
-    if (depth) {
-        GLuint depthRb = 0;
-        glGenRenderbuffers(1, &depthRb);
-        glBindRenderbuffer(GL_RENDERBUFFER, depthRb);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, 0, GL_DEPTH_COMPONENT24, w, h);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRb);
+    if (!checkGlError(label, error)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
     }
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return status == GL_FRAMEBUFFER_COMPLETE;
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        *error = std::string(label) + ": incomplete framebuffer (" + hexCode(status) +
+                 "), format " + hexCode(internalFormat) + ", " + std::to_string(w) + "x" + std::to_string(h);
+        return false;
+    }
+    return true;
 }
 
 bool GlRenderer::createTargets(std::string* error) {
@@ -386,8 +497,7 @@ bool GlRenderer::createTargets(std::string* error) {
     /* Resolved HDR image, sampled by bloom and composite. */
     if (!makeFramebufferWithTexture(&hdrFbo_, &hdrTexture_, w, h, hdrInternalFormat_, GL_RGBA,
                                    hdrInternalFormat_ == GL_RGBA16F ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE,
-                                   false)) {
-        *error = "HDR framebuffer incomplete (float colour buffers unavailable)";
+                                   "HDR colour framebuffer", error)) {
         return false;
     }
 
@@ -402,10 +512,10 @@ bool GlRenderer::createTargets(std::string* error) {
     glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRb_);
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, w, h);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msaaDepthRb_);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        /* The device refused the requested sample count; drop both attachments to 1x and try once
-           more. The old fallback accidentally allocated the depth renderbuffer with the HDR colour
-           format, guaranteeing an incomplete FBO exactly when auto quality changed tier. */
+    const bool msaaAllocated = checkGlError("MSAA storage allocation", nullptr);
+    if (!msaaAllocated || glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        /* The device refused the requested format/sample count. Consume that expected rejection
+           before retrying both attachments at 1x, so it is not mistaken for a later failure. */
         glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRb_);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, 1, GL_DEPTH_COMPONENT24, w, h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msaaDepthRb_);
@@ -414,8 +524,14 @@ bool GlRenderer::createTargets(std::string* error) {
         glBindRenderbuffer(GL_RENDERBUFFER, msaaColorRb_);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, 1, hdrInternalFormat_, w, h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msaaColorRb_);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            *error = "MSAA framebuffer incomplete even at 1x";
+        if (!checkGlError("single-sample render-target allocation", error)) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return false;
+        }
+        const GLenum singleSampleStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (singleSampleStatus != GL_FRAMEBUFFER_COMPLETE) {
+            *error = "MSAA framebuffer incomplete at 1x (" + hexCode(singleSampleStatus) +
+                     "), format " + hexCode(hdrInternalFormat_) + ", " + std::to_string(w) + "x" + std::to_string(h);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             return false;
         }
@@ -439,10 +555,12 @@ bool GlRenderer::createTargets(std::string* error) {
     glGenFramebuffers(1, &shadowFbo_);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowTexture_, 0);
-    glDrawBuffers(0, nullptr);                  /* depth-only: no colour attachment at all */
+    const GLenum noColour = GL_NONE;
+    glDrawBuffers(1, &noColour);                /* depth-only: explicitly disable colour output */
     glReadBuffer(GL_NONE);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        *error = "shadow framebuffer incomplete";
+    if (!checkGlError("shadow framebuffer allocation", error) ||
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        if (error->empty()) *error = "shadow framebuffer incomplete";
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return false;
     }
@@ -459,8 +577,7 @@ bool GlRenderer::createTargets(std::string* error) {
                                         hdrInternalFormat_, GL_RGBA,
                                         hdrInternalFormat_ == GL_RGBA16F ? GL_HALF_FLOAT
                                                                          : GL_UNSIGNED_BYTE,
-                                        false)) {
-            *error = "bloom framebuffer incomplete";
+                                        "bloom colour framebuffer", error)) {
             return false;
         }
         bloomWidth_[level] = lw;
@@ -471,25 +588,41 @@ bool GlRenderer::createTargets(std::string* error) {
     stats_.bloomLevels = bloomLevels_;
     stats_.msaaSamples = options_.msaaSamples;
     stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
-    return true;
+    return checkGlError("render-target setup", error);
 }
 
 /* ============================================================================================
  *  Setup
  * ============================================================================================ */
-bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
-    options_ = options;
-    if (!createContext(window, error)) return false;
-    if (!createPrograms(error)) return false;
+bool GlRenderer::createGeometryResources(std::string* error) {
+    const float quad[12] = {-1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f,
+                            -1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f};
+    glGenBuffers(1, &groundVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 
+    lineCapacity_ = GLint64(4096 * 28);
+    glGenBuffers(1, &lineVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
+    glBufferData(GL_ARRAY_BUFFER, lineCapacity_, nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    if (!checkGlError("ground/skeleton buffer allocation", error)) return false;
+
+    /* Names may exist before their data store is allocated. The avatar's stores are sized on
+       attachment, but its VAO needs non-zero buffer bindings now. */
+    glGenBuffers(1, &vertexVbo_);
+    glGenBuffers(1, &indexIbo_);
     glGenVertexArrays(1, &avatarVao_);
     glGenVertexArrays(1, &groundVao_);
     glGenVertexArrays(1, &emptyVao_);
     glGenVertexArrays(1, &lineVao_);
 
-    /* Avatar VAO: the engine's interleaved af_vertex, stride 88. */
+    /* A VAO records buffer names and the element-buffer binding. Allocate and bind the storage
+       BEFORE describing attributes: binding name zero is not a forward declaration and leaves
+       the VAO unusable even if a later call creates a buffer with the intended name. */
     glBindVertexArray(avatarVao_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, VertexLayout::stride,
                           reinterpret_cast<const void*>(size_t(VertexLayout::posOffset)));
@@ -507,14 +640,12 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
                           reinterpret_cast<const void*>(size_t(VertexLayout::colorOffset)));
     glBindVertexArray(0);
 
-    /* Ground VAO: positions only. */
     glBindVertexArray(groundVao_);
     glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
     glBindVertexArray(0);
 
-    /* Skeleton VAO: position + colour. */
     glBindVertexArray(lineVao_);
     glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     glEnableVertexAttribArray(0);
@@ -523,19 +654,11 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(float) * 7,
                           reinterpret_cast<const void*>(sizeof(float) * 3));
     glBindVertexArray(0);
-
-    const float quad[12] = {-1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f,
-                            -1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f};
-    glGenBuffers(1, &groundVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-
-    lineCapacity_ = GLint64(4096 * 28);
-    glGenBuffers(1, &lineVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
-    glBufferData(GL_ARRAY_BUFFER, lineCapacity_, nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return checkGlError("vertex array configuration", error);
+}
 
+bool GlRenderer::createUniformBuffers(std::string* error) {
     glGenBuffers(1, &cameraUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 2, nullptr, GL_DYNAMIC_DRAW);
@@ -547,9 +670,11 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 32, nullptr, GL_DYNAMIC_DRAW);
     materialCapacity_ = GLint64(uboAlignment_) * 32;
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    return checkGlError("uniform buffer allocation", error);
+}
 
-    /* Atlas placeholders: 1x1 white, so the sampler bindings are always valid (the shaders gate
-       every lookup on the material's has_*_tex flags). */
+bool GlRenderer::createPlaceholderAtlas(std::string* error) {
+    /* 1x1 white, so sampler bindings are valid before an engine is attached. */
     const GLubyte white[4] = {255, 255, 255, 255};
     for (int i = 0; i < AF_TEX_COUNT; ++i) {
         glGenTextures(1, &atlasTexture_[i]);
@@ -560,8 +685,31 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+    return checkGlError("placeholder atlas allocation", error);
+}
 
-    if (!createTargets(error)) return false;
+bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
+    options_ = options;
+    std::string detail;
+    auto failed = [error](const char* stage, const std::string& reason) {
+        if (error) *error = std::string(stage) + ": " + (reason.empty() ? "unspecified failure" : reason);
+        return false;
+    };
+    if (!createContext(window, &detail)) return failed("EGL context", detail);
+    if (!createPrograms(&detail)) return failed("shader programs", detail);
+    if (!createGeometryResources(&detail)) return failed("geometry resources", detail);
+    if (!createUniformBuffers(&detail)) return failed("uniform buffers", detail);
+    if (!createPlaceholderAtlas(&detail)) return failed("placeholder atlas", detail);
+    if (!createTargets(&detail)) {
+        if (hdrInternalFormat_ != GL_RGBA16F) return failed("render targets", detail);
+        /* An advertised extension is not proof that this driver can allocate the requested
+           attachment. Try the core RGBA8 path once, and publish the format actually in use. */
+        destroyTargets();
+        hdrInternalFormat_ = GL_RGBA8;
+        info_.supportsFloatHdr = false;
+        detail.clear();
+        if (!createTargets(&detail)) return failed("render targets (RGBA8 fallback)", detail);
+    }
     activeTargetOptions_ = options_;
 
     glEnable(GL_DEPTH_TEST);
@@ -569,10 +717,13 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+    if (!checkGlError("initial render state", &detail)) return failed("render state", detail);
 
     if (engine_) {
-        uploadAtlas(error);
+        uploadAtlas(&detail);
+        if (!checkGlError("atlas upload", &detail)) return failed("atlas upload", detail);
         rebuildMaterialBlocks();
+        if (!checkGlError("material upload", &detail)) return failed("material upload", detail);
     }
     return true;
 }
@@ -589,6 +740,9 @@ void GlRenderer::ensureGeometryBuffers() {
     if (vcount <= 0 || !verts) return;
 
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
+    /* The element-array binding is VAO state. Lazy allocations must happen with the avatar
+       VAO bound, just like the vertex attribute bindings configured during initialization. */
+    glBindVertexArray(avatarVao_);
     if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
     if (vbytes > vertexCapacity_) {
@@ -615,6 +769,7 @@ void GlRenderer::ensureGeometryBuffers() {
             indexCount_ = icount;
         }
     }
+    glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     meshDirty_ = false;
 }
@@ -1116,8 +1271,8 @@ void GlRenderer::destroyTargets() {
 }
 
 void GlRenderer::destroyAll() {
-    if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT) {
-        eglMakeCurrent(display_, surface_, surface_, context_);
+    if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT &&
+        eglMakeCurrent(display_, surface_, surface_, context_)) {
         destroyTargets();
         const GLuint programs[7] = {forwardProgram_, shadowProgram_, groundProgram_, lineProgram_,
                                     bloomDownProgram_, bloomUpProgram_, compositeProgram_};

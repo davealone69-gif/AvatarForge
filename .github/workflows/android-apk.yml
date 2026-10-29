@@ -56,14 +56,16 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000
           fi
 
-      - name: Verify required ARM64 native libraries exist
+      - name: Renderer initialization regression tests
+        run: bash tools/test_renderer_host.sh
+
+      - name: Build ARM64 native libraries from this checkout
         run: |
           set -euo pipefail
+          AF_NINJA_JOBS=2 bash tools/build_android.sh arm64-v8a android-26
           for lib in libafcore.so libafrender.so libavatarforge.so; do
-            test -s "prebuilt/arm64-v8a/$lib" || {
-              echo "::error::Missing prebuilt/arm64-v8a/$lib. Build native libraries with tools/build_android.sh and commit the outputs."
-              exit 1
-            }
+            test -s "prebuilt/arm64-v8a/$lib"
+            sha256sum "prebuilt/arm64-v8a/$lib"
           done
 
       - name: Build debug APK, release APK, and SDK AAR

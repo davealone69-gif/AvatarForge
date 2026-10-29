@@ -64,7 +64,8 @@ Every one of these is a gate that fails loudly; none of them needs a device.
 
 ```bash
 tools/verify.sh                       # everything below, in one run
-tools/build_host.sh test              # 386 checks: geometry, rig, bake, ABI, GLB round trip, scene
+tools/build_host.sh test              # kernel checks: geometry, rig, bake, ABI, GLB round trip, scene
+bash tools/test_renderer_host.sh      # GLES init/fallback/cleanup fault injection (no GPU)
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
 python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so

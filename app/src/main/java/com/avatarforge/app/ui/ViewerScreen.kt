@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -75,6 +76,7 @@ fun ViewerScreen(
     onCamera: (CameraSettings) -> Unit,
     settings: RenderSettings,
     onSettings: (RenderSettings) -> Unit,
+    onRetryRenderer: (RenderSettings) -> Unit,
     panel: ViewerPanel,
     onPanel: (ViewerPanel) -> Unit,
     clipIndex: Int,
@@ -126,19 +128,29 @@ fun ViewerScreen(
         Column(
             Modifier
                 .align(Alignment.TopStart)
+                .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(12.dp),
+                .padding(12.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
-            Header(result, rendererInfo, stats)
+            Header(result, rendererInfo, stats, rendererError != null)
             if (rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 ) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("3D viewer failed to start", fontWeight = FontWeight.SemiBold)
+                        Text("3D viewer stopped", fontWeight = FontWeight.SemiBold)
                         Text(rendererError, style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { onRetryRenderer(settings) }) { Text("Retry viewer") }
+                            TextButton(onClick = {
+                                onRetryRenderer(settings.copy(preferVulkan = !settings.preferVulkan))
+                            }) {
+                                Text(if (settings.preferVulkan) "Try OpenGL ES" else "Try Vulkan")
+                            }
+                        }
                     }
                 }
             }
@@ -188,18 +200,24 @@ fun ViewerScreen(
 }
 
 @Composable
-private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats) {
+private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, failed: Boolean) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
         Column(Modifier.padding(10.dp)) {
             Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
+            val backend = when {
+                failed -> "GPU unavailable"
+                info != null -> "${info.backend} · ${info.deviceName}"
+                else -> "initialising GPU…"
+            }
+            val performance = if (failed) "no frames rendered" else "%.0f FPS (%.1f ms) · %s".format(
+                stats.fps, stats.frameMs,
+                if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
+            )
             Text(
-                "$backend · %.0f FPS (%.1f ms) · %s".format(
-                    stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
-                ),
+                "$backend · $performance",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (!failed && stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
             )
             Text(
                 "%.0f s to build · %d tris on screen".format(

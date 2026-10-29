@@ -258,6 +258,10 @@ class MainActivity : ComponentActivity() {
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
                         onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onRetryRenderer = { requested ->
+                            settings = requested
+                            surfaceView?.retryRenderer(requested)
+                        },
                         panel = panel,
                         onPanel = { panel = it },
                         clipIndex = clipIndex,

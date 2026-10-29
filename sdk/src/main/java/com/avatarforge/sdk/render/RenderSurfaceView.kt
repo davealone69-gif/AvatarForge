@@ -27,6 +27,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -46,7 +47,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     private val _rendererInfo = MutableStateFlow<RendererInfo?>(null)
     val rendererInfo: StateFlow<RendererInfo?> = _rendererInfo.asStateFlow()
 
-    private val _stats = MutableStateFlow(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0))
+    private val _stats = MutableStateFlow(emptyStats())
     val stats: StateFlow<RendererStats> = _stats.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
@@ -65,6 +66,11 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private var renderer: AvatarRenderer? = null
     private var visible = false
+    private var activePreferVulkan: Boolean? = null
+    private var rendererSurfaceGeneration = -1L
+    @Volatile private var surfaceGeneration = 0L
+    @Volatile private var surfaceReady = false
+    @Volatile private var released = false
 
     init {
         holder.addCallback(this)
@@ -78,7 +84,30 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Applies render settings (quality, environment, overlays). Safe from the UI thread. */
     fun applySettings(newSettings: RenderSettings) {
         settings = newSettings
-        onRenderThread { it.renderer?.applyOptions(newSettings) }
+        onRenderThread {
+            if (released) return@onRenderThread
+            val current = renderer
+            if (current != null && activePreferVulkan != newSettings.preferVulkan) {
+                /* setOptions cannot change the native backend. Recreate on the owning thread;
+                   the Surface and generated engine remain owned by this view. */
+                restartRenderer(holder.surface, surfaceGeneration)
+            } else {
+                current?.applyOptions(newSettings)
+            }
+        }
+    }
+
+    /** Recreate after a startup/frame failure, optionally switching backend for this attempt. */
+    fun retryRenderer(newSettings: RenderSettings = settings) {
+        settings = newSettings
+        handler.post {
+            if (released) return@post
+            if (!surfaceReady) {
+                _error.value = "The drawing surface is not ready. Return to the editor and reopen the viewer."
+                return@post
+            }
+            restartRenderer(holder.surface, surfaceGeneration)
+        }
     }
 
     /** Applies camera state (orbit). Safe from the UI thread; called on every drag frame. */
@@ -131,8 +160,9 @@ class RenderSurfaceView @JvmOverloads constructor(
         override fun run() {
             val r = renderer
             if (r == null) {
+                /* Startup/retry owns rescheduling. Polling here after a failed create would burn
+                   CPU forever without ever creating a renderer. */
                 resetClock()
-                if (visible) handler.postDelayed(this, FRAME_RETRY_MS)
                 return
             }
             val frameStartNs = System.nanoTime()
@@ -144,7 +174,9 @@ class RenderSurfaceView @JvmOverloads constructor(
                 r.frame(delta.coerceIn(0f, 0.1f))
                 _stats.value = r.stats()
             } catch (t: Throwable) {
-                _error.value = t.message ?: t.javaClass.simpleName
+                Log.e(RENDER_LOG_TAG, "Renderer frame failed", t)
+                destroyRenderer()
+                _error.value = "Renderer frame failed: ${t.message ?: t.javaClass.simpleName}"
                 return
             }
             if (visible) {
@@ -166,36 +198,60 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        val surface: Surface = holder.surface
-        handler.post {
-            try {
-                renderer?.destroy()
-                renderer = AvatarRenderer.create(surface, settings)
-                _rendererInfo.value = renderer?.info()
-                _error.value = null
-                renderer?.setCamera(camera)
-                renderer?.applyOptions(settings)
-                if (pendingEngineHandle != 0L) renderer?.attachEngine(pendingEngineHandle)
-                /*
-                 * The view can become visible before Android creates its Surface. In that order,
-                 * frameLoop exits because renderer is null and never schedules itself again.
-                 * Restart it only after the renderer and Surface are both ready.
-                 */
-                handler.removeCallbacks(frameLoop)
-                if (visible) handler.post(frameLoop)
-            } catch (t: Throwable) {
-                renderer = null
-                _rendererInfo.value = null
-                _error.value = t.message ?: t.javaClass.simpleName
-            }
+    private fun destroyRenderer() {
+        try {
+            renderer?.destroy()
+        } finally {
+            renderer = null
+            activePreferVulkan = null
+            rendererSurfaceGeneration = -1L
+            _rendererInfo.value = null
+            _stats.value = emptyStats()
         }
     }
 
+    private fun restartRenderer(surface: Surface, generation: Long) {
+        if (released || !surfaceReady || generation != surfaceGeneration || !surface.isValid) return
+        handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
+        destroyRenderer()
+        _error.value = null
+        try {
+            val requested = settings
+            val created = AvatarRenderer.create(surface, requested)
+            renderer = created
+            activePreferVulkan = requested.preferVulkan
+            rendererSurfaceGeneration = generation
+            _rendererInfo.value = created.info()
+            created.setCamera(camera)
+            created.applyOptions(settings)
+            if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            if (visible) handler.post(frameLoop)
+        } catch (t: Throwable) {
+            Log.e(RENDER_LOG_TAG, "Renderer initialization failed (preferVulkan=${settings.preferVulkan})", t)
+            destroyRenderer()
+            _error.value = t.message ?: t.javaClass.simpleName
+        }
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        val surface = holder.surface
+        val generation = ++surfaceGeneration
+        surfaceReady = true
+        handler.post { restartRenderer(surface, generation) }
+    }
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        val generation = surfaceGeneration
         handler.post {
-            renderer?.resize(width, height)
-            if (visible && renderer != null) {
+            if (!surfaceReady || generation != surfaceGeneration || rendererSurfaceGeneration != generation) return@post
+            val current = renderer ?: return@post
+            if (!current.resize(width, height)) {
+                destroyRenderer()
+                _error.value = "GPU render targets could not be resized. Retry the viewer to rebuild them."
+                return@post
+            }
+            if (visible) {
                 handler.removeCallbacks(frameLoop)
                 handler.post(frameLoop)
             }
@@ -203,31 +259,31 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        /* Synchronous: the renderer must be gone before the Surface is invalidated, otherwise the
-           next frame draws into a dead native window. */
+        /* Invalidate before waiting: queued startup/frame work must not touch the dead Surface.
+           Synchronous teardown still completes before Android invalidates the native window. */
+        surfaceReady = false
+        val generation = surfaceGeneration
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
-            renderer?.destroy()
-            renderer = null
-            rendererInfoValueReset()
+            if (!surfaceReady && rendererSurfaceGeneration == generation) destroyRenderer()
             latch.countDown()
         }
-        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
-    }
-
-    private fun rendererInfoValueReset() {
-        _rendererInfo.value = null
+        if (!latch.await(2, java.util.concurrent.TimeUnit.SECONDS)) {
+            Log.e(RENDER_LOG_TAG, "Timed out waiting for renderer teardown")
+        }
     }
 
     /* ------------------------------------------------------------------ teardown -------------- */
 
     /** Call from the host's onDestroy: stops the thread and frees the GPU objects. */
     fun release() {
+        if (released) return
+        released = true
+        surfaceReady = false
         setFrameLoopEnabled(false)
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
-            renderer?.destroy()
-            renderer = null
+            destroyRenderer()
             latch.countDown()
         }
         latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
@@ -252,6 +308,8 @@ class RenderSurfaceView @JvmOverloads constructor(
            long, so this interval is a ceiling on CPU submissions, not a promise the GPU will
            keep - the honest number is in RendererStats.fps. */
         const val FRAME_INTERVAL_NS = 16_666_667L
-        const val FRAME_RETRY_MS = 16L
+        const val RENDER_LOG_TAG = "AvatarForgeRenderer"
+
+        fun emptyStats() = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
     }
 }
