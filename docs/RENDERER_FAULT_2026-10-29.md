@@ -28,9 +28,30 @@ reproducible API-sequencing defects, but the fix remains **unverified on the aff
 7. The Android APK workflow rebuilds ARM64 native libraries from the checkout before packaging, so a
    source fix cannot be silently shipped with the old checked-in `prebuilt/` binaries.
 
+## Follow-up screenshot (13:27)
+
+The next phone capture showed the viewer running on `gles31 · ANGLE (Samsung Xclipse 940)` at 58 FPS,
+with 417,150 triangles submitted, but no visible avatar. A second source audit found:
+
+- The camera UBO is 448 bytes, but both backends allocated/advanced two frame slices by the raw
+  `minUniformBufferOffsetAlignment` (256 on the reported device). The second slice therefore ran past
+  the allocation. GLES now uses a 512-byte aligned camera stride and allocates 1024 bytes; Vulkan uses
+  the same aligned stride for allocation, copy, and dynamic descriptor offsets.
+- The GLES ground quad was back-face culled from above. It is now drawn with culling disabled, matching
+  the Vulkan ground pipeline and the shader comment.
+- A missing material index could produce a zero alpha fallback and discard every fragment. The fallback
+  is now opaque white with sane PBR defaults.
+- The viewer header now says “tris submitted” rather than “tris on screen”, because the counter measures
+  draw submission, not visibility.
+- The MENU again includes **Self diagnostics**, with a copyable offline report covering device/engine
+  health, backend/GPU/API/driver, FPS, submitted triangles/draw calls, quality, settings, and last error.
+
+These changes are still **unverified on the phone**. The triangle counter alone is not proof of visible
+geometry.
+
 ## Verification performed here
 
-- `bash tools/test_renderer_host.sh`: **41 checks, 0 failures** against the real GLES/backend-selector
+- `bash tools/test_renderer_host.sh`: **43 checks, 0 failures** against the real GLES/backend-selector
   code with a stateful GLES/EGL test double. Covers sampler ownership, VAO storage, indexed draw bindings,
   compile/link/EGL/VAO failures, cleanup, MSAA/HDR fallback, extension parsing, and retry/fallback selection.
 - The same regression suite against the pre-fix GLES source reports **19 failures**, including the

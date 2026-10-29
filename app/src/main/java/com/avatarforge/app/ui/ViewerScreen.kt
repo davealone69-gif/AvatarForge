@@ -220,7 +220,7 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
                         else MaterialTheme.colorScheme.error,
             )
             Text(
-                "%.0f s to build · %d tris on screen".format(
+                "%.0f s to build · %d tris submitted".format(
                     result.timings.values.sum() / 1000f,
                     stats.triangles,
                 ),

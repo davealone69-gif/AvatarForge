@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.avatarforge.app.ui.AppBitmaps
+import com.avatarforge.app.ui.DiagnosticsDialog
 import com.avatarforge.app.ui.InputScreen
 import com.avatarforge.app.ui.ProgressScreen
 import com.avatarforge.app.ui.ViewerPanel
@@ -121,6 +122,7 @@ class MainActivity : ComponentActivity() {
         var pickedRegion by remember { mutableStateOf(-1) }
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
+        var showDiagnostics by remember { mutableStateOf(false) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -375,6 +377,13 @@ class MainActivity : ComponentActivity() {
                         },
                     )
                     DropdownMenuItem(
+                        text = { Text("Self diagnostics") },
+                        onClick = {
+                            menuExpanded = false
+                            showDiagnostics = true
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Render settings") },
                         enabled = result != null,
                         onClick = {
@@ -387,6 +396,34 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+        if (showDiagnostics) {
+            val info = surfaceViewState?.rendererInfo?.value
+            val frameStats = surfaceViewState?.stats?.value
+            val viewerError = surfaceViewState?.error?.value
+            val report = buildString {
+                append(AvatarForge.deviceReport(context))
+                appendLine()
+                appendLine("Viewer")
+                if (info == null) {
+                    appendLine("Renderer    : not initialised")
+                } else {
+                    appendLine("Backend     : ${info.backend}")
+                    appendLine("GPU         : ${info.deviceName}")
+                    appendLine("API         : ${info.apiVersion}")
+                    appendLine("Driver      : ${info.driver}")
+                    appendLine("HDR / MSAA  : ${info.supportsFloatHdr} / ${info.supportsMsaa}")
+                }
+                if (frameStats != null) {
+                    appendLine("FPS         : %.1f (%.2f ms)".format(frameStats.fps, frameStats.frameMs))
+                    appendLine("Submitted   : %d tris, %d draw calls".format(frameStats.triangles, frameStats.drawCalls))
+                    appendLine("Quality     : level %d, MSAA %dx, shadow %d, bloom %d".format(
+                        frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
+                }
+                appendLine("Last error  : ${viewerError ?: "none"}")
+                appendLine("Settings    : preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
+            }
+            DiagnosticsDialog(report = report, onDismiss = { showDiagnostics = false })
         }
     }
 }

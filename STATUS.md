@@ -14,7 +14,7 @@ what that means and what is outstanding.
 A supplied phone screenshot shows successful generation (417,150 triangles) followed by a viewer
 startup failure: Vulkan was disabled in settings and GLES initialization failed. The GLES path had
 invalid sampler/VAO setup ordering and discarded useful driver diagnostics. Those paths now have
-host fault-injection coverage, explicit retry/backend switching, and conservative MSAA/HDR fallback.
+host fault-injection coverage, explicit retry/backend switching, conservative MSAA/HDR fallback, aligned camera UBO slices, and a restored Self diagnostics menu.
 **The phone has not been retested; visible rendering and FPS remain unverified.** See
 [the fault report](docs/RENDERER_FAULT_2026-10-29.md).
 

@@ -32,6 +32,7 @@
 #include <EGL/eglext.h>            /* EGL_OPENGL_ES3_BIT_KHR */
 #include <GLES3/gl31.h>
 #include <android/native_window.h>
+#include <android/log.h>
 
 #include <algorithm>
 #include <cmath>
@@ -185,6 +186,7 @@ private:
     int surfaceWidth_ = 0;
     int surfaceHeight_ = 0;
     uint32_t uboAlignment_ = 256;
+    uint32_t cameraStride_ = 512;
 
     /* ---- programs and uniform locations ---- */
     GLuint forwardProgram_ = 0, shadowProgram_ = 0, groundProgram_ = 0, lineProgram_ = 0;
@@ -659,9 +661,12 @@ bool GlRenderer::createGeometryResources(std::string* error) {
 }
 
 bool GlRenderer::createUniformBuffers(std::string* error) {
+    /* CameraUbo is 448 bytes. On a 256-byte-aligned device two slices need 1024 bytes, not 512;
+       otherwise the second frame's glBindBufferRange/glBufferSubData runs past the allocation. */
+    cameraStride_ = uint32_t((sizeof(CameraUbo) + uboAlignment_ - 1) / uboAlignment_) * uboAlignment_;
     glGenBuffers(1, &cameraUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
-    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 2, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(cameraStride_) * 2, nullptr, GL_DYNAMIC_DRAW);
     glGenBuffers(1, &postUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, postUbo_);
     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(uboAlignment_) * 16, nullptr, GL_DYNAMIC_DRAW);
@@ -826,8 +831,13 @@ void GlRenderer::rebuildMaterialBlocks() {
 
     for (int i = 0; i < submeshCount; ++i) {
         const af_submesh& sm = submeshes[i];
+        af_material fallback{};
+        fallback.base_color_factor[0] = fallback.base_color_factor[1] = fallback.base_color_factor[2] = 1.0f;
+        fallback.base_color_factor[3] = 1.0f;
+        fallback.roughness = 0.5f;
+        fallback.ior = 1.4f;
         const af_material& m = (materials && sm.material_index >= 0 && sm.material_index < materialCount)
-                                   ? materials[sm.material_index] : af_material{};
+                                   ? materials[sm.material_index] : fallback;
         MaterialUbo block{};
         block.baseColorFactor[0] = m.base_color_factor[0];
         block.baseColorFactor[1] = m.base_color_factor[1];
@@ -931,7 +941,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
 
     glBindBuffer(GL_UNIFORM_BUFFER, cameraUbo_);
     const int frame = int(stats_.frames % 2);
-    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo), &scene_.camera);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
@@ -1033,10 +1043,11 @@ void GlRenderer::drawForwardPass() {
     glClearColor(0.055f, 0.075f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * uboAlignment_, sizeof(CameraUbo));
+    glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraStride_, sizeof(CameraUbo));
 
     /* ---- studio ground ---- */
     if (options_.groundPlane && engine_ && vertexCount_ > 0) {
+        glDisable(GL_CULL_FACE);   /* the floor quad is visible from above and below */
         glUseProgram(groundProgram_);
         glBindVertexArray(groundVao_);
         glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
@@ -1047,6 +1058,7 @@ void GlRenderer::drawForwardPass() {
         glBindTexture(GL_TEXTURE_2D, shadowTexture_);
         glActiveTexture(GL_TEXTURE0);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glEnable(GL_CULL_FACE);
         ++drawCalls_;
     }
 
@@ -1206,6 +1218,11 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     drawForwardPass();
     drawBloom();
     drawComposite();
+
+    std::string frameError;
+    if (!checkGlError("GLES frame", &frameError)) {
+        __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRenderer", "%s", frameError.c_str());
+    }
 
     if (!eglSwapBuffers(display_, surface_)) {
         /* A lost context cannot be recovered by this backend: report it and stop drawing rather

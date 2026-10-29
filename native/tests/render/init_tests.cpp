@@ -56,7 +56,13 @@ void successAndOwnership() {
     if (r) {
         r->attachEngine(reinterpret_cast<af_engine*>(uintptr_t(20)));
         r->renderFrame(1.0f / 60.0f);
+        r->renderFrame(1.0f / 60.0f);
+        r->renderFrame(1.0f / 60.0f);
         check(r->stats().triangles == 1, "attached fixture reaches the real draw path");
+        check(af_test::state.glErrors.empty(), "camera UBO slices stay in bounds across alternating frames");
+        check(af_test::state.cameraBuffer != 0 &&
+              af_test::state.bufferSizes[af_test::state.cameraBuffer] >= 1024,
+              "two 448-byte camera slices are allocated with 256-byte alignment");
         bool drewWithElements = false;
         for (const auto& draw : af_test::state.elementDraws) drewWithElements |= draw.first != 0 && draw.second != 0;
         check(drewWithElements, "indexed draws use the VAO's element buffer");

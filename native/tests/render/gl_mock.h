@@ -16,12 +16,14 @@ struct MockState {
     bool rejectFloatHdr = false;
     std::string version = "OpenGL ES 3.1 Mock";
     std::string extensions = "GL_EXT_color_buffer_float_suffix GL_EXT_texture_filter_anisotropic";
-    GLuint currentProgram = 0, currentArrayBuffer = 0, currentVao = 0, currentFramebuffer = 0;
+    GLuint currentProgram = 0, currentArrayBuffer = 0, currentUniformBuffer = 0, currentVao = 0, currentFramebuffer = 0;
+    GLuint cameraBuffer = 0;
     GLuint currentRenderbuffer = 0, currentTexture = 0;
     EGLContext currentContext = EGL_NO_CONTEXT;
     EGLint eglError = EGL_SUCCESS;
     std::vector<GLenum> glErrors;
     std::map<GLuint, VertexArray> vaos;
+    std::map<GLuint, GLsizeiptr> bufferSizes;
     std::map<GLuint, GLenum> shaderTypes;
     std::map<GLuint, bool> programLinks;
     std::map<GLint, GLuint> uniformOwners;

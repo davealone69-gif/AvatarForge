@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <cstdarg>
 
 namespace {
 GLuint nextName = 1;
@@ -48,18 +49,37 @@ void glActiveTexture(GLenum) {}
 void glAttachShader(GLuint, GLuint) {}
 void glBindBuffer(GLenum target, GLuint buffer) {
     if (target == GL_ARRAY_BUFFER) state.currentArrayBuffer = buffer;
+    if (target == GL_UNIFORM_BUFFER) state.currentUniformBuffer = buffer;
     if (target == GL_ELEMENT_ARRAY_BUFFER && state.currentVao) state.vaos[state.currentVao].elementBuffer = buffer;
 }
 void glBindBufferBase(GLenum, GLuint, GLuint) {}
-void glBindBufferRange(GLenum, GLuint, GLuint, GLintptr, GLsizeiptr) {}
+void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+    if (target == GL_UNIFORM_BUFFER && index == 0) state.cameraBuffer = buffer;
+    const auto it = state.bufferSizes.find(buffer);
+    if (it == state.bufferSizes.end() || offset < 0 || size < 0 || offset + size > it->second || offset % 256 != 0) {
+        raiseGlError(GL_INVALID_VALUE);
+    }
+}
 void glBindFramebuffer(GLenum, GLuint name) { state.currentFramebuffer = name; }
 void glBindRenderbuffer(GLenum, GLuint name) { state.currentRenderbuffer = name; }
 void glBindTexture(GLenum, GLuint name) { state.currentTexture = name; }
 void glBindVertexArray(GLuint name) { state.currentVao = name; }
 void glBlendFunc(GLenum, GLenum) {}
 void glBlitFramebuffer(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {}
-void glBufferData(GLenum, GLsizeiptr, const void*, GLenum) {}
-void glBufferSubData(GLenum, GLintptr, GLsizeiptr, const void*) {}
+void glBufferData(GLenum target, GLsizeiptr size, const void*, GLenum) {
+    GLuint buffer = target == GL_ARRAY_BUFFER ? state.currentArrayBuffer :
+                    target == GL_UNIFORM_BUFFER ? state.currentUniformBuffer :
+                    target == GL_ELEMENT_ARRAY_BUFFER && state.currentVao ? state.vaos[state.currentVao].elementBuffer : 0;
+    if (!buffer) raiseGlError(GL_INVALID_OPERATION);
+    else state.bufferSizes[buffer] = size;
+}
+void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void*) {
+    GLuint buffer = target == GL_ARRAY_BUFFER ? state.currentArrayBuffer :
+                    target == GL_UNIFORM_BUFFER ? state.currentUniformBuffer :
+                    target == GL_ELEMENT_ARRAY_BUFFER && state.currentVao ? state.vaos[state.currentVao].elementBuffer : 0;
+    const auto it = state.bufferSizes.find(buffer);
+    if (it == state.bufferSizes.end() || offset < 0 || size < 0 || offset + size > it->second) raiseGlError(GL_INVALID_VALUE);
+}
 GLenum glCheckFramebufferStatus(GLenum) {
     ++state.framebufferChecks;
     if (state.incompleteNextTextureFramebuffer) { state.incompleteNextTextureFramebuffer = false; return 0x8CD6; }
@@ -169,6 +189,7 @@ void glVertexAttribPointer(GLuint index, GLint, GLenum, GLboolean, GLsizei, cons
     else state.vaos[state.currentVao].attributes[index].buffer = state.currentArrayBuffer;
 }
 void glViewport(GLint, GLint, GLsizei, GLsizei) {}
+int __android_log_print(int, const char*, const char*, ...) { return 0; }
 
 /* Small engine fixture: the renderer under test is real, but no geometry generation is needed. */
 int32_t af_engine_vertex_count(const af_engine*) { return 3; }
