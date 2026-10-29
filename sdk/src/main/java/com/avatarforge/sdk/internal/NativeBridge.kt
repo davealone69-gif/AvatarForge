@@ -152,7 +152,6 @@ internal object NativeBridge {
     external fun rendererCreate(
         surface: Surface,
         quality: Int,
-        preferVulkan: Boolean,
         msaa: Int,
         shadowSize: Int,
         bloomLevels: Int,
@@ -182,7 +181,6 @@ internal object NativeBridge {
         turbidity: Float,
         environmentIntensity: Float,
         groundPlane: Boolean,
-        preferVulkan: Boolean,
         msaa: Int,
         shadowSize: Int,
         bloomLevels: Int,
@@ -198,7 +196,7 @@ internal object NativeBridge {
     external fun rendererInfo(renderer: Long, outStrings: Array<String?>, outFlags: IntArray): Int
 
     /** outFloats = [frameMs, cpuMs, fps, textureMiB]; outInts =
-     * [draws, tris, verts, shadow, msaa, bloom, quality, lastVkResult, fatal, frameSequence]. */
+     * [draws, tris, verts, shadow, msaa, bloom, quality, backendError, fatal, frameSequence]. */
     external fun rendererStats(renderer: Long, outFloats: FloatArray, outInts: IntArray): Int
 
     external fun rendererCurrentClip(renderer: Long): Int
