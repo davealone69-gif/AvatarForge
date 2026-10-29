@@ -76,7 +76,7 @@ def embed(entries):
     out.append("static const AfShaderVk kTable[] = {\n")
     for (name, stage), words in entries:
         out.append('    {"%s", %s, kSpv_%s_%s, %du},\n'
-                   % (name, stage, ENUM[stage], name, stage, len(words)))
+                   % (name, ENUM[stage], name, stage, len(words)))
     out.append("};\n\n} /* namespace shaders_vk */\n} /* namespace af */\n\n#endif\n")
     return "".join(out)
 
