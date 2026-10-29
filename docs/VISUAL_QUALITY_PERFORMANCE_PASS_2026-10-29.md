@@ -55,3 +55,9 @@ Evidence classification: **REAL + USER-OBSERVED** for this displayed session onl
 - Changes to rendering algorithms: **NOT YET MADE**. Avoid speculative edits until the visual artifact and AUTO-tier transition are reproducible.
 - Build on this new branch: **UNVERIFIED**.
 - Installed-device test of a build from this branch: **UNVERIFIED**.
+
+## Backend decision update — 2026-10-29
+
+The user requested Vulkan removal. The native Vulkan backend has now been removed from this branch and GLES 3.1 is the only compiled renderer. The earlier Vulkan fence-serialization finding is historical and no longer a target for repair. See [GLES-only migration record](GLES_ONLY_MIGRATION_2026-10-29.md).
+
+The next deep-repair targets remain actual avatar LOD selection and visual surface artifacts. Exact-head build, GLES pixel tests, artifact inspection, and Samsung device behavior remain **UNVERIFIED** until completed.
