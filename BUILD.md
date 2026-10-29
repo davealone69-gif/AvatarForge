@@ -8,7 +8,7 @@ The project has four layers, and each can be built and tested on its own:
 | Layer | Sources | What it is | How it is built |
 |---|---|---|---|
 | Kernel | `native/src/*.cpp`, `native/include/afcore.h` | anatomy → SDF field → isosurface → UV → PBR bake → rig → blendshapes → clips → GLB, behind a stable C ABI | `tools/build_host.sh` (host) / CMake+NDK (Android) |
-| Renderer | `native/src/render/` | Vulkan primary, OpenGL ES 3.1 fallback, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); shaders baked on any host |
+| Renderer | `native/src/render/` | OpenGL ES 3.1 only, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); GLES shaders baked on any host |
 | Rust | `rust/af-sys`, `rust/af` | safe Rust wrapper over the *same* C ABI as the Kotlin path | `cargo test --offline` against `build-host/libafcore.so` |
 | App + SDK | `sdk/`, `app/` | Kotlin SDK façade, Compose UI, one Activity | Gradle + AGP 8.5 |
 
@@ -78,21 +78,19 @@ g++ -std=c++17 -O2 -o /tmp/shape_probe tools/shape_probe.cpp -Inative/include -I
 
 Checked in, so a normal build needs nothing extra:
 
-* `native/src/render/af_shaders_vk.h` — 18 kB of SPIR-V words (Vulkan)
-* `native/src/render/af_shaders_gl.h` — GLSL ES 3.10 source text (GLES 3.1)
+* `native/src/render/af_shaders_gl.h` — the complete GLSL ES 3.10 source table (GLES 3.1)
 
 Regenerate after editing anything in `native/src/render/shaders/`:
 
 ```bash
-python3 tools/embed_shaders.py           # needs glslc (ships in the NDK's shader-tools)
-python3 tools/embed_shaders.py --check   # compile + validate, write nothing
+python3 tools/embed_shaders.py           # deterministic text embedding; no compiler required
+python3 tools/embed_shaders.py --check   # requires glslc: compile every stage and reject a stale table
 ```
 
-The script compiles every stage twice from one source — SPIR-V for Vulkan, `#version 310 es` for
-GLES — validates the SPIR-V with `spirv-val`, type-checks the GLES dialect with `glslc --target-env=opengl`,
-and fails loudly if a stage is missing or the two dialects disagree. The kernel harness ([10]) then
-verifies the baked tables at runtime cost zero: every pipeline stage present, valid SPIR-V magic,
-GLES text well-formed, unknown names returning null (no silent unlit fallback).
+The script embeds exactly the 12 required GLES stages and fails loudly on a missing, duplicate or
+unexpected stage. With `glslc` present (NDK shader-tools or `AF_GLSLC`) it type-checks every stage
+using `--target-env=opengl`. The kernel harness ([10]) verifies stage coverage, GLSL ES version and
+explicit null lookup for unknown names. There is no SPIR-V table and no alternate graphics API.
 
 ---
 
@@ -108,17 +106,17 @@ powershell -ExecutionPolicy Bypass -File tools\build-android.ps1
 ```
 
 `native/CMakeLists.txt` builds three targets: the kernel (`afcore`), the renderer (`afrender`,
-links vulkan/EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The Gradle build runs
+links EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The Gradle build runs
 exactly this through `externalNativeBuild`; the manual invocation is there so the native side can be
 iterated without Gradle in the loop, and so the `.so` files can be built once and packaged many times
 (`-Paf.prebuiltJni=/path/to/prebuilt`, which is also the way to build the APK on a machine that has
 no NDK - see the RAM note in §4).
 
-`tools/build_android.sh` has been run in this repository and produces
-`prebuilt/arm64-v8a/{libafcore,libafrender,libavatarforge}.so` (11.2 MB / 1.8 MB / 652 kB, unstripped
-and static-STL; Gradle strips them to ~1.6 MB / 593 kB / 77 kB when packaging). `tools/build-android.ps1`
-is the Windows port of the same script and has **not** been executed - there is no Windows host in this
-environment - so use `-DryRun` to print the exact cmake/ninja command lines it would run.
+`tools/build_android.sh` produces `prebuilt/arm64-v8a/{libafcore,libafrender,libavatarforge}.so`
+(static-STL; Gradle strips them when packaging). `prebuilt/` is generated and git-ignored: stale
+Vulkan-era binaries were removed from tracking, and `tools/verify_gles_artifacts.py` rejects any
+prebuilt or packaged library that still links a Vulkan loader. `tools/build-android.ps1` is the
+Windows port and has **not** been executed here; use `-DryRun` to inspect its command lines.
 
 ---
 
@@ -127,7 +125,7 @@ environment - so use `-DryRun` to print the exact cmake/ninja command lines it w
 ```bash
 # Preferred: the wrapper pinned in gradle/wrapper (Gradle 8.9, downloads its distribution once)
 ./gradlew :app:assembleDebug                 # -> app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:assembleRelease               # signed: keystore.properties, else the debug keystore
+./gradlew :app:assembleRelease               # signed: keystore.properties / AF_RELEASE_*; otherwise BLOCKED
 ./gradlew :sdk:assembleRelease               # the SDK as an AAR for third-party consumers
 
 # This container / any machine that already has Gradle: the pinning wrapper
@@ -146,47 +144,20 @@ Build properties, all optional:
 | `-Paf.prebuiltJni=$PWD/prebuilt` | package the `.so` files from `prebuilt/` and skip CMake entirely - the way to build the APK on a small machine |
 | `-Paf.lowRam=true` | `-O1` for the natives plus a single-threaded CMake build |
 
-Release signing: put a `keystore.properties` (storeFile / storePassword / keyAlias / keyPassword) at
-the repository root to sign with your own key, otherwise the release build is signed with the debug
-keystore so it can still be installed on a test device. R8 is deliberately off; see the comment in
-`app/build.gradle.kts`.
+Release signing is fail-closed: supply `keystore.properties` (storeFile / storePassword / keyAlias /
+keyPassword) or `AF_RELEASE_*` environment variables. Without them, release assembly is BLOCKED.
+CI may compile an explicitly unsigned AAB with `-Paf.allowUnsignedRelease=true`; that artifact is
+labelled UNSIGNED and is not a production release. R8 is deliberately off; see `app/build.gradle.kts`.
 
-### Artifacts built in this repository
+### Artifacts
 
-| Artifact | Size | Contents |
-|---|---|---|
-| `artifacts/avatarforge-debug-arm64.apk` | 10,360,165 B | debuggable app, 8 dex files, arm64 natives (stripped), `ui-tooling` included |
-| `artifacts/avatarforge-release-arm64.apk` | 6,784,655 B | release app, 2 dex files, arm64 natives, signed with the debug certificate |
-| `artifacts/avatarforge-sdk-arm64.aar` | 864,300 B | `classes.jar`, `proguard.txt`, `res/xml/avatarforge_file_paths.xml` |
+Generated binaries are no longer tracked. The authoritative deliverables are the exact-head CI
+artifacts from the **Android APK** workflow: `AvatarForge-debug-arm64.apk`, an explicitly
+`AvatarForge-release-UNSIGNED-arm64.aab` (compile verification only), `AvatarForge-sdk.aar`,
+`SHA256SUMS` and `PROVENANCE.json`. CI rebuilds the ARM64 natives from the checkout, verifies
+GLES-only linkage, checks the APK/AAB/AAR, and uploads the result. Production signed AAB/APK delivery
+requires real signing credentials and remains BLOCKED until they are supplied.
 
-All three carry exactly one permission (`com.avatarforge.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`) -
-no `INTERNET` - and a non-exported `FileProvider`. `tools/verify.sh` re-checks both claims, and the
-on-device pass is written out step by step in **DEVICE.md**.
-
-Install and run:
-
-```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.avatarforge/.MainActivity
-```
-
-### What to expect on a device
-
-| Step | Time (Snapdragon 778G-class) | Notes |
-|---|---|---|
-| Prompt/photo analysis | < 1 s | 256 px working grid, classic segmentation, no neural net |
-| Geometry (0.008 m lattice) | 30–70 s | ~70 % of the total; the memory budget is enforced here |
-| UV unwrap | 1–3 s | 14k charts, 65 % atlas coverage |
-| Texture bake | 2–5 s | five 2048² maps, procedural in UV space |
-| Rig + blendshapes | 8–20 s | 71 joints, 52 channels |
-| Clips | < 1 s | 15 authored clips sampled and cached |
-| GLB export | 1–2 s | 33–39 MB, validated structurally |
-
-Peak RSS stays under 1.5 GB by default (`AvatarEngine` sets the kernel's budget explicitly); 30 FPS
-is the floor, 60 the target, and the renderer's budget controller steps quality down if frames run
-long rather than dropping them.
-
----
 
 ## 5. Rust crates
 

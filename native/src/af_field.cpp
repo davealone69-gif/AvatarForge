@@ -607,27 +607,21 @@ float BodyField::handShape(const Vec3& p, const Chain& c) const {
     const Vec3 palmNormal(-sx, 0.0f, 0.0f);
     const Vec3 across = palmNormal.cross(dirDown).normalizedOr({0, 0, 1});
 
-    /* Palm: a flattened rounded box (thinner at the wrist, wider at the knuckles). */
-    float d = sdRoundBox(p - c.palmCentre,
-                         Vec3(m_.palmWidth * 0.5f, m_.handLength * 0.26f, m_.palmThickness * 0.5f),
+    /* Palm: a flattened rounded box expressed in the hand's own frame. The old world-axis
+       box extruded through the thin side of a relaxed hand and read as a rectangular block. */
+    const Vec3 q = p - c.palmCentre;
+    const float alongDown = q.dot(dirDown);
+    const float alongAcross = q.dot(across);
+    const float alongNormal = q.dot(palmNormal);
+    const float halfLen = m_.handLength * 0.26f;
+    const float taper = 1.0f + 0.10f * saturate(-alongDown / maxf(halfLen, 1e-4f));
+    float d = sdRoundBox(Vec3(alongAcross, alongDown, alongNormal),
+                         Vec3(m_.palmWidth * 0.5f * taper, halfLen, m_.palmThickness * 0.5f),
                          m_.palmThickness * 0.45f);
-    {
-        /* Rotate the palm block into the hand frame by blending three sliver boxes; cheaper
-           and more stable than building a rotated box SDF with sheared basis. */
-        const Vec3 q = p - c.palmCentre;
-        const float alongDown = q.dot(dirDown);
-        const float alongAcross = q.dot(across);
-        const float alongNormal = q.dot(palmNormal);
-        const float halfLen = m_.handLength * 0.26f;
-        const float taper = 1.0f + 0.10f * saturate(-alongDown / maxf(halfLen, 1e-4f));
-        d = smin(d, sdRoundBox(Vec3(alongAcross, alongDown, alongNormal),
-                               Vec3(m_.palmWidth * 0.5f * taper, halfLen, m_.palmThickness * 0.5f),
-                               m_.palmThickness * 0.45f), 0.012f);
-        /* Thenar (thumb) pad and hypothenar pad - both read strongly at any distance. */
-        d = smin(d, blob(Vec3(alongAcross, alongDown, alongNormal),
-                         Vec3(m_.palmWidth * 0.42f, m_.handLength * 0.05f, -m_.palmThickness * 0.10f),
-                         Vec3(m_.palmWidth * 0.32f, m_.handLength * 0.16f, m_.palmThickness * 0.52f)), 0.018f);
-    }
+    /* Thenar (thumb) pad and hypothenar pad - both read strongly at any distance. */
+    d = smin(d, blob(Vec3(alongAcross, alongDown, alongNormal),
+                     Vec3(m_.palmWidth * 0.42f, m_.handLength * 0.05f, -m_.palmThickness * 0.10f),
+                     Vec3(m_.palmWidth * 0.32f, m_.handLength * 0.16f, m_.palmThickness * 0.52f)), 0.018f);
 
     /* Wrist stump for the cut plane. */
     d = smin(d, sdCapsule(p, c.wrist - dirDown * 0.02f, c.wrist + dirDown * 0.012f, m_.wristR), 0.012f);
@@ -642,12 +636,12 @@ float BodyField::handShape(const Vec3& p, const Chain& c) const {
         const float r1 = r0 * (i == 0 ? 0.96f : 0.90f);
         const float r2 = r0 * (i == 0 ? 0.92f : 0.80f);
         const float r3 = r0 * (i == 0 ? 0.88f : 0.68f);
-        /* Blend radius kept small (2.5 mm): adjacent fingers are only ~2 mm apart at the base,
-           and a blend comparable to that gap would fuse them into a mitten. The phalanges of
-           one finger overlap along their axis, so the small radius still reads as a smooth joint. */
-        d = smin(d, sdTaperedCapsule(p, j0, j1, r0, r1), 0.0025f);
-        d = smin(d, sdTaperedCapsule(p, j1, j2, r1, r2), 0.0025f);
-        d = smin(d, sdTaperedCapsule(p, j2, j3, r2, r3), 0.0025f);
+        /* Adjacent fingers are only ~2 mm apart at the base; a blend comparable to that gap
+           fuses them into a mitten. Use a sub-millimetre blend between fingers and rely on the
+           overlapping phalanges of one finger for a smooth joint. */
+        d = smin(d, sdTaperedCapsule(p, j0, j1, r0, r1), 0.0012f);
+        d = smin(d, sdTaperedCapsule(p, j1, j2, r1, r2), 0.0012f);
+        d = smin(d, sdTaperedCapsule(p, j2, j3, r2, r3), 0.0012f);
         /* Knuckle and inter-phalangeal joint bulges. */
         d = smin(d, blob(p, j1, Vec3(r1 * 1.10f, r1 * 1.10f, r1 * 1.10f)), 0.0025f);
         d = smin(d, blob(p, j2, Vec3(r2 * 1.08f, r2 * 1.08f, r2 * 1.08f)), 0.0022f);
@@ -1186,8 +1180,12 @@ float BodyField::clothLower(const Vec3& p) const {
     const float e = 2.45f;
     const float kk = std::pow(std::pow(std::fabs(nx), e) + std::pow(std::fabs(nz), e), 1.0f / e);
     float domain = smax((kk - 1.0f) * minf(rx, rz), maxf(hemY - p.y, p.y - topY), 0.012f);
-    /* Arms hang beside the hips: keep them out of the trousers. */
-    domain = smax(domain, -armsCut(p, thickness + 0.02f), 0.010f);
+    /* Arms hang beside the hips: keep them out of the waistband, but do not cut the trouser
+       legs below the crotch. The old unconditional subtraction removed cloth from the outer
+       thigh wherever the relaxed arm passed nearby, exposing skin through the garment. */
+    if (p.y > m_.y.crotchY) {
+        domain = smax(domain, -armsCut(p, thickness + 0.02f), 0.010f);
+    }
     (void)H;
     return smax(body(p) - thickness, domain, 0.0018f);
 }

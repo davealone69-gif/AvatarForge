@@ -55,6 +55,17 @@ jobs:
           git diff --exit-code -- native/src/render/af_shaders_gl.h
           sha256sum native/src/render/af_shaders_gl.h
 
+      - name: Install host kernel test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev
+
+      - name: Model detail regression tests
+        run: bash tools/test_model_host.sh
+
+      - name: Kernel host harness
+        run: bash tools/build_host.sh test
+
       - name: Renderer initialization regression tests
         run: bash tools/test_renderer_host.sh
 

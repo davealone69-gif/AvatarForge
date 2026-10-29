@@ -14,20 +14,18 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              Vulkan / GLES 3.1 renderer ◀────────────┤
+                              GLES 3.1 renderer ◀────────────┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The host test harness passes **386 checks
-with 0 failures**; the C++ kernel implements **47/47** ABI symbols, and the Rust core implements
-15/47 against the same ABI with byte-identical results on everything it covers. **Nothing in this
-repository has been run on a physical Android device yet** — there is no phone and no GPU in the
-build environment — so the honest claim is *implemented and host-verified*, not *device-proven*.
-`DEVICE.md` is the ordered sheet a human runs on hardware, and `tools/device_check.sh` collects the
-evidence in one command. `STATUS.md` keeps the per-phase state and the list of what is deliberately
-still missing.
+The kernel, renderer, SDK and app are written and build. The renderer is **GLES 3.1 only**; the
+Vulkan backend, SPIR-V table and backend preference have been removed. Camera movement is
+**user-confirmed working** on a physical device (exact build SHA not supplied). CI rebuilds and
+packages the Android artifacts, but device pixel correctness, sustained performance/thermal behaviour
+and production signing remain unverified or BLOCKED. `PROJECT_STATUS.md` and `docs/audit/` carry the
+current evidence labels; `DEVICE.md` is the ordered hardware sheet.
 
 ## Repository layout
 
@@ -35,7 +33,7 @@ still missing.
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, written from scratch |
+| `native/src/render/` | Custom OpenGL ES 3.1 renderer, written from scratch |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
 | `rust/af-sys/`, `rust/af/` | Raw FFI bindings and the safe Rust wrapper |
@@ -51,7 +49,8 @@ still missing.
 ```bash
 tools/bootstrap_toolchain.sh          # SDK + NDK + CMake + Gradle + JDK 17 + Rust (once)
 
-tools/build_host.sh test              # kernel + 386-check host harness (no device, no Android SDK)
+tools/build_host.sh test              # kernel host harness (no device, no Android SDK)
+bash tools/test_model_host.sh         # focused hand/garment detail regressions
 tools/build_android.sh                # arm64 native libraries into prebuilt/
 tools/build_gradle.sh :app:assembleDebug :sdk:assembleRelease
 ```
@@ -76,7 +75,7 @@ python3 tools/validate_glb.py <file>  # exported GLB structure + accessor bounds
 On hardware:
 
 ```bash
-tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
+tools/device_check.sh --apk AvatarForge-debug-arm64.apk --soak 120
 ```
 
 ## Stability self-improvement path (no AI)
@@ -103,8 +102,8 @@ bash tools/test_renderer_host.sh      # renderer fault-injection regressions
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** Vulkan is the primary backend and OpenGL ES 3.1 the
-  fallback; no third-party engine is linked.
+* **The custom renderer stays custom.** OpenGL ES 3.1 is the only supported backend; no
+  third-party engine and no alternate graphics API are linked.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
 
 ## Licence

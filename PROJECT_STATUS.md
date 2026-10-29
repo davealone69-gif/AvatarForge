@@ -1,33 +1,39 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`, head `5e2f990`. PR #20 remains draft.
+Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft.
 
 ## Active checkpoint
 
-Maximum evidence-backed stability/integrity pass delivered. No AI was added. Exact-head CI is green: https://github.com/davealone69-gif/AvatarForge/actions/runs/40858597544.
+User direction implemented: **remove Vulkan**, preserve the now-working camera, and fix visible model details. The renderer is **GLES 3.1 only**. Vulkan implementation, SPIR-V table, backend preference/fallback, JNI/Rust fields and the Vulkan link dependency are deleted. Android's own GLES driver may still report an internal translation layer; that is not an AvatarForge backend.
 
-## Implemented this pass
+## Verified now
 
-- Fail-closed release signing; CI unsigned AAB compile artifact + provenance; signed tag-release job gated on credentials.
-- Renderer frame-error propagation, fatal Vulkan halt, distinct attempt/submission/accepted-present counters, honest CPU/GPU timing labels.
-- GLES host swap-failure regression: 53 checks, 0 failures. Kernel host harness: 406 checks, 1 pre-existing shader-table-count failure.
-- Thermal quality/pacing policy + API-29 monitor; settings persistence; progress overcount fix; atomic job IDs; serial generation dispatcher; safer release-after-cancellation.
-- Shader embedder no longer silently empties SPIR-V; CI shader compile/diff gate.
-- Native GLB/PNG import limits; removed dead GLB VIEW advertisement.
-- Audit docs under `docs/audit/`.
+- GLES-only CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40864270280 succeeded on `973f70f`.
+- Renderer host fault injection: **57 checks, 0 failures**.
+- Focused model-detail regressions: **19 checks, 0 failures**.
+- Full kernel host harness: **406 checks, 0 failures**.
+- Camera: **user-confirmed working**; exact build SHA/counters still missing.
+
+## Model-detail fixes in this checkpoint
+
+- Palms are built in the anatomic hand frame instead of a world-axis box; interdigital blend reduced to avoid mitten fusion.
+- Garment minimum layer is two lattice cells, and the lower-garment arm cut no longer removes thigh cloth below the crotch.
+- Viewer header is compact by default so it no longer covers the face/hands; full build/driver details remain expandable. Camera gesture code is unchanged.
+- Stale Vulkan-era tracked prebuilt/APK/AAR/sample GLB binaries were removed. CI exact-head artifacts are authoritative, and a linker guard rejects Vulkan dependencies.
 
 ## CI artifact
 
-`AvatarForge-Android-5e2f990b5435cfdfa5ee709b905e675b0478a2cb` (id 12890980765, 18,226,242 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not installable production release.
+Latest verified GLES-only artifact: `AvatarForge-Android-973f70f042132679228dd50e54853a6b815508f1` (id 12892579593, 17,609,630 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only. The geometry/header patch adds further CI gates; use its exact-head artifact once green.
 
 ## Still not proven
 
-- Device camera movement, Vulkan device recovery, thermal cap effect, settings persistence on Android, moiré pixel improvement, sustained performance/memory.
-- Production signed AAB/APK: BLOCKED, no credentials.
-- Full engine/render thread ownership fence and diagnostic scene ladder: MISSING.
+- Device pixel confirmation of the new hand/garment/header fixes; thermal cap effect; settings persistence on Android; sustained performance/memory; moiré pixel comparison.
+- Production signed AAB/APK: **BLOCKED**, no credentials.
+- Full engine/render thread ownership fence and diagnostic scene ladder: **MISSING**.
+- Remaining eye/hair detail quality: targeted only after matched device captures; no superiority claim.
 
 ## Next exact steps
 
-1. Device-retest camera + diagnostics on SM-S921B using the CI debug APK from run 40858597544.
-2. Implement P0 ownership fence and diagnostic scene ladder from `REMEDIATION_PLAN.md`.
+1. Install the next exact-head CI debug APK on SM-S921B; capture front/side hand and garment views plus diagnostics.
+2. Implement P0 ownership fence and diagnostic scene ladder from `docs/audit/REMEDIATION_PLAN.md`.
 3. Supply production signing credentials through GitHub secrets to unblock signed AAB/APK release.

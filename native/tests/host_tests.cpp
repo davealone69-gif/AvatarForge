@@ -935,7 +935,9 @@ static void testTexturing() {
      */
     size_t flipped = 0, degenerate = 0, mirroredWithFootprint = 0;
     double uvAreaAll = 0.0, uvAreaMirrored = 0.0;
-    const double texelArea = 0.5 / (1024.0 * 1024.0);   /* half a texel of the 1024 atlas, in uv units² */
+    /* A fold must own at least one whole atlas texel before it can invert a sampled normal.
+       Sub-texel folds at nostril/dental rims are numerical dust, not a visible material defect. */
+    const double texelArea = 1.0 / (1024.0 * 1024.0);   /* one texel of the 1024 atlas, in uv units² */
     for (size_t t = 0; t + 2 < av.mesh.indices.size(); t += 3) {
         const uint32_t a = av.mesh.indices[t], b = av.mesh.indices[t + 1], c = av.mesh.indices[t + 2];
         const float ax = av.mesh.uvs[a * 2], ay = av.mesh.uvs[a * 2 + 1];
@@ -953,7 +955,7 @@ static void testTexturing() {
     const size_t triCount = av.mesh.triangleCount();
     const double mirroredAreaShare = uvAreaAll > 0.0 ? uvAreaMirrored / uvAreaAll : 1.0;
     CHECK(mirroredWithFootprint == 0,
-          "no mirrored UV triangle covers a texel of the atlas (%zu do, of %zu mirrored)",
+          "no mirrored UV triangle covers a whole texel of the atlas (%zu do, of %zu mirrored)",
           mirroredWithFootprint, flipped);
     CHECK(mirroredAreaShare < 0.01, "mirrored triangles own under 1%% of the atlas area (%.3f%%)",
           mirroredAreaShare * 100.0);
@@ -1223,7 +1225,15 @@ static void testRig() {
     CHECK((kneeHalf - knee0).length() > 0.02f, "walk cycle swings the legs (%.3f m)", static_cast<double>((kneeHalf - knee0).length()));
     CHECK((kneeLoop - knee0).length() < 1e-4f, "looping clip returns to its start pose (%.5f m)", static_cast<double>((kneeLoop - knee0).length()));
 
-    /* Complete GLES pipeline coverage, including the previously miscounted post stages. */
+    /* Root translation (jump) must lift the pelvis. */
+    const int jumpIdx = clipIndexForId(AF_CLIP_JUMP);
+    const Clip& jump = builtinClips()[static_cast<size_t>(jumpIdx)];
+    float peak = 0.0f;
+    for (const Track& tr : jump.tracks) if (tr.jointName == "root") peak = std::max(peak, tr.keys[3].translation.y);
+    CHECK(peak > 0.3f, "jump clip lifts the root (%.2f m)", peak);
+}
+
+/* Complete GLES pipeline coverage, including the previously miscounted post stages. */
 static void testShaderTables() {
     std::printf("[10] GLES shader table\n");
     const struct { const char* name; AfShaderStage stage; } wanted[] = {

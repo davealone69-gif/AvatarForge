@@ -157,8 +157,9 @@ private:
 public:
     /** Selects the garment set. Must be called before the mesh is built. */
     void setApparel(const ApparelOptions& a) { apparel_ = a; }
-    /** The thinnest layer the extraction lattice can resolve. */
-    float minLayer() const { return apparel_.latticeCell; }
+    /** The thinnest layer the extraction lattice can resolve. One cell is marginal: marching
+        tets can miss a membrane whose thickness equals the sample spacing, so require two. */
+    float minLayer() const { return 2.0f * apparel_.latticeCell; }
     const ApparelOptions& apparel() const { return apparel_; }
     /** Union of all active apparel solids (a huge positive value when nothing is worn). */
     float apparelField(const Vec3& p) const;

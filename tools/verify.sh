@@ -51,6 +51,15 @@ else
     tail -15 build-host/renderer_init_tests.txt
 fi
 
+# ------------------------------------------------------------------ model-detail regressions --
+banner "model detail: hand frame and garment layer resolution"
+if bash tools/test_model_host.sh > build-host/model_detail_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/model_detail_tests.txt)"
+else
+    bad "model-detail regressions - see build-host/model_detail_tests.txt"
+    tail -15 build-host/model_detail_tests.txt
+fi
+
 # ------------------------------------------------------------------ 2. shader tables ------------
 banner "shaders: complete GLSL ES table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
