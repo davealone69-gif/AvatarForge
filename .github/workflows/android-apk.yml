@@ -45,16 +45,30 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
           echo "$ANDROID_SDK_ROOT/ndk/26.1.10909125/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
 
-      - name: Both shader dialects and embedded tables
+      - name: GLES shader compilation and table freshness
         run: |
           set -euo pipefail
           command -v glslc
-          python3 tools/embed_shaders.py --check
-          python3 tools/embed_vulkan_shaders.py --check
+          output="$(python3 tools/embed_shaders.py --check 2>&1)" || {
+            echo "$output"
+            echo "::error file=tools/embed_shaders.py::$(printf '%s' "$output" | tail -n 1)"
+            exit 1
+          }
+          echo "$output"
           python3 tools/embed_shaders.py
+          git diff --exit-code -- native/src/render/af_shaders_gl.h
+
+      - name: Vulkan SPIR-V compilation and table freshness
+        run: |
+          set -euo pipefail
+          output="$(python3 tools/embed_vulkan_shaders.py --check 2>&1)" || {
+            echo "$output"
+            echo "::error file=tools/embed_vulkan_shaders.py::$(printf '%s' "$output" | tail -n 1)"
+            exit 1
+          }
+          echo "$output"
           python3 tools/embed_vulkan_shaders.py
-          # Both dialects are checked independently; no empty SPIR-V on missing glslc.
-          git diff --exit-code -- native/src/render/af_shaders_gl.h native/src/render/af_shaders_vk.h
+          git diff --exit-code -- native/src/render/af_shaders_vk.h
           sha256sum native/src/render/af_shaders_gl.h native/src/render/af_shaders_vk.h
 
       - name: Install host kernel test dependency
