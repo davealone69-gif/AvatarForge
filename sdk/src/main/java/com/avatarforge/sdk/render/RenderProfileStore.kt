@@ -15,7 +15,6 @@ object RenderProfileStore {
         val quality = Quality.of(p.getInt("quality", fallback.quality.value))
         return RenderSettings(
             quality = quality,
-            preferVulkan = p.getBoolean("preferVulkan", fallback.preferVulkan),
             shadows = p.getBoolean("shadows", fallback.shadows),
             bloom = p.getBoolean("bloom", fallback.bloom),
             sss = p.getBoolean("sss", fallback.sss),
@@ -37,7 +36,6 @@ object RenderProfileStore {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt("profile_version", 1)
             .putInt("quality", settings.quality.value)
-            .putBoolean("preferVulkan", settings.preferVulkan)
             .putBoolean("shadows", settings.shadows)
             .putBoolean("bloom", settings.bloom)
             .putBoolean("sss", settings.sss)
