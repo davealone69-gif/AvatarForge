@@ -535,7 +535,9 @@ private fun SystemCheckPanel(
         rendererError != null -> rendererError
         stats.frameFatal -> "FATAL: Vulkan renderer stopped (VkResult ${stats.lastVkResult})"
         stats.lastVkResult != 0 -> "Vulkan recovery/result code ${stats.lastVkResult}; inspect renderer logs"
-        info != null -> "render loop active; no current reported error"
+        info != null && (!stats.fps.isFinite() || stats.fps <= 0f || !stats.frameMs.isFinite() || stats.frameMs <= 0f || !stats.cpuMs.isFinite() || stats.cpuMs <= 0f) ->
+            "GPU backend initialised, but frame telemetry is invalid/zero; renderer health is NOT verified"
+        info != null -> "GPU backend active; frame telemetry is reporting"
         result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
         else -> "waiting for renderer initialisation"
     })
@@ -558,6 +560,13 @@ private fun SystemCheckPanel(
         val first = samples.first()
         val last = samples.last()
         val tierChanges = samples.zipWithNext().count { (a, b) -> a.tier != b.tier }
+        // A single good sample cannot validate a 15-second adaptation window. Every sample must
+        // have finite, positive frame cadence and renderer-call time before the verdict can pass.
+        val hasValidRenderTelemetry = samples.size == 15 && samples.all { sample ->
+            sample.fps.isFinite() && sample.fps > 0f &&
+                sample.frameMs.isFinite() && sample.frameMs > 0f &&
+                sample.cpuMs.isFinite() && sample.cpuMs > 0f
+        }
         val averageFps = samples.map { it.fps }.average()
         DiagnosticLine("Samples", "${samples.size}/15 · average %.1f FPS".format(averageFps))
         DiagnosticLine("Start → end", "%.1f → %.1f FPS · tier %d → %d".format(first.fps, last.fps, first.tier, last.tier))
@@ -568,9 +577,10 @@ private fun SystemCheckPanel(
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
             info == null -> "SYSTEM ONLY · no active renderer; adaptive behaviour cannot be proven here"
-            settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
-            tierChanges > 0 -> "ADAPTATION OBSERVED · real effective tier changed during sampling"
-            else -> "RECORDED · no tier change observed; stable performance can be the correct result"
+            !hasValidRenderTelemetry -> "INCONCLUSIVE · one or more samples have invalid/zero FPS, frame interval or renderer-call time"
+            settings.quality != Quality.AUTO -> "RECORDED ONLY · valid telemetry observed; adaptive tier changes require AUTO mode"
+            tierChanges > 0 -> "ADAPTATION OBSERVED · valid telemetry and an effective tier transition were recorded"
+            else -> "RECORDED ONLY · valid telemetry but no tier change observed; adaptation was not demonstrated"
         })
         Text("Last sample: ${last.fps} FPS · ${last.frameMs} ms interval · ${last.cpuMs} ms renderer call · thermal ${last.thermal?.toString() ?: "unavailable"}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {
