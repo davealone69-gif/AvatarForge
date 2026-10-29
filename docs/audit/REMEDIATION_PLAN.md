@@ -7,7 +7,8 @@
 - Add GLES-only linker guard for prebuilt/APK/AAB/AAR and remove stale tracked Vulkan-era binaries.
 - Compact viewer header so the face/hands are not covered by default; camera gesture path unchanged.
 - Fix world-axis palm blocks, reduce interdigital blending, raise garment minimum layer to two lattice cells, and stop the lower-garment arm cut from removing thigh cloth.
-- Add focused model-detail host regressions and CI gates.
+- Fix swapped eye material sides, asymmetric sclera extraction, the solid-ball cuirass and helmet-like hair bulk; add orbital clearance.
+- Add focused model-detail host regressions and CI gates (33 checks).
 
 ## P0 — safety and truth
 
@@ -25,7 +26,7 @@
 
 ## P2 — quality and supply chain
 
-9. Matched device pixel comparison for hands/garments/moiré; then target remaining eye/hair detail defects.
+9. Matched device pixel comparison for eyes/hair/chest/hands/garments/moiré; then target lash geometry, strand-level hair, facial texture smudges and teeth cost.
 10. Benchmark meshoptimizer/KTX2/ozz-style improvements; adopt only with measured device gains.
 11. Add LICENSE, SBOM, SHA-pinned actions, wrapper checksum verification, and artifact provenance policy.
 12. Build/test Rust bindings on a Rust toolchain; C/Rust renderer telemetry layout is now mirrored and statically asserted.
