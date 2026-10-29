@@ -42,11 +42,19 @@ if bash tools/build_host.sh test $HARNESS_ARGS > build-host/host_tests_run.txt 2
         | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/   /' | head -14
 else
     bad "harness reported failures - see build-host/host_tests_run.txt"
-    grep -n "FAIL" build-host/host_tests_run.txt | head -10 || tail -20 build-host/host_tests_run.txt
+    if [ -f build-host/host_tests_run.txt ]; then
+        # Compiler diagnostics can quote the CHECK macro, which itself contains the word "FAIL".
+        # Match actual harness assertion output after stripping ANSI escapes, then always show the
+        # tail so a failure cannot be hidden by an earlier source-code match.
+        sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' build-host/host_tests_run.txt > build-host/host_tests_run.clean.txt
+        grep -nE '^[[:space:]]*FAIL[[:space:]]|All [0-9]+ checks complete: [1-9][0-9]* failure' \
+            build-host/host_tests_run.clean.txt | head -30 || true
+        tail -40 build-host/host_tests_run.clean.txt
+    fi
 fi
 
 # ------------------------------------------------------------------ 2. shader tables ------------
-banner "shaders: SPIR-V + GLSL ES tables match the sources"
+banner "shaders: GLES shader table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
 # neither ANDROID_NDK nor ANDROID_NDK_HOME is exported (ANDROID_HOME alone is the common case).
 if [ -z "${ANDROID_NDK:-}" ] && [ -z "${ANDROID_NDK_HOME:-}" ]; then

@@ -3,7 +3,7 @@
  *
  * The result viewer/editor. This is where the app has to be honest about what it can do:
  *
- *   * the surface is the real renderer (Vulkan or GLES 3.1) drawing the real mesh - the same mesh
+ *   * the surface is the real GLES 3.1 renderer drawing the real mesh - the same mesh
  *     the .glb contains, deformed by the same rig;
  *   * pose and expression controls drive the kernel (applyPose / applyBlendshapes), which deforms
  *     the vertices the renderer then uploads. There is no separate "preview rig";
@@ -223,7 +223,7 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
             Text(
                 "$backend · %.0f FPS (%.1f ms frame interval) · %s".format(
                     stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else if (settings.quality == Quality.AUTO) "below 30 FPS; AUTO can reduce effects" else "below 30 FPS; selected preset is fixed",
+                    if (stats.meetsTarget) "on target" else if (settings.quality == Quality.AUTO) "below 30 FPS · AUTO tier ${stats.qualityLevel}/3 · MSAA ${stats.msaaSamples}x · shadow ${stats.shadowMapSize}px" else "below 30 FPS · selected preset is fixed",
                 ),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
@@ -424,7 +424,6 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
     ToggleRow("Ground plane", settings.groundPlane) { onSettings(settings.copy(groundPlane = it)) }
-    ToggleRow("Native Vulkan first (GLES/ANGLE fallback)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
     Text("Exposure %.2f".format(settings.exposure), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.exposure, onValueChange = { onSettings(settings.copy(exposure = it)) }, valueRange = 0.3f..2.5f)
     Text("Sun azimuth %.0f°".format(settings.sunAzimuthDeg), style = MaterialTheme.typography.bodySmall)
@@ -439,7 +438,7 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     Slider(value = settings.shadowSoftness, onValueChange = { onSettings(settings.copy(shadowSoftness = it)) }, valueRange = 0.5f..3f)
 }
 
-private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val thermal: Int?, val availableRamBytes: Long, val availableStorageBytes: Long, val resourceState: String)
+private data class AdaptiveSample(val fps: Float, val frameMs: Float, val cpuMs: Float, val tier: Int, val frameSequence: Int, val thermal: Int?, val availableRamBytes: Long, val availableStorageBytes: Long, val resourceState: String)
 
 /** Live diagnostics plus a repeatable observation window for the native AUTO quality controller. */
 @Composable
@@ -504,7 +503,7 @@ private fun SystemCheckPanel(
                 val s = latestStats.value
                 runCatching { governor.snapshot() }.getOrNull()?.let { resources = it }
                 val snapshot = resources
-                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
+                samples.add(AdaptiveSample(s.fps, s.frameMs, s.cpuMs, s.qualityLevel, s.frameSequence, latestThermal.value ?: snapshot.thermalStatus, snapshot.availableRamBytes, snapshot.availableStorageBytes, snapshot.state.name))
             }
             running = false
         } else {
@@ -533,15 +532,22 @@ private fun SystemCheckPanel(
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", when {
         rendererError != null -> rendererError
-        stats.frameFatal -> "FATAL: Vulkan renderer stopped (VkResult ${stats.lastVkResult})"
-        stats.lastVkResult != 0 -> "Vulkan recovery/result code ${stats.lastVkResult}; inspect renderer logs"
-        info != null -> "render loop active; no current reported error"
+        stats.frameFatal -> "FATAL: graphics renderer stopped; inspect renderer logs"
+        stats.lastBackendError != 0 -> "Graphics backend error ${stats.lastBackendError}; inspect renderer logs"
+        info != null && (!stats.fps.isFinite() || stats.fps <= 0f || !stats.frameMs.isFinite() || stats.frameMs <= 0f || !stats.cpuMs.isFinite() || stats.cpuMs <= 0f) ->
+            "GPU backend initialised, but frame telemetry is invalid/zero; renderer health is NOT verified"
+        info != null -> "GPU backend active; frame telemetry is reporting"
         result == null -> "not active in this screen; open the 3D viewer to test GPU rendering"
         else -> "waiting for renderer initialisation"
     })
     DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
     DiagnosticLine("Mesh draw selection", "${stats.triangles} triangles selected · ${stats.vertices} vertices in mesh · ${stats.drawCalls} draw calls")
+    DiagnosticLine("Avatar LOD / triangle budget", when {
+        stats.triangleBudgetExceeded -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · BUDGET EXCEEDED: even the coarsest available draw level exceeds 50,000 triangles"
+        stats.availableLods > 0 -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · generated mesh is within the 50,000-triangle mobile budget"
+        else -> "LOD diagnostics unavailable; generated index ranges were not reported"
+    })
     DiagnosticLine("Texture memory", "%.1f MiB avatar-atlas estimate only; total GPU memory is not exposed".format(stats.textureMiB))
     val currentThermal = thermalStatus ?: resources.thermalStatus
     DiagnosticLine("Thermal status", when (currentThermal) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($currentThermal)" })
@@ -558,6 +564,17 @@ private fun SystemCheckPanel(
         val first = samples.first()
         val last = samples.last()
         val tierChanges = samples.zipWithNext().count { (a, b) -> a.tier != b.tier }
+        // A single good sample cannot validate a 15-second adaptation window. Every sample must
+        // have finite, positive frame cadence and renderer-call time before the verdict can pass.
+        val hasValidRenderTelemetry = samples.size == 15 &&
+            samples.all { sample ->
+                sample.fps.isFinite() && sample.fps > 0f &&
+                    sample.frameMs.isFinite() && sample.frameMs > 0f &&
+                    sample.cpuMs.isFinite() && sample.cpuMs > 0f
+            } &&
+            // Positive cached FPS is not proof of a live renderer. Each one-second sample must
+            // show accepted-frame progress, otherwise a stalled renderer could "pass" adaptation.
+            samples.zipWithNext().all { (a, b) -> a.frameSequence != b.frameSequence }
         val averageFps = samples.map { it.fps }.average()
         DiagnosticLine("Samples", "${samples.size}/15 · average %.1f FPS".format(averageFps))
         DiagnosticLine("Start → end", "%.1f → %.1f FPS · tier %d → %d".format(first.fps, last.fps, first.tier, last.tier))
@@ -568,9 +585,10 @@ private fun SystemCheckPanel(
         DiagnosticLine("Evidence verdict", when {
             samples.size < 15 -> "INCOMPLETE · finish the 15-second window"
             info == null -> "SYSTEM ONLY · no active renderer; adaptive behaviour cannot be proven here"
-            settings.quality != Quality.AUTO -> "RECORDED · adaptive tier changes require AUTO mode"
-            tierChanges > 0 -> "ADAPTATION OBSERVED · real effective tier changed during sampling"
-            else -> "RECORDED · no tier change observed; stable performance can be the correct result"
+            !hasValidRenderTelemetry -> "INCONCLUSIVE · invalid cadence/timing or no accepted-frame progress between samples"
+            settings.quality != Quality.AUTO -> "RECORDED ONLY · valid telemetry observed; adaptive tier changes require AUTO mode"
+            tierChanges > 0 -> "ADAPTATION OBSERVED · valid telemetry and an effective tier transition were recorded"
+            else -> "RECORDED ONLY · valid telemetry but no tier change observed; adaptation was not demonstrated"
         })
         Text("Last sample: ${last.fps} FPS · ${last.frameMs} ms interval · ${last.cpuMs} ms renderer call · thermal ${last.thermal?.toString() ?: "unavailable"}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {

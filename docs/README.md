@@ -15,7 +15,7 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              Vulkan / GLES 3.1 renderer ◀────────────┤
+                              OpenGL ES 3.1 renderer ◀────────────┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
@@ -38,7 +38,7 @@ unverified; Phase 4 remains deferred. See `STATUS.md` and `DEVICE.md`.
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, GPU profiles and compressed atlas uploads |
+| `native/src/render/` | Custom OpenGL ES 3.1 renderer, GPU profiles and compressed atlas uploads |
 | `native/third_party/` | Vendored Apache-2.0 ASTC Encoder and Etc2Comp codecs |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
@@ -92,8 +92,7 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** Vulkan is the primary backend and OpenGL ES 3.1 the
-  fallback; no third-party engine is linked.
+* **The custom renderer stays custom.** OpenGL ES 3.1 is the only shipped graphics backend; no Vulkan renderer or third-party engine is linked.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
 
 ## Licence

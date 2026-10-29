@@ -1,17 +1,17 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_gl.cpp  --  the fallback renderer: EGL + OpenGL ES 3.1
+ *  AvatarForge :: af_gl.cpp  --  the renderer: EGL + OpenGL ES 3.1
  * ============================================================================================
  *
- *  Same shading model, same shader source, same frame structure as the Vulkan backend - this file
- *  is the other half of "runs on any Android device the app installs on":
+ *  The sole shipped graphics backend. This renderer uses the GLSL ES shader source across
+ *  supported Android devices:
  *
  *      EGL window surface -> MSAA HDR framebuffer -> resolve to HDR texture
  *                         -> bloom chain (down + additive up)
  *                         -> composite (exposure, ACES, vignette, dither, sRGB) -> window
- *      plus a depth-only shadow pass with a comparison-sampler map, exactly as in af_vk.cpp.
+ *      plus a depth-only shadow pass with a comparison-sampler map.
  *
- *  Differences from the Vulkan path, all of them API-mandated and commented where they matter:
+ *  GLES-specific implementation details:
  *      * objects are bound to the context instead of recorded into command buffers
  *      * multisampling is a framebuffer property here, so the HDR attachment is a multisampled
  *        renderbuffer that is blitted into a texture (GLES has no resolve-at-end-of-pass)
@@ -1057,9 +1057,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     projectToSh(env_, &sh_, 1024);
 
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
-    /* depthZeroToOne = false: GL clip space, which is also why the ES dialect of the shaders has
-       AF_CLIP_Y = +1 and rescales the shadow lookup's z. */
-    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_, false);
+    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_);
     int lodIndexCounts[kAvatarLodLevels] = {};
     int lodCount = avatarLods_.levelCount();
     if (lodCount > 0) {
@@ -1076,6 +1074,9 @@ void GlRenderer::updateScene(float deltaSeconds) {
     avatarVisible_ = cull.visible;
     activeLod_ = std::max(0, cull.lod);
     triangles_ = cull.triangleCount;
+    stats_.activeLod = activeLod_;
+    stats_.availableLods = std::max(0, lodCount);
+    stats_.triangleBudgetExceeded = cull.triangleBudgetExceeded;
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
     scene_.camera.uiParams[1] = highlightRegion_ >= 0 ? 1.0f : 0.0f;
@@ -1088,7 +1089,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
+    /* Post-processing slices use one GLES-only implementation. */
     if (bloomLevels_ > 0) {
         PostUbo p{};
         const float hdrThreshold = (hdrInternalFormat_ == GL_RGBA16F) ? 1.0f : 0.62f;

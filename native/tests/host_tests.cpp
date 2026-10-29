@@ -1417,14 +1417,11 @@ static void testRig() {
 
 
 static void testShaderTables() {
-    std::printf("\n[10] embedded shader tables\n");
+    std::printf("\n[10] embedded GLES shader table\n");
     /*
-     * The renderer looks a shader up by (pipeline name, stage) and treats a miss as a hard
-     * initialisation failure - there is no unlit fallback path. That makes the baked tables a
-     * build artefact the harness can verify without a GPU: every stage must be present, the
-     * SPIR-V must carry its magic number and be non-trivial, and the GLES dialect must start with
-     * its version directive. A shader that silently went missing would otherwise show up as a
-     * black viewport on a phone, which is the worst place to find out.
+     * The sole renderer uses GLES. Verify every required pipeline stage exists, is non-trivial
+     * GLSL ES 3.10, and contains a main entry point. Missing shader stages are a hard renderer
+     * initialization failure rather than a silent unlit fallback.
      */
     struct Want { const char* name; AfShaderStage stage; };
     const Want want[] = {
@@ -1437,37 +1434,33 @@ static void testShaderTables() {
         {"forward_plus", AF_STAGE_COMP},
     };
     const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
-    CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",
+    CHECK(afShaderCount() == wanted, "every required stage is baked into the GLES shader table (%d of %d)",
           afShaderCount(), wanted);
 
-    int vkOk = 0, glOk = 0, words = 0;
+    int glOk = 0;
     size_t glBytes = 0;
     for (int i = 0; i < wanted; ++i) {
-        const AfShaderVk* vk = afShaderVk(want[i].name, want[i].stage);
         const AfShaderGl* gl = afShaderGl(want[i].name, want[i].stage);
-        if (vk && vk->words && vk->wordCount > 8 && vk->words[0] == 0x07230203u) { ++vkOk; words += int(vk->wordCount); }
         if (gl && gl->source && std::strlen(gl->source) > 200 &&
             std::strncmp(gl->source, "#version 310 es", 15) == 0 &&
-            std::strstr(gl->source, "void main") != nullptr) { ++glOk; glBytes += std::strlen(gl->source); }
+            std::strstr(gl->source, "void main") != nullptr) {
+            ++glOk;
+            glBytes += std::strlen(gl->source);
+        }
     }
-    CHECK(vkOk == wanted, "all stages carry valid SPIR-V (magic + non-empty) (%d of %d)", vkOk, wanted);
-    CHECK(glOk == wanted, "all stages carry GLSL ES 3.10 source (%d of %d)", glOk, wanted);
-    /* A lookup that does not exist must return nullptr: the backends rely on that being a hard
-       error rather than a fallback. */
-    CHECK(afShaderVk("nope", AF_STAGE_FRAG) == nullptr && afShaderGl("nope", AF_STAGE_VERT) == nullptr,
-          "an unknown shader name returns null (no silent fallback)");
-    CHECK(afShaderVk("forward", AF_STAGE_FRAG) != nullptr && afShaderGl("forward", AF_STAGE_FRAG) != nullptr &&
+    CHECK(glOk == wanted, "all required stages carry GLSL ES 3.10 source (%d of %d)", glOk, wanted);
+    CHECK(afShaderGl("nope", AF_STAGE_FRAG) == nullptr &&
+              afShaderGl("forward", AF_STAGE_FRAG) != nullptr &&
               std::strstr(afShaderGl("forward", AF_STAGE_FRAG)->source, "AF_KIND_SKIN") != nullptr,
-          "the forward shader is the shared lighting model (AF_KIND_* present in both dialects)");
-    std::printf("  %s  %d stages / %d SPIR-V words (%.0f kB) / %.0f kB of GLSL ES\n", PASS, wanted, words,
-                words * 4.0 / 1024.0, glBytes / 1024.0);
+          "GLES shader lookup rejects unknown names and preserves the shared material shader");
+    std::printf("  %s  %d GLES stages / %.0f kB of GLSL ES\n", PASS, wanted, glBytes / 1024.0);
 }
 
 /* ------------------------------------------ renderer-to-scene visibility adapter --------------- */
 static void testGpuProfilesAndTextureCompression() {
     std::printf("[10c] per-device GPU profiles and ASTC/ETC2 atlas encoding\n");
     GpuDeviceCaps caps;
-    caps.backend = "vulkan";
+    caps.backend = "gles31";
     caps.vendorId = 0x5143u;
     caps.deviceName = "Adreno (TM) 650";
     caps.maxTextureDimension2D = 16384;

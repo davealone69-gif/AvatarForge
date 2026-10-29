@@ -5,13 +5,10 @@
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() probes the backends in the order the user asked for. Vulkan first (it
- *      is the primary target and the only one that gives us guaranteed MSAA resolve behaviour and
- *      a well-defined depth range), then OpenGL ES 3.1. If neither initialises, create() returns
- *      nullptr with the reason from *both* attempts - the app then reports "no GPU backend" and
- *      keeps the CPU-side features (generation, export) working. There is no software rasteriser
- *      pretending to be a renderer, because a fake renderer is exactly the kind of thing that
- *      makes an app look finished while being useless.
+ *   1. Renderer::create() initialises the sole shipped OpenGL ES 3.1 backend. If it cannot
+ *      initialise, create() returns nullptr with the real GLES initialization error and the app
+ *      keeps CPU-side features (generation, export) available. There is no software rasteriser
+ *      pretending to be a renderer.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range
  *      device with a 2 GB memory ceiling, on a phone that is also thermally throttling because
@@ -33,8 +30,7 @@
 
 namespace af {
 
-/* Implemented in af_vk.cpp and af_gl.cpp respectively. */
-Renderer* createVulkanRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
+/* Only the OpenGL ES 3.1 renderer is built and shipped. */
 Renderer* createGlRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
 namespace {
@@ -178,27 +174,17 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
         return nullptr;
     }
 
-    std::string vulkanError = "the Vulkan backend is switched off in the viewer settings";
-    Renderer* backend = nullptr;
-    if (options.preferVulkan) backend = createVulkanRenderer(window, options, &vulkanError);
+    std::string glError;
+    Renderer* backend = createGlRenderer(window, options, &glError);
     if (backend) {
-        __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRender", "Vulkan backend initialized successfully");
+        __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRender",
+                            "OpenGL ES 3.1 renderer initialized successfully");
         return new BudgetRenderer(backend, options);
     }
-    __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
-                        "Vulkan backend failed; falling back to GLES. preferVulkan=%d reason=%s",
-                        options.preferVulkan ? 1 : 0, vulkanError.c_str());
-
-    std::string glError = "not attempted";
-    backend = createGlRenderer(window, options, &glError);
-    if (backend) return new BudgetRenderer(backend, options);
 
     if (error) {
-        std::string text = "no GPU backend available - Vulkan: ";
-        text += vulkanError.empty() ? std::string("unknown failure") : vulkanError;
-        text += "; OpenGL ES 3.1: ";
-        text += glError.empty() ? std::string("unknown failure") : glError;
-        *error = text;
+        *error = "OpenGL ES 3.1 renderer unavailable: ";
+        *error += glError.empty() ? std::string("unknown initialization failure") : glError;
     }
     return nullptr;
 }

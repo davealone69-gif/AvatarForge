@@ -40,7 +40,6 @@ extern "C" {
 /* ------------------------------------------------------------------ POD mirrors ----------- */
 typedef struct af_render_options {
     int32_t quality;             /* af::QualityPreset */
-    int32_t prefer_vulkan;
     int32_t enable_shadows;
     int32_t enable_bloom;
     int32_t enable_sss;
@@ -81,7 +80,6 @@ void af_render_options_defaults(af_render_options* out) {
     if (!out) return;
     const af::RendererOptions d{};
     out->quality = int32_t(d.quality);
-    out->prefer_vulkan = d.preferVulkan ? 1 : 0;
     out->enable_shadows = d.enableShadows ? 1 : 0;
     out->enable_bloom = d.enableBloom ? 1 : 0;
     out->enable_sss = d.enableSss ? 1 : 0;
@@ -102,7 +100,6 @@ void af_render_options_defaults(af_render_options* out) {
 static af::RendererOptions toCpp(const af_render_options& o) {
     af::RendererOptions options;
     options.quality = af::QualityPreset(o.quality);
-    options.preferVulkan = o.prefer_vulkan != 0;
     options.enableShadows = o.enable_shadows != 0;
     options.enableBloom = o.enable_bloom != 0;
     options.enableSss = o.enable_sss != 0;

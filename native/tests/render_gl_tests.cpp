@@ -112,7 +112,6 @@ int main(int argc, char** argv) {
     g_alignment = argc > 1 ? std::atoi(argv[1]) : 0;
     ANativeWindow window{kRenderTestWidth, kRenderTestHeight};
     af::RendererOptions options;
-    options.preferVulkan = false;
     options.msaaSamples = 2;
     options.shadowMapSize = 64;
     options.enableBloom = false;

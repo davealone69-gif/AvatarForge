@@ -1,6 +1,6 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.h  --  custom real-time renderer (Vulkan primary, GLES 3.1 fallback)
+ *  AvatarForge :: af_render.h  --  custom real-time renderer (OpenGL ES 3.1 only)
  * ============================================================================================
  *
  *  This renderer is written from scratch against the Khronos APIs. There is no game engine, no
@@ -11,15 +11,13 @@
  *  Architecture
  *  ------------
  *      Renderer (abstract)                 af_render.h      <- this file; the app/JNI talks to this
- *        ├── VulkanRenderer                af_vk.cpp        <- VK 1.0/1.1 core, no extensions required
  *        └── GlRenderer                    af_gl.cpp        <- EGL + OpenGL ES 3.1
  *
- *      create() probes Vulkan first (on Android: VK_KHR_android_surface via ANativeWindow); if the
- *      device exposes no usable Vulkan device, it falls back to GLES 3.1. If neither initialises,
+ *      create() initialises OpenGL ES 3.1 against the ANativeWindow. If GLES cannot initialise,
  *      create() returns nullptr with an explanation - the app then reports "no GPU backend"
  *      instead of pretending to render. There is no software rasteriser fake.
  *
- *  Lighting model (identical in both backends - same GLSL, two syntax targets)
+ *  Lighting model (single GLES shader path)
  *  ---------------------------------------------------
  *      * direct   : one directional sun, GGX specular, Smith visibility, 5-tap PCF shadow map
  *      * ambient  : analytic sky model (see af_environment.h) projected to 9 SH coefficients on
@@ -64,7 +62,6 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
     int   effectiveQualityLevel = 1; /* internal 0..3 tier selected by BudgetRenderer */
-    bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
@@ -111,14 +108,17 @@ struct RendererStats {
     uint64_t frameAttempts = 0;
     uint64_t frameSubmissions = 0;
     uint64_t presentRequestsAccepted = 0;
-    int   lastVkResult = 0;     /* VK_SUCCESS is zero; exact last failing VkResult otherwise */
-    bool  frameFatal = false;   /* renderer stopped after unrecoverable Vulkan/surface failure */
+    int   lastBackendError = 0; /* reserved graphics error code; zero means no reported error */
+    bool  frameFatal = false;   /* renderer stopped after unrecoverable graphics/surface failure */
+    int   activeLod = 0;        /* actual selected avatar LOD; zero is full detail */
+    int   availableLods = 0;    /* selectable index levels; source mesh remains level 1 if simplification fails */
+    bool  triangleBudgetExceeded = false; /* true if even the coarsest generated LOD exceeds the mobile target */
 };
 
 struct RendererInfo {
-    std::string backend;      /* "vulkan" | "gles31"                                     */
+    std::string backend;      /* "gles31"                                               */
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
-    std::string apiVersion;   /* e.g. "Vulkan 1.1.0" / "OpenGL ES 3.2"                   */
+    std::string apiVersion;   /* e.g. "OpenGL ES 3.2"                                  */
     std::string driver;       /* driver version string, shown in the health screen       */
     std::string gpuProfile;   /* capability-bounded profile applied by BudgetRenderer   */
     std::string textureCompression;

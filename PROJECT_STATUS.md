@@ -289,3 +289,42 @@ Next action: implement a separate consumer smoke-test app/module, build and insp
 - GitHub Actions Android APK run [#40102319017](https://github.com/davealone69-gif/AvatarForge/actions/runs/40102319017) was automatically queued for HEAD `ab525440c81ea307a583d0dc87a595794391ca21`; at checkpoint time it is **QUEUED**, not passed. Its build job includes `:sdk:assembleRelease` and uploads the newly built SDK AAR as an artifact if the workflow succeeds.
 - Not yet done: independent consumer sample app, external AAR consumption build, publication/POM inspection, fresh artifact size/hash, and physical-device lifecycle/render tests. Do not claim these passed until the workflow and consumer checks provide evidence.
 - Runtime remains **UNVERIFIED**; production signing remains **BLOCKED** without a valid keystore. Deferred work remains tracked. `main` unchanged.
+
+
+## Deep renderer audit checkpoint — 2026-10-29
+
+- Isolated audit branch: `fix/avatarforge-visual-quality-performance-2026-10-29`; do not merge into `main` until source-linked CI and device gates pass.
+- Latest code checkpoint before this status update: `966246a3f598bb11bb59929cec9e7ebebbbd8de2`.
+- Draft PR: [#21](https://github.com/davealone69-gif/AvatarForge/pull/21).
+- Audit record: [docs/FULL_ENGINE_AUDIT_2026-10-29.md](docs/FULL_ENGINE_AUDIT_2026-10-29.md).
+- The screenshot says `tris submitted`; the current canonical source says `tris selected for rendering` and reads the selected-triangle counter. Treat the screenshot's APK/source revision as **UNVERIFIED** until an artifact is tied to a commit SHA. The duplicated 426,170 total/selected count is suspicious and must be checked against actual selected LOD telemetry, not assumed to be a rendering bug.
+- Source review confirmed that Vulkan currently waits for **all** in-flight fences every frame because geometry/material/post/Forward+ mapped buffers are shared and CPU-written. This protects correctness but serializes frames and is a significant performance concern. **Do not remove this wait without first introducing safe per-frame ownership for all mutable GPU-read buffers and regression tests.**
+- AUTO changes MSAA/shadow/bloom; the LOD system separately aims for a 50,000-triangle mobile budget. The actual generated avatar's selected LOD and whether the target is met remain **UNVERIFIED**.
+- Added diagnostic honesty to `ViewerScreen.kt`: invalid/zero telemetry is not called healthy; a 15-sample adaptation window requires every sample to have finite positive timing and advancing accepted-frame sequence before it can claim adaptation.
+- Latest relevant workflow run for the prior head: [40862690988](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862690988) was cancelled by a newer push. Run [40862621045](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862621045) was still in progress when last checked and was for an older head. The latest code head's Actions run is pending; **no green claim** until checks complete for the exact current SHA.
+- Headless GLES/Vulkan and importer sanitizer jobs passed for earlier SHA `fd1e34d014e7c42a43190902f985d57052b8b97b`, but that run was cancelled before the Android package job completed. These are not current-head build verification.
+- Physical Samsung S24 runtime remains **UNVERIFIED**.
+
+## GLES-only backend decision — 2026-10-29 (supersedes earlier backend plan)
+
+- Native Vulkan renderer removed from this branch. The sole built renderer is OpenGL ES 3.1.
+- Deleted `native/src/render/af_vk.cpp`, `native/src/render/af_shaders_vk.h`, `native/tests/render_vk_tests.cpp`, and `tools/test_renderer_vk.sh`.
+- Removed Vulkan from native CMake sources/link libraries, native renderer selection, Kotlin settings/UI, JNI options, the C ABI mirror, Rust renderer options, shader generation, and Android CI packages/steps.
+- Simplified camera and shadow projections to the GLES/OpenGL depth convention. The renderer now fails with a specific GLES initialization reason instead of probing Vulkan.
+- Migration details and caveats: [docs/GLES_ONLY_MIGRATION_2026-10-29.md](docs/GLES_ONLY_MIGRATION_2026-10-29.md).
+- Latest source head before this status append: `2b7a56df58cb9e85ac48b063715b48a28c813a3a`; this append creates a new head and will restart/cancel prior CI runs. Wait for CI on the final head.
+- Exact-head Android build and GLES pixel test: **PENDING/UNVERIFIED**. No successful build is claimed.
+- APK/shared-library absence of `libvulkan`: **UNVERIFIED** until produced artifacts are inspected.
+- Device runtime, sustained FPS, RAM/thermal behavior, and the actual system driver path: **UNVERIFIED** until the exact APK is installed on the Samsung S24.
+- Important distinction: removing AvatarForge's native Vulkan backend does not force Android's system-selected ANGLE implementation to stop using Vulkan internally. Device driver identity must be checked after installation.
+- `main` remains untouched. PR #21 continues to target `work/android-engine-dev`; do not merge before exact-head CI and device verification.
+
+## Deep repair continuation — 2026-10-29
+
+- Work remains isolated on `fix/avatarforge-visual-quality-performance-2026-10-29`; PR #21 targets `work/android-engine-dev`. `main` remains untouched.
+- Fixed a real Kotlin compile error after Vulkan removal: `AvatarForge.kt` still supplied the deleted `preferVulkan` argument. Removed the stale setting and its obsolete comment instead of restoring a dead API parameter.
+- Added end-to-end LOD observability: native renderer stats now expose selected LOD, selectable index levels, and whether even the coarsest level exceeds the 50,000-triangle mobile target. JNI appends these fields while preserving the legacy nine/ten-integer telemetry layout.
+- Viewer Diagnostics now reports the selected LOD and budget state. This is instrumentation, not proof that the target is met on the Samsung device.
+- The last completed Android workflow failed on the stale `preferVulkan` Kotlin argument; host shader/regression and importer sanitizer jobs had passed on that SHA. A new exact-head workflow is required after this checkpoint.
+- Current acceptance: native Vulkan removal **REAL + VERIFIED in source**; GLES host regression **PASS on earlier SHA, final-head recheck pending**; Android package build **PENDING/UNVERIFIED**; artifact dependency inspection **UNVERIFIED**; Samsung installed-runtime and sustained performance **UNVERIFIED**.
+- Performance investigation remains evidence-led: compare actual generated LOD counts, selected triangles, CPU render-call time, FPS/frame interval, and repeatable visual captures. Do not assume the 50,000-triangle budget is met merely because the culler contains that policy.

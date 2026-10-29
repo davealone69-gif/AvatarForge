@@ -2,8 +2,7 @@
 //  af::render -- optional Rust binding for the custom renderer (feature = "renderer")
 // =============================================================================================
 //
-//  The renderer is C++ (native/src/render/) and needs a real Android window plus a Vulkan or
-//  GLES 3.1 driver, so this module is off by default: desktop builds and unit tests of the kernel
+//  The renderer is C++ (native/src/render/) and needs a real Android window plus a OpenGL ES 3.1 driver, so this module is off by default: desktop builds and unit tests of the kernel
 //  do not link it, and an Android build can turn it on to drive the exact same renderer the
 //  Kotlin app uses.
 //
@@ -33,7 +32,6 @@ pub enum Quality {
 #[derive(Clone, Copy, Debug)]
 pub struct RenderOptions {
     pub quality: i32,
-    pub prefer_vulkan: i32,
     pub enable_shadows: i32,
     pub enable_bloom: i32,
     pub enable_sss: i32,
@@ -55,7 +53,6 @@ impl Default for RenderOptions {
     fn default() -> Self {
         let mut options = Self {
             quality: Quality::Auto as i32,
-            prefer_vulkan: 1,
             enable_shadows: 1,
             enable_bloom: 1,
             enable_sss: 1,
@@ -123,7 +120,7 @@ impl Default for RenderInfo {
 }
 
 impl RenderInfo {
-    /// "vulkan" or "gles31" - what the renderer actually initialised, never a guess.
+    /// "gles31" - the GLES renderer actually initialised, never a guess.
     pub fn backend(&self) -> String {
         cstr(&self.backend)
     }
@@ -201,7 +198,7 @@ extern "C" {
     );
 }
 
-/// Owns one backend instance (Vulkan or GLES) for one Android window.
+/// Owns one backend instance (OpenGL ES) for one Android window.
 pub struct Renderer<'engine> {
     handle: *mut c_void,
     /* An attached engine must outlive this renderer. */

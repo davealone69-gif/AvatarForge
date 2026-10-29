@@ -14,5 +14,5 @@ internal object RenderLoopPolicy {
     /** Empty scenes still produce frames; triangle counts must not hide a stopped backend. */
     fun hasHealthyFrame(stats: RendererStats, previousSequence: Int = 0): Boolean =
         stats.frameSequence != previousSequence && stats.fps.isFinite() && stats.fps > 0f &&
-            !stats.frameFatal && stats.lastVkResult >= 0
+            !stats.frameFatal && stats.lastBackendError >= 0
 }
