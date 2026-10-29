@@ -1074,6 +1074,9 @@ void GlRenderer::updateScene(float deltaSeconds) {
     avatarVisible_ = cull.visible;
     activeLod_ = std::max(0, cull.lod);
     triangles_ = cull.triangleCount;
+    stats_.activeLod = activeLod_;
+    stats_.availableLods = std::max(0, lodCount);
+    stats_.triangleBudgetExceeded = cull.triangleBudgetExceeded;
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
     scene_.camera.uiParams[1] = highlightRegion_ >= 0 ? 1.0f : 0.0f;
