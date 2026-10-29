@@ -463,8 +463,8 @@ class MainActivity : ComponentActivity() {
                         frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
                 }
                 appendLine("Last error  : ${viewerError ?: "none"}")
-                appendLine("Settings    : requested preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
-                appendLine("Effective   : preferVulkan=${effectiveSettings.preferVulkan}, quality=${effectiveSettings.quality}")
+                appendLine("Settings    : requested backend=GLES, quality=${settings.quality}")
+                appendLine("Effective   : backend=GLES, quality=${effectiveSettings.quality}")
                 appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
                 appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
                     camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
@@ -484,8 +484,8 @@ class MainActivity : ComponentActivity() {
                     if (view != null) {
                         view.runSafeRecovery()
                     } else {
-                        val backend = RecoveryBackend.from(null, settings.preferVulkan)
-                        settings = RendererRecoveryPolicy.safeSettings(settings, backend == RecoveryBackend.VULKAN)
+                        val backend = RecoveryBackend.GLES
+                        settings = RendererRecoveryPolicy.safeSettings(settings)
                         settingsStore.saveRenderSettings(settings)
                         recoveryJournal.record(
                             RecoveryRecordKind.MANUAL_SAFE_RECOVERY,

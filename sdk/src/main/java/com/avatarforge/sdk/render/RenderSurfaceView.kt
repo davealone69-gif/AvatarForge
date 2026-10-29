@@ -86,7 +86,6 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private var renderer: AvatarRenderer? = null
     private var visible = false
-    private var activePreferVulkan: Boolean? = null
     private var rendererSurfaceGeneration = -1L
     @Volatile private var surfaceGeneration = 0L
     @Volatile private var surfaceReady = false
@@ -129,18 +128,11 @@ class RenderSurfaceView @JvmOverloads constructor(
         onRenderThread {
             if (released) return@onRenderThread
             if (changed) resetRecoverySession()
-            val current = renderer
-            if (current != null && activePreferVulkan != newSettings.preferVulkan) {
-                /* setOptions cannot change the native backend. Recreate on the owning thread;
-                   the Surface and generated engine remain owned by this view. */
-                restartRenderer(holder.surface, surfaceGeneration)
-            } else {
-                current?.applyOptions(RenderThermalPolicy.cap(newSettings, thermalStatus))
-            }
+            renderer?.applyOptions(RenderThermalPolicy.cap(newSettings, thermalStatus))
         }
     }
 
-    /** Recreate after a startup/frame failure, optionally switching backend for this attempt. */
+    /** Recreate the GLES renderer after a startup/frame failure. */
     fun retryRenderer(newSettings: RenderSettings = settings) {
         publishSettings(newSettings)
         handler.post {
@@ -168,11 +160,11 @@ class RenderSurfaceView @JvmOverloads constructor(
         handler.post {
             if (released) return@post
             val backend = currentBackend().let {
-                if (it == RecoveryBackend.UNKNOWN) RecoveryBackend.from(null, settings.preferVulkan) else it
+                if (it == RecoveryBackend.UNKNOWN) RecoveryBackend.GLES else it
             }
             resetRecoverySession()
             triedConfigurations.add(RendererRecoveryPolicy.configurationId(settings, backend))
-            val safe = RendererRecoveryPolicy.safeSettings(settings, backend == RecoveryBackend.VULKAN)
+            val safe = RendererRecoveryPolicy.safeSettings(settings)
             val candidateId = "safe-${backend.name.lowercase()}"
             triedConfigurations.add(candidateId)
             recoveryCandidateId = candidateId
@@ -290,7 +282,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     private fun currentBackend(): RecoveryBackend =
-        RecoveryBackend.from(_rendererInfo.value?.backend, settings.preferVulkan)
+        RecoveryBackend.from(_rendererInfo.value?.backend)
 
     private fun resetRecoverySession() {
         automaticAttempts = 0
@@ -389,7 +381,6 @@ class RenderSurfaceView @JvmOverloads constructor(
             renderer?.destroy()
         } finally {
             renderer = null
-            activePreferVulkan = null
             rendererSurfaceGeneration = -1L
             _rendererInfo.value = null
             _stats.value = emptyStats()
@@ -403,21 +394,13 @@ class RenderSurfaceView @JvmOverloads constructor(
         destroyRenderer()
         _error.value = null
         val requested = settings
-        val requestedBackend = RecoveryBackend.from(null, requested.preferVulkan)
+        val requestedBackend = RecoveryBackend.GLES
         try {
             val created = AvatarRenderer.create(surface, requested)
             renderer = created
-            activePreferVulkan = requested.preferVulkan
             rendererSurfaceGeneration = generation
             val info = created.info()
             _rendererInfo.value = info
-            if (requested.preferVulkan && info.backend.startsWith("gles", ignoreCase = true)) {
-                recoveryJournal.record(
-                    RecoveryRecordKind.BACKEND_FALLBACK,
-                    backend = info.backend,
-                    candidate = "vulkan->gles",
-                )
-            }
             created.setCamera(camera)
             created.applyOptions(settings)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
@@ -430,7 +413,7 @@ class RenderSurfaceView @JvmOverloads constructor(
             }
             if (visible) handler.post(frameLoop)
         } catch (t: Throwable) {
-            Log.e(RENDER_LOG_TAG, "Renderer initialization failed (preferVulkan=${requested.preferVulkan})", t)
+            Log.e(RENDER_LOG_TAG, "GLES renderer initialization failed", t)
             handleRendererFailure(
                 RecoveryStage.STARTUP,
                 t.message ?: t.javaClass.simpleName,

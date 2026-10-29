@@ -17,5 +17,5 @@ void main() {
     vTangent = vec4(1.0, 0.0, 0.0, 1.0);
     vUv = aPos.xz * 0.5 + 0.5;
     vColor = vec4(1.0);
-    gl_Position = afClip(cam.uViewProj * vec4(world, 1.0));
+    gl_Position = (cam.uViewProj * vec4(world, 1.0));
 }

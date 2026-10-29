@@ -1,17 +1,12 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.cpp  --  backend selection and the thermal/battery budget controller
+ *  AvatarForge :: af_render.cpp -- GLES factory and the thermal/battery budget controller
  * ============================================================================================
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() probes the backends in the order the user asked for. Vulkan first (it
- *      is the primary target and the only one that gives us guaranteed MSAA resolve behaviour and
- *      a well-defined depth range), then OpenGL ES 3.1. If neither initialises, create() returns
- *      nullptr with the reason from *both* attempts - the app then reports "no GPU backend" and
- *      keeps the CPU-side features (generation, export) working. There is no software rasteriser
- *      pretending to be a renderer, because a fake renderer is exactly the kind of thing that
- *      makes an app look finished while being useless.
+ *   1. Renderer::create() initializes GLES 3.1 and reports its actual failure. Generation and
+ *      export remain available when the GPU cannot initialize; no software success is invented.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range
  *      device with a 2 GB memory ceiling, on a phone that is also thermally throttling because
@@ -31,8 +26,6 @@
 
 namespace af {
 
-/* Implemented in af_vk.cpp and af_gl.cpp respectively. */
-Renderer* createVulkanRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
 Renderer* createGlRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
 namespace {
@@ -168,23 +161,13 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
         if (error) *error = "no native window (the SurfaceView is not ready yet)";
         return nullptr;
     }
-
-    std::string vulkanError = "the Vulkan backend is switched off in the viewer settings";
-    Renderer* backend = nullptr;
-    if (options.preferVulkan) backend = createVulkanRenderer(window, options, &vulkanError);
-    if (backend) return new BudgetRenderer(backend, options);
-
-    std::string glError = "not attempted";
-    backend = createGlRenderer(window, options, &glError);
-    if (backend) return new BudgetRenderer(backend, options);
-
-    if (error) {
-        std::string text = "no GPU backend available - Vulkan: ";
-        text += vulkanError.empty() ? std::string("unknown failure") : vulkanError;
-        text += "; OpenGL ES 3.1: ";
-        text += glError.empty() ? std::string("unknown failure") : glError;
-        *error = text;
+    std::string glError;
+    Renderer* backend = createGlRenderer(window, options, &glError);
+    if (backend) {
+        if (error) error->clear();
+        return new BudgetRenderer(backend, options);
     }
+    if (error) *error = "OpenGL ES 3.1: " + (glError.empty() ? std::string("unknown initialization failure") : glError);
     return nullptr;
 }
 

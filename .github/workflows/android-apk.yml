@@ -53,12 +53,7 @@ jobs:
           python3 tools/embed_shaders.py
           # GLSL embedding is deterministic; a diff means the checked-in GLES table is stale.
           git diff --exit-code -- native/src/render/af_shaders_gl.h
-          # SPIR-V can differ by compiler build even when the source compiles. The CI native build
-          # uses the regenerated table; record the drift instead of silently claiming it matches.
-          if ! git diff --exit-code -- native/src/render/af_shaders_vk.h; then
-            echo "::warning::Regenerated SPIR-V differs from the checked-in table; this CI build uses the regenerated table."
-          fi
-          sha256sum native/src/render/af_shaders_gl.h native/src/render/af_shaders_vk.h
+          sha256sum native/src/render/af_shaders_gl.h
 
       - name: Renderer initialization regression tests
         run: bash tools/test_renderer_host.sh
@@ -71,6 +66,7 @@ jobs:
             test -s "prebuilt/arm64-v8a/$lib"
             sha256sum "prebuilt/arm64-v8a/$lib"
           done
+          python3 tools/verify_gles_artifacts.py prebuilt/arm64-v8a
 
       - name: SDK JVM regression tests
         run: |
@@ -121,13 +117,14 @@ jobs:
             echo '::error::CI release AAB was unexpectedly signed; provenance would be misleading.'
             exit 1
           fi
+          python3 tools/verify_gles_artifacts.py dist/AvatarForge-debug-arm64.apk dist/AvatarForge-release-UNSIGNED-arm64.aab dist/AvatarForge-sdk.aar
           (cd dist && sha256sum * > SHA256SUMS)
           python3 - <<'PY'
           import hashlib, json, os, pathlib
           dist = pathlib.Path('dist')
           files = {p.name: {'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
                    for p in sorted(dist.iterdir()) if p.is_file() and p.name != 'PROVENANCE.json'}
-          shader_files = ['native/src/render/af_shaders_gl.h', 'native/src/render/af_shaders_vk.h']
+          shader_files = ['native/src/render/af_shaders_gl.h']
           provenance = {
               'repository': os.environ['GITHUB_REPOSITORY'],
               'head_commit': os.environ.get('HEAD_SHA', os.environ['GITHUB_SHA']),
@@ -137,6 +134,7 @@ jobs:
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'abi': 'arm64-v8a',
+              'graphics_backend': 'GLES_3_1_ONLY',
               'release_signing': 'UNSIGNED_COMPILE_VERIFICATION_ONLY',
               'files': files,
           }
@@ -215,6 +213,7 @@ jobs:
           APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
           "$APKSIGNER" verify --verbose --print-certs dist/AvatarForge-release-arm64.apk
           jarsigner -verify dist/AvatarForge-release-arm64.aab
+          python3 tools/verify_gles_artifacts.py dist/AvatarForge-debug-arm64.apk dist/AvatarForge-release-UNSIGNED-arm64.aab dist/AvatarForge-sdk.aar
           (cd dist && sha256sum * > SHA256SUMS)
       - name: Publish signed release
         uses: softprops/action-gh-release@v2

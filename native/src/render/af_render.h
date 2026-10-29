@@ -1,25 +1,14 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.h  --  custom real-time renderer (Vulkan primary, GLES 3.1 fallback)
+ *  AvatarForge :: af_render.h -- GLES 3.1 real-time renderer
  * ============================================================================================
  *
- *  This renderer is written from scratch against the Khronos APIs. There is no game engine, no
- *  scene-graph library, no third-party renderer and no shader pack: every pipeline, every
- *  descriptor, every render target and every line of GLSL in this directory is part of the
- *  AvatarForge source tree.
+ * One supported backend: GlRenderer (af_gl.cpp), using EGL, VAOs, UBOs and FBOs.
+ * Renderer::create reports GLES initialization failures directly. No alternate API is
+ * attempted and no software renderer is substituted. Android's driver implementation is
+ * reported verbatim; an OS-level GLES translation layer is not an app Vulkan backend.
  *
- *  Architecture
- *  ------------
- *      Renderer (abstract)                 af_render.h      <- this file; the app/JNI talks to this
- *        ├── VulkanRenderer                af_vk.cpp        <- VK 1.0/1.1 core, no extensions required
- *        └── GlRenderer                    af_gl.cpp        <- EGL + OpenGL ES 3.1
- *
- *      create() probes Vulkan first (on Android: VK_KHR_android_surface via ANativeWindow); if the
- *      device exposes no usable Vulkan device, it falls back to GLES 3.1. If neither initialises,
- *      create() returns nullptr with an explanation - the app then reports "no GPU backend"
- *      instead of pretending to render. There is no software rasteriser fake.
- *
- *  Lighting model (identical in both backends - same GLSL, two syntax targets)
+ *  Lighting model
  *  ---------------------------------------------------
  *      * direct   : one directional sun, GGX specular, Smith visibility, 5-tap PCF shadow map
  *      * ambient  : analytic sky model (see af_environment.h) projected to 9 SH coefficients on
@@ -62,7 +51,6 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
-    bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
@@ -113,9 +101,9 @@ struct RendererStats {
 };
 
 struct RendererInfo {
-    std::string backend;      /* "vulkan" | "gles31"                                     */
+    std::string backend;      /* "gles31"                                                */
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
-    std::string apiVersion;   /* e.g. "Vulkan 1.1.0" / "OpenGL ES 3.2"                   */
+    std::string apiVersion;   /* e.g. "OpenGL ES 3.2"                                    */
     std::string driver;       /* driver version string, shown in the health screen       */
     bool supportsShadows = false;
     bool supportsMsaa    = false;

@@ -1,27 +1,9 @@
 /*
- * ============================================================================================
- *  AvatarForge :: af_gl.cpp  --  the fallback renderer: EGL + OpenGL ES 3.1
- * ============================================================================================
+ * AvatarForge :: af_gl.cpp -- EGL + OpenGL ES 3.1 renderer.
  *
- *  Same shading model, same shader source, same frame structure as the Vulkan backend - this file
- *  is the other half of "runs on any Android device the app installs on":
- *
- *      EGL window surface -> MSAA HDR framebuffer -> resolve to HDR texture
- *                         -> bloom chain (down + additive up)
- *                         -> composite (exposure, ACES, vignette, dither, sRGB) -> window
- *      plus a depth-only shadow pass with a comparison-sampler map, exactly as in af_vk.cpp.
- *
- *  Differences from the Vulkan path, all of them API-mandated and commented where they matter:
- *      * objects are bound to the context instead of recorded into command buffers
- *      * multisampling is a framebuffer property here, so the HDR attachment is a multisampled
- *        renderbuffer that is blitted into a texture (GLES has no resolve-at-end-of-pass)
- *      * the Y direction is not flipped: GL's clip space already matches the shader's expectation
- *        (AF_CLIP_Y is +1 in the ES dialect), and the depth range is [-1,1] rather than [0,1]
- *      * glGenerateMipmap is used instead of a blit chain
- *
- *  The backend refuses to start below OpenGL ES 3.1 rather than silently degrading: the app's
- *  contract says the renderer needs a 3.1-class GPU, and pretending otherwise would ship a
- *  different (worse) image than the one the user was promised.
+ * EGL window surface -> MSAA HDR framebuffer -> resolve -> bloom -> composite -> window,
+ * with a depth-only shadow pass. GLES 3.1 is required; unsupported initialization fails
+ * explicitly. The OS-provided driver may itself use a translation layer, reported verbatim.
  */
 #include "af_render.h"
 #include "af_render_common.h"
@@ -797,7 +779,7 @@ void GlRenderer::uploadAtlas(std::string* error) {
         glBindTexture(GL_TEXTURE_2D, atlasTexture_[slot]);
         glTexImage2D(GL_TEXTURE_2D, 0, GLint(internal), tex.width, tex.height, 0, format,
                      GL_UNSIGNED_BYTE, tex.data);
-        glGenerateMipmap(GL_TEXTURE_2D);   /* GLES has this built in; the Vulkan path blits */
+        glGenerateMipmap(GL_TEXTURE_2D);   /* Driver-generated mip chain. */
         /* Account for the mip chain the driver just allocated, not only level 0. */
         {
             uint32_t mw = uint32_t(tex.width), mh = uint32_t(tex.height);
@@ -949,7 +931,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
     /* depthZeroToOne = false: GL clip space, which is also why the ES dialect of the shaders has
        AF_CLIP_Y = +1 and rescales the shadow lookup's z. */
-    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_, false);
+    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_);
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
     scene_.camera.uiParams[1] = highlightRegion_ >= 0 ? 1.0f : 0.0f;
@@ -962,7 +944,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
+    /* Post-processing uniform slices. */
     if (bloomLevels_ > 0) {
         PostUbo p{};
         const float hdrThreshold = (hdrInternalFormat_ == GL_RGBA16F) ? 1.0f : 0.62f;

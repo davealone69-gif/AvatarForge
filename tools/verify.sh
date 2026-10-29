@@ -43,7 +43,7 @@ else
 fi
 
 # ------------------------------------------------------------------ renderer fault injection --
-banner "renderer: GLES initialization, fallback and cleanup (host API mock)"
+banner "renderer: GLES initialization, capability fallbacks and cleanup (host API mock)"
 if bash tools/test_renderer_host.sh > build-host/renderer_init_tests.txt 2>&1; then
     ok "$(tail -1 build-host/renderer_init_tests.txt)"
 else
@@ -52,7 +52,7 @@ else
 fi
 
 # ------------------------------------------------------------------ 2. shader tables ------------
-banner "shaders: SPIR-V + GLSL ES tables match the sources"
+banner "shaders: complete GLSL ES table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
 # neither ANDROID_NDK nor ANDROID_NDK_HOME is exported (ANDROID_HOME alone is the common case).
 if [ -z "${ANDROID_NDK:-}" ] && [ -z "${ANDROID_NDK_HOME:-}" ]; then

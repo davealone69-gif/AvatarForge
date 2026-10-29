@@ -28,9 +28,8 @@ class RendererRecoveryTest {
     @Test
     fun `safe settings disable optional GPU cost and preserve exposure`() {
         val current = RenderSettings(quality = Quality.HIGH, exposure = 1.25f, shadows = true, bloom = true)
-        val safe = RendererRecoveryPolicy.safeSettings(current, preferVulkan = false)
+        val safe = RendererRecoveryPolicy.safeSettings(current)
         assertEquals(Quality.LOW, safe.quality)
-        assertFalse(safe.preferVulkan)
         assertFalse(safe.shadows)
         assertFalse(safe.bloom)
         assertFalse(safe.sss)
@@ -43,29 +42,21 @@ class RendererRecoveryTest {
     }
 
     @Test
-    fun `policy tries safe primary then alternate and stops after two automatic attempts`() {
-        val current = RenderSettings(preferVulkan = true)
-        val first = RendererRecoveryPolicy.next(current, RecoveryBackend.VULKAN, 0, emptySet())
+    fun `policy tries safe GLES once and never switches API`() {
+        val current = RenderSettings()
+        val first = RendererRecoveryPolicy.next(current, RecoveryBackend.GLES, 0, emptySet())
         assertNotNull(first)
-        assertEquals(RecoveryBackend.VULKAN, first!!.backend)
-        assertEquals("safe-vulkan", first.id)
-
-        val second = RendererRecoveryPolicy.next(current, RecoveryBackend.VULKAN, 1, setOf(first.id))
-        assertNotNull(second)
-        assertEquals(RecoveryBackend.GLES, second!!.backend)
-        assertEquals("safe-gles", second.id)
-
-        assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.VULKAN, 2, setOf(first.id, second.id)))
-        assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.VULKAN, 0, setOf(first.id, second.id)))
+        assertEquals(RecoveryBackend.GLES, first!!.backend)
+        assertEquals("safe-gles", first.id)
+        assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.GLES, 1, setOf(first.id)))
+        assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.UNKNOWN, 0, setOf(first.id)))
     }
 
     @Test
-    fun `already safe primary is not retried as the same candidate`() {
-        val safe = RendererRecoveryPolicy.safeSettings(RenderSettings(preferVulkan = false), preferVulkan = false)
+    fun `already safe GLES is not retried in a loop`() {
+        val safe = RendererRecoveryPolicy.safeSettings(RenderSettings())
         val tried = setOf(RendererRecoveryPolicy.configurationId(safe, RecoveryBackend.GLES))
-        val next = RendererRecoveryPolicy.next(safe, RecoveryBackend.GLES, 0, tried)
-        assertNotNull(next)
-        assertEquals(RecoveryBackend.VULKAN, next!!.backend)
+        assertNull(RendererRecoveryPolicy.next(safe, RecoveryBackend.GLES, 0, tried))
     }
 
     @Test
@@ -108,10 +99,10 @@ class RendererRecoveryTest {
             fingerprint = "0123456789abcdef",
             backend = "GLES",
         )
-        assertTrue(RecoveryAdvisor.recommendation(listOf(failure)).contains("alternate backend"))
+        assertTrue(RecoveryAdvisor.recommendation(listOf(failure)).contains("GLES shader/driver pair"))
         val stable = RecoveryRecord(2L, RecoveryRecordKind.FRAME_SUBMISSION_STABLE, backend = "GLES")
         assertTrue(RecoveryAdvisor.recommendation(listOf(failure, stable)).contains("Visible output still needs human confirmation"))
-        val fallback = RecoveryRecord(3L, RecoveryRecordKind.BACKEND_FALLBACK, backend = "gles31", candidate = "vulkan->gles")
-        assertTrue(RecoveryAdvisor.recommendation(listOf(fallback)).contains("fell back to gles31"))
+        val fallback = RecoveryRecord(3L, RecoveryRecordKind.BACKEND_FALLBACK, backend = "gles31", candidate = "legacy-fallback")
+        assertTrue(RecoveryAdvisor.recommendation(listOf(fallback)).contains("Historical backend-fallback"))
     }
 }

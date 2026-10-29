@@ -33,7 +33,7 @@ if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
 fi
 
 # Newest NDK/CMake in the SDK unless the caller pinned one. The kernel needs NDK r26 or newer for
-# the C++17 + Vulkan headers it uses; r23 will not do.
+# the C++17 + GLES headers it uses; r23 will not do.
 NDK="${AF_NDK:-$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)}"
 CMAKE_BIN="${AF_CMAKE:-$(ls "$SDK"/cmake/*/bin/cmake 2>/dev/null | sort -V | tail -1 || true)}"
 if [ -z "$NDK" ] || [ ! -f "$NDK/build/cmake/android.toolchain.cmake" ]; then
@@ -72,6 +72,7 @@ JOBS="${AF_NINJA_JOBS:-0}"
 if [ "$JOBS" -gt 0 ]; then "$NINJA" -C "$BUILD_DIR" -j "$JOBS"; else "$NINJA" -C "$BUILD_DIR"; fi
 
 mkdir -p "$ROOT/prebuilt/$ABI"
+python3 "$ROOT/tools/verify_gles_artifacts.py" "$BUILD_DIR"
 cp "$BUILD_DIR"/*.so "$ROOT/prebuilt/$ABI/"
 echo
 echo "installed into prebuilt/$ABI :"

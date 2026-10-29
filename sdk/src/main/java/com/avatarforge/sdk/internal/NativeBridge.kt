@@ -152,7 +152,6 @@ internal object NativeBridge {
     external fun rendererCreate(
         surface: Surface,
         quality: Int,
-        preferVulkan: Boolean,
         msaa: Int,
         shadowSize: Int,
         bloomLevels: Int,
@@ -182,7 +181,6 @@ internal object NativeBridge {
         turbidity: Float,
         environmentIntensity: Float,
         groundPlane: Boolean,
-        preferVulkan: Boolean,
         msaa: Int,
         shadowSize: Int,
         bloomLevels: Int,

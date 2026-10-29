@@ -11,7 +11,6 @@ object RenderSettingsCodec {
     fun encode(settings: RenderSettings): Map<String, String> = buildMap {
         put(KEY_VERSION, FORMAT_VERSION.toString())
         put("quality", settings.quality.value.toString())
-        put("preferVulkan", settings.preferVulkan.toString())
         put("shadows", settings.shadows.toString())
         put("bloom", settings.bloom.toString())
         put("sss", settings.sss.toString())
@@ -34,7 +33,6 @@ object RenderSettingsCodec {
         fun int(key: String, current: Int) = values[key]?.toIntOrNull() ?: current
         return RenderSettings(
             quality = Quality.of(int("quality", defaults.quality.value)),
-            preferVulkan = bool("preferVulkan", defaults.preferVulkan),
             shadows = bool("shadows", defaults.shadows),
             bloom = bool("bloom", defaults.bloom),
             sss = bool("sss", defaults.sss),

@@ -6,7 +6,7 @@
  * is why there is no model matrix anywhere in this pipeline. That is deliberate: one deformation
  * implementation, one result.
  *
- * Attribute locations match af_vk.cpp's avatarAttrs / af_gl.cpp's vertex arrays and the 88-byte
+ * Attribute locations match af_gl.cpp's vertex arrays and the 88-byte
  * af_vertex layout in afcore.h.
  */
 #include "common.glsl"
@@ -23,5 +23,5 @@ void main() {
     vTangent = aTangent;
     vUv = aUv;
     vColor = aColor;
-    gl_Position = afClip(cam.uViewProj * vec4(aPos, 1.0));
+    gl_Position = (cam.uViewProj * vec4(aPos, 1.0));
 }

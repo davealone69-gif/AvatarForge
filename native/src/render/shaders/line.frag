@@ -2,8 +2,8 @@
  * line.frag -- flat, unlit overlay. Lines are debug/inspection geometry, so they ignore every
  * lighting term; they are drawn in the HDR pass with blending off and a fixed line width.
  */
-/* Minimal stage interface: these programs never read the shared varyings, and a Vulkan
-   pipeline must be able to provide every vertex input its shaders consume. */
+/* Minimal stage interface: these programs never read the shared varyings, and every
+   declared vertex input must have a valid attribute binding. */
 #define AF_VARY_MINIMAL 1
 #include "common.glsl"
 

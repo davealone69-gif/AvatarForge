@@ -7,15 +7,10 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include "../../src/render/af_render_capi.cpp"
 
 namespace af {
 Renderer* createGlRenderer(ANativeWindow*, const RendererOptions&, std::string*);
-int vulkanAttempts = 0;
-Renderer* createVulkanRenderer(ANativeWindow*, const RendererOptions&, std::string* error) {
-    ++vulkanAttempts;
-    if (error) *error = "injected Vulkan failure";
-    return nullptr;
-}
 }
 namespace {
 int checks = 0, failures = 0;
@@ -27,7 +22,6 @@ bool contains(const std::string& text, const char* part) { return text.find(part
 ANativeWindow* window() { return reinterpret_cast<ANativeWindow*>(uintptr_t(10)); }
 af::RendererOptions options() {
     af::RendererOptions o{};
-    o.preferVulkan = false;
     o.msaaSamples = 2;
     return o;
 }
@@ -139,23 +133,37 @@ void capabilityTokens() {
     r.reset(af::createGlRenderer(window(), options(), &error));
     check(r && r->info().supportsFloatHdr, "exact float colour extension enables HDR");
 }
+void renderAbi() {
+    af_render_options o{};
+    af_render_options_defaults(&o);
+    check(sizeof(o) == 64 && o.quality == 0 && o.msaa_samples == 4, "GLES options ABI has no backend-choice field");
+    void* handle = af_renderer_create(window(), &o);
+    check(handle != nullptr, "C ABI creates the GLES renderer");
+    af_render_stats stats{};
+    check(af_renderer_stats(handle, &stats) == AF_OK && sizeof(stats) == 72 && stats.gpu_ms == -1.0f,
+          "C telemetry preserves unknown GPU time and aligned layout");
+    af_renderer_frame(handle, 1.0f / 60.0f);
+    check(af_renderer_stats(handle, &stats) == AF_OK && stats.frame_attempts == 1 &&
+          stats.frame_submissions == 1 && stats.present_requests_accepted == 1,
+          "C telemetry distinguishes attempts, submissions and accepted presents");
+    af_renderer_destroy(handle);
+}
 void selector() {
-    af_test::reset(); af::vulkanAttempts = 0;
+    af_test::reset();
     std::string error;
     std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
-    check(r != nullptr && af::vulkanAttempts == 0, "explicit GLES choice does not attempt Vulkan");
-    r.reset(); af_test::reset(); af::vulkanAttempts = 0;
-    auto o = options(); o.preferVulkan = true;
-    r.reset(af::Renderer::create(window(), o, &error));
-    check(r != nullptr && af::vulkanAttempts == 1, "Vulkan failure still falls back to GLES");
+    check(r != nullptr && error.empty() && af_test::state.contextsCreated == 1,
+          "factory initializes exactly one GLES context");
     r.reset(); af_test::reset();
-    af_test::state.fault = af_test::Fault::EglContext;
-    r.reset(af::Renderer::create(window(), o, &error));
-    check(r == nullptr && contains(error, "injected Vulkan failure") && contains(error, "EGL_BAD_CONFIG"),
-          "combined failure preserves both backend causes");
-    r.reset(); af_test::reset(); error.clear();
+    check(af::Renderer::create(nullptr, options(), &error) == nullptr && contains(error, "no native window"),
+          "factory rejects a missing window");
+    af_test::reset(); af_test::state.fault = af_test::Fault::EglContext;
     r.reset(af::Renderer::create(window(), options(), &error));
-    check(r != nullptr && error.empty(), "a fresh attempt can succeed after initialization failure");
+    check(r == nullptr && contains(error, "OpenGL ES 3.1") && contains(error, "EGL_BAD_CONFIG"),
+          "GLES failure is reported directly without an alternate API");
+    r.reset(); af_test::reset(); error = "stale";
+    r.reset(af::Renderer::create(window(), options(), &error));
+    check(r != nullptr && error.empty(), "fresh GLES attempt succeeds and clears stale error");
 }
 }  // namespace
 int main() {
@@ -166,7 +174,7 @@ int main() {
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
-    msaaFallback(); hdrFallback(); capabilityTokens(); selector();
+    msaaFallback(); hdrFallback(); capabilityTokens(); selector(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

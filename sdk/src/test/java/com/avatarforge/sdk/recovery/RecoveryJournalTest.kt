@@ -35,17 +35,17 @@ class RecoveryJournalTest {
     }
 
     @Test
-    fun `backend fallback is journaled as evidence, not hidden`() {
+    fun `legacy backend fallback remains readable but is not emitted by GLES builds`() {
         val journal = RecoveryJournal(temp.root)
         assertTrue(journal.record(
             RecoveryRecordKind.BACKEND_FALLBACK,
             backend = "gles31",
-            candidate = "vulkan->gles",
+            candidate = "legacy-fallback",
         ))
         val record = journal.recent(1).single()
         assertEquals(RecoveryRecordKind.BACKEND_FALLBACK, record.kind)
         assertEquals("gles31", record.backend)
-        assertEquals("vulkan->gles", record.candidate)
+        assertEquals("legacy-fallback", record.candidate)
         assertTrue(record.toReportLine().contains("BACKEND_FALLBACK"))
     }
 

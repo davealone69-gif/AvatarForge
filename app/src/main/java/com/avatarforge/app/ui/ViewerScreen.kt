@@ -3,7 +3,7 @@
  *
  * The result viewer/editor. This is where the app has to be honest about what it can do:
  *
- *   * the surface is the real renderer (Vulkan or GLES 3.1) drawing the real mesh - the same mesh
+ *   * the surface is the real GLES 3.1 renderer drawing the real mesh - the same mesh
  *     the .glb contains, deformed by the same rig;
  *   * pose and expression controls drive the kernel (applyPose / applyBlendshapes), which deforms
  *     the vertices the renderer then uploads. There is no separate "preview rig";
@@ -145,11 +145,6 @@ fun ViewerScreen(
                         Text(rendererError, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = { onRetryRenderer(settings) }) { Text("Retry viewer") }
-                            TextButton(onClick = {
-                                onRetryRenderer(settings.copy(preferVulkan = !settings.preferVulkan))
-                            }) {
-                                Text(if (settings.preferVulkan) "Try OpenGL ES" else "Try Vulkan")
-                            }
                         }
                     }
                 }
@@ -242,32 +237,44 @@ private fun CameraSlider(
 
 @Composable
 private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, failed: Boolean) {
+    // The old always-expanded card covered the face and hands in the supplied device screenshots.
+    // Keep the model visible by default; full build/driver evidence is one tap away.
+    var details by remember { mutableStateOf(false) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
-        Column(Modifier.padding(10.dp)) {
-            Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            val backend = when {
-                failed -> "GPU unavailable"
-                info != null -> "${info.backend} · ${info.deviceName}"
-                else -> "initialising GPU…"
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "%.2f m · %,d tris".format(result.spec.heightM, result.triangleCount),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
             }
-            val performance = if (failed) "no frames rendered" else "%.0f FPS (%.1f ms) · %s".format(
-                stats.fps, stats.frameMs,
-                if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
-            )
+            val performance = if (failed) "GPU unavailable" else "%.0f FPS (%.1f ms)".format(stats.fps, stats.frameMs)
             Text(
-                "$backend · $performance",
+                "GLES 3.1 · $performance",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (!failed && stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.error,
             )
-            Text(
-                "%.0f s to build · %d tris submitted".format(
-                    result.timings.values.sum() / 1000f,
-                    stats.triangles,
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (details) {
+                Text(result.summary(), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "%.0f s to build · %,d tris submitted · %.1f MiB textures".format(
+                        result.timings.values.sum() / 1000f, stats.triangles, stats.textureMiB,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                info?.let {
+                    // This is the driver's own description. Android may translate GLES internally;
+                    // it is not an AvatarForge backend selection.
+                    Text("Reported driver: ${it.deviceName} · ${it.apiVersion} · ${it.driver}", style = MaterialTheme.typography.labelSmall)
+                }
+                if (!failed && !stats.meetsTarget) {
+                    Text("Below 30 FPS: automatic quality reduction is active.", style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }
@@ -413,7 +420,6 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
     ToggleRow("Ground plane", settings.groundPlane) { onSettings(settings.copy(groundPlane = it)) }
-    ToggleRow("Prefer Vulkan (else GLES 3.1)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
     Text("Exposure %.2f".format(settings.exposure), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.exposure, onValueChange = { onSettings(settings.copy(exposure = it)) }, valueRange = 0.3f..2.5f)
     Text("Sun azimuth %.0f°".format(settings.sunAzimuthDeg), style = MaterialTheme.typography.bodySmall)

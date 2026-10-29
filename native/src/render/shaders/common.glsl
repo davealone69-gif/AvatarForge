@@ -1,55 +1,20 @@
 /*
- * ============================================================================================
- *  AvatarForge :: shaders/common.glsl  --  the whole shading model, in one place
- * ============================================================================================
+ * Shared GLES 3.1 lighting model. Sources are embedded as GLSL ES 3.10 by
+ * tools/embed_shaders.py. Uniform blocks mirror af_render_common.h; sampler units
+ * are assigned by GlRenderer::createPrograms. Camera/projection use GL clip space.
  *
- *  This file is compiled TWICE from the same source by tools/embed_shaders.py:
- *
- *    * for Vulkan  (AF_VULKAN defined)  -> glslc -> SPIR-V, embedded as uint32 words, and
- *    * for GLES 3.1 (AF_GLES defined)   -> "#version 310 es" + inlined includes, embedded as text.
- *
- *  Both dialects therefore evaluate *the same* lighting maths. The only differences left are the
- * ones the two APIs genuinely impose:
- *
- *      descriptor bindings  Vulkan takes (set, binding); GLES assigns sampler units by uniform
- *                           name at link time (GlRenderer::createPrograms does that).
- *      clip space           Vulkan's Y points down and its depth range is [0,1]; the projection is
- *                           built in the GL convention and afClip() flips Y for Vulkan.
- *      target addressing    afShadowUv()/postUv() reconcile the framebuffer origin flip so both
- *                           backends read the same texel for the same light-space position.
- *
- *  Everything else is shared code: the analytic sky, the SH irradiance, the BRDF, the
- *  skin/eye/hair/cloth/metal models, the shadow test and the tonemapper.
- *
- *  Atlas semantics (kept in step with src/af_texture.cpp, which is the authority):
- *
- *      baseColor        sRGB-encoded albedo; hardware-linearised on sample, never linearised here.
- *      normal           tangent-space normal, .xyz packed as n*0.5+0.5.
- *      metallicRoughness .g = roughness, .b = metallic (glTF convention; .r is unused and 1.0).
- *      occlusion        one channel, linear 0..1 (uploaded as R8).
- *      subsurface       .r = scattering thickness (encoded *4, saturating at 0.25 m)
- *                       .g = scatter radius (same encoding)
- *                       .b = scatter tint (skin melanin / cloth dye)
- *
- *  Uniform block layouts mirror src/render/af_render_common.h struct-for-struct and are asserted
- *  there with static_assert, so a layout drift breaks the build instead of the image.
+ * Atlas semantics (af_texture.cpp is authoritative): baseColor is sRGB, normal is
+ * tangent-space, metallicRoughness.g/.b are roughness/metallic, occlusion is linear,
+ * subsurface.r/.g encode thickness/radius and .b encodes tint.
  */
 #ifndef AF_COMMON_GLSL
 #define AF_COMMON_GLSL
 
-/* ------------------------------------------------------------------ dialect bridge -------- */
-/*
- * The macro parameters are named s/b, never "set"/"binding": the preprocessor substitutes *every*
- * occurrence of a parameter name, so `#define AF_UBO(set, binding) layout(set = set, ...)` would
- * expand the qualifying keyword itself into the argument and the shader would not compile.
- */
-#ifdef AF_VULKAN
-#define AF_UBO(s, b) layout(std140, set = s, binding = b)
-#define AF_TEX(s, b) layout(set = s, binding = b)
-#else
-#define AF_UBO(s, b) layout(std140, binding = b)
-#define AF_TEX(s, b)
-#endif
+/* GLES uniform/sampler declarations; sampler units are assigned at link time. */
+#define AF_UBO(b) layout(std140, binding = b)
+#define AF_TEX(b)
+/* GLSL ES requires constant-expression initializers for const locals. */
+#define af_const
 
 /* Material kinds: the ABI's values (af_render_common.h::materialKindForRegion). */
 #define AF_KIND_GENERIC 0
@@ -62,21 +27,15 @@
 #define AF_KIND_NAIL    7
 
 /*
- * Local "const" is a dialect difference, not a style choice: GLSL ES 3.10 only allows const on
- * variables initialised by a *constant expression*, so `const vec3 e = someFunction(n);` is a
- * compile error on the GLES path while desktop/Vulkan GLSL accepts it. af_const keeps the intent
- * visible in the source and compiles to the right thing in both dialects.
+ * GLSL ES 3.10 only allows const on constant-expression initializers. af_const marks
+ * read-only locals whose initializer is a function call without claiming portable const.
  */
-#ifdef AF_GLES
 #define af_const
-#else
-#define af_const const
-#endif
 
 #define AF_PI 3.14159265358979
 
 /* ------------------------------------------------------------------ uniform blocks --------- */
-AF_UBO(0, 0) uniform CameraBlock {
+AF_UBO(0) uniform CameraBlock {
     mat4 uViewProj;
     mat4 uView;
     mat4 uLightViewProj;
@@ -90,12 +49,12 @@ AF_UBO(0, 0) uniform CameraBlock {
     vec4 uSh[9];         /* cosine-convolved SH9 irradiance                               */
 } cam;
 
-AF_UBO(0, 2) uniform PostBlock {
+AF_UBO(2) uniform PostBlock {
     vec4 uPostParams;    /* x = bloom threshold, y = filter radius, z = bloom intensity, w = exposure */
     vec4 uPostTexel;     /* xy = 1 / source texel size                                    */
 } post;
 
-AF_UBO(1, 0) uniform MaterialBlock {
+AF_UBO(0) uniform MaterialBlock {
     vec4 uBaseColorFactor;  /* rgb = linear tint, a = opacity                            */
     vec4 uPbr;              /* x = metallic, y = roughness, z = ior, w = sheen           */
     vec4 uPbr2;             /* x = subsurface, y = anisotropy, z = kind, w = has normal  */
@@ -104,30 +63,15 @@ AF_UBO(1, 0) uniform MaterialBlock {
 } mat;
 
 /* ------------------------------------------------------------------ textures -------------- */
-AF_TEX(0, 1) uniform sampler2D uShadowMap;
-AF_TEX(0, 3) uniform sampler2D uSourceTex;
-AF_TEX(0, 4) uniform sampler2D uBloomTex;
+AF_TEX(1) uniform sampler2D uShadowMap;
+AF_TEX(3) uniform sampler2D uSourceTex;
+AF_TEX(4) uniform sampler2D uBloomTex;
 
-AF_TEX(1, 1) uniform sampler2D uBaseColorTex;
-AF_TEX(1, 2) uniform sampler2D uNormalTex;
-AF_TEX(1, 3) uniform sampler2D uMetalRoughTex;
-AF_TEX(1, 4) uniform sampler2D uOcclusionTex;
-AF_TEX(1, 5) uniform sampler2D uSubsurfaceTex;
-
-#ifdef AF_VULKAN
-struct AfForwardLight {
-    vec4 positionRange;
-    vec4 colorIntensity;
-    vec4 reserved;
-};
-layout(std430, set = 2, binding = 0) readonly buffer ForwardLightBuffer {
-    vec4 header;
-    AfForwardLight lights[16];
-} fpLights;
-layout(std430, set = 2, binding = 1) readonly buffer ForwardTileBuffer {
-    uvec4 tileLists[16 * 9];
-} fpTiles;
-#endif
+AF_TEX(1) uniform sampler2D uBaseColorTex;
+AF_TEX(2) uniform sampler2D uNormalTex;
+AF_TEX(3) uniform sampler2D uMetalRoughTex;
+AF_TEX(4) uniform sampler2D uOcclusionTex;
+AF_TEX(5) uniform sampler2D uSubsurfaceTex;
 
 /* ------------------------------------------------------------------ stage interface -------- */
 /*
@@ -152,33 +96,8 @@ layout(std430, set = 2, binding = 1) readonly buffer ForwardTileBuffer {
 AF_VARY_OUT;
 #endif
 
-/* ------------------------------------------------------------------ clip conventions ------- */
-/*
- * Applied to every position pushed through a matrix built by buildCameraUbo(). Vulkan's clip
- * space has +Y down; the projection is authored in the GL convention, so the flip happens here,
- * once, for both the camera and the light matrix - and only on Vulkan.
- */
-vec4 afClip(vec4 clip) {
-#ifdef AF_VULKAN
-    clip.y = -clip.y;
-#endif
-    return clip;
-}
-
-/*
- * Light-space ndc -> shadow map uv.
- *
- * The shadow pass rasterises with afClip(), so map row 0 holds the light-space *top* on Vulkan
- * (framebuffer origin top-left) and the light-space *bottom* on GLES (origin bottom-left). Both
- * cases are one line apart here rather than in every caller.
- */
-vec2 afShadowUv(vec3 ndc) {
-#ifdef AF_VULKAN
-    return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-#else
-    return vec2(ndc.x * 0.5 + 0.5, ndc.y * 0.5 + 0.5);
-#endif
-}
+/* GL framebuffer origin is bottom-left; shadow sampling uses the same convention. */
+vec2 afShadowUv(vec3 ndc) { return ndc.xy * 0.5 + 0.5; }
 
 /* ------------------------------------------------------------------ environment ----------- */
 /*
@@ -532,33 +451,8 @@ float afAshikhminV(float ndv, float ndl) {
     return 1.0 / max(4.0 * (ndl + ndv - ndl * ndv), 1e-4);
 }
 
-vec3 afForwardPlus(vec3 p, vec3 n, vec3 v, vec3 albedo) {
-#if defined(AF_VULKAN) && !defined(AF_STAGE_VERTEX)
-    if (fpLights.header.w < 0.5) return vec3(0.0);
-    float width = max(fpLights.header.y, 1.0);
-    float height = max(fpLights.header.z, 1.0);
-    uint tileX = min(uint(gl_FragCoord.x / (width / 16.0)), 15u);
-    uint tileY = min(uint(gl_FragCoord.y / (height / 9.0)), 8u);
-    uvec4 tile = fpTiles.tileLists[tileY * 16u + tileX];
-    vec3 result = vec3(0.0);
-    for (uint slot = 0u; slot < min(tile.x, 3u); ++slot) {
-        AfForwardLight light = fpLights.lights[tile[slot + 1u]];
-        vec3 toLight = light.positionRange.xyz - p;
-        float distanceToLight = length(toLight);
-        vec3 direction = toLight / max(distanceToLight, 1e-4);
-        float range = max(light.positionRange.w, 0.01);
-        float falloff = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
-        falloff *= falloff;
-        float diffuse = max(dot(n, direction), 0.0);
-        float specular = pow(max(dot(reflect(-direction, n), v), 0.0), 24.0);
-        result += light.colorIntensity.rgb * light.colorIntensity.w * falloff *
-                  (albedo * diffuse + vec3(specular * 0.08));
-    }
-    return result;
-#else
-    return vec3(0.0);
-#endif
-}
+/* This GLES studio path exposes the sun and image-based lighting, not a local-light list. */
+vec3 afForwardPlus(vec3, vec3, vec3, vec3) { return vec3(0.0); }
 
 /* ------------------------------------------------------------------ the light loop --------- */
 vec4 afShade(vec3 p, vec3 geometricNormal, vec4 tangent, vec2 uv, vec3 v) {

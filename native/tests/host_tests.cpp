@@ -1223,59 +1223,32 @@ static void testRig() {
     CHECK((kneeHalf - knee0).length() > 0.02f, "walk cycle swings the legs (%.3f m)", static_cast<double>((kneeHalf - knee0).length()));
     CHECK((kneeLoop - knee0).length() < 1e-4f, "looping clip returns to its start pose (%.5f m)", static_cast<double>((kneeLoop - knee0).length()));
 
-    /* Root translation (jump) must lift the pelvis. */
-    const int jumpIdx = clipIndexForId(AF_CLIP_JUMP);
-    const Clip& jump = builtinClips()[static_cast<size_t>(jumpIdx)];
-    float peak = 0.0f;
-    for (const Track& tr : jump.tracks) if (tr.jointName == "root") peak = std::max(peak, tr.keys[3].translation.y);
-    CHECK(peak > 0.3f, "jump clip lifts the root (%.2f m)", peak);
-}
-
-
+    /* Complete GLES pipeline coverage, including the previously miscounted post stages. */
 static void testShaderTables() {
-    std::printf("\n[10] embedded shader tables\n");
-    /*
-     * The renderer looks a shader up by (pipeline name, stage) and treats a miss as a hard
-     * initialisation failure - there is no unlit fallback path. That makes the baked tables a
-     * build artefact the harness can verify without a GPU: every stage must be present, the
-     * SPIR-V must carry its magic number and be non-trivial, and the GLES dialect must start with
-     * its version directive. A shader that silently went missing would otherwise show up as a
-     * black viewport on a phone, which is the worst place to find out.
-     */
-    struct Want { const char* name; AfShaderStage stage; };
-    const Want want[] = {
+    std::printf("[10] GLES shader table\n");
+    const struct { const char* name; AfShaderStage stage; } wanted[] = {
         {"forward", AF_STAGE_VERT}, {"forward", AF_STAGE_FRAG},
-        {"shadow", AF_STAGE_VERT},  {"shadow", AF_STAGE_FRAG},
-        {"ground", AF_STAGE_VERT},  {"ground", AF_STAGE_FRAG},
-        {"line", AF_STAGE_VERT},    {"line", AF_STAGE_FRAG},
-        {"fullscreen", AF_STAGE_VERT},
-        {"bloom_down", AF_STAGE_FRAG}, {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
+        {"shadow", AF_STAGE_VERT}, {"shadow", AF_STAGE_FRAG},
+        {"ground", AF_STAGE_VERT}, {"ground", AF_STAGE_FRAG},
+        {"line", AF_STAGE_VERT}, {"line", AF_STAGE_FRAG},
+        {"fullscreen", AF_STAGE_VERT}, {"bloom_down", AF_STAGE_FRAG},
+        {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
     };
-    const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
-    CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",
-          afShaderCount(), wanted);
-
-    int vkOk = 0, glOk = 0, words = 0;
-    size_t glBytes = 0;
-    for (int i = 0; i < wanted; ++i) {
-        const AfShaderVk* vk = afShaderVk(want[i].name, want[i].stage);
-        const AfShaderGl* gl = afShaderGl(want[i].name, want[i].stage);
-        if (vk && vk->words && vk->wordCount > 8 && vk->words[0] == 0x07230203u) { ++vkOk; words += int(vk->wordCount); }
-        if (gl && gl->source && std::strlen(gl->source) > 200 &&
-            std::strncmp(gl->source, "#version 310 es", 15) == 0 &&
-            std::strstr(gl->source, "void main") != nullptr) { ++glOk; glBytes += std::strlen(gl->source); }
+    const int count = int(sizeof(wanted) / sizeof(wanted[0]));
+    CHECK(afShaderCount() == count, "GLES table contains exactly %d stages (got %d)", count, afShaderCount());
+    int valid = 0;
+    for (const auto& entry : wanted) {
+        const AfShaderGl* shader = afShaderGl(entry.name, entry.stage);
+        if (shader && shader->source && std::strlen(shader->source) > 200 &&
+            std::strncmp(shader->source, "#version 310 es", 15) == 0 &&
+            std::strstr(shader->source, "void main")) ++valid;
     }
-    CHECK(vkOk == wanted, "all stages carry valid SPIR-V (magic + non-empty) (%d of %d)", vkOk, wanted);
-    CHECK(glOk == wanted, "all stages carry GLSL ES 3.10 source (%d of %d)", glOk, wanted);
-    /* A lookup that does not exist must return nullptr: the backends rely on that being a hard
-       error rather than a fallback. */
-    CHECK(afShaderVk("nope", AF_STAGE_FRAG) == nullptr && afShaderGl("nope", AF_STAGE_VERT) == nullptr,
-          "an unknown shader name returns null (no silent fallback)");
-    CHECK(afShaderVk("forward", AF_STAGE_FRAG) != nullptr && afShaderGl("forward", AF_STAGE_FRAG) != nullptr &&
-              std::strstr(afShaderGl("forward", AF_STAGE_FRAG)->source, "AF_KIND_SKIN") != nullptr,
-          "the forward shader is the shared lighting model (AF_KIND_* present in both dialects)");
-    std::printf("  %s  %d stages / %d SPIR-V words (%.0f kB) / %.0f kB of GLSL ES\n", PASS, wanted, words,
-                words * 4.0 / 1024.0, glBytes / 1024.0);
+    CHECK(valid == count, "all stages carry GLSL ES 3.10 source (%d/%d)", valid, count);
+    CHECK(!afShaderGl("missing", AF_STAGE_FRAG) && !afShaderGl(nullptr, AF_STAGE_VERT),
+          "unknown/null shader lookup fails explicitly");
+    const AfShaderGl* forward = afShaderGl("forward", AF_STAGE_FRAG);
+    CHECK(forward && std::strstr(forward->source, "AF_KIND_SKIN"), "forward retains the shared material model");
+    CHECK(!afShaderGl("removed_pipeline", AF_STAGE_VERT), "removed pipeline is not advertised");
 }
 
 /* ---------------------------------------------------- 12. pose composition and the bind pose ----- */

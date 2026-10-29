@@ -22,7 +22,7 @@ plugins {
  *   -Paf.prebuiltJni=DIR   skip CMake and package the .so files already sitting in DIR/<abi>/.
  *
  * The second exists because the native build is the memory peak of the whole APK build: on a 2 GB
- * machine the Gradle daemon plus an -O3 clang of af_vk.cpp exceeds RAM and the daemon is killed.
+ * machine the Gradle daemon plus an -O3 native clang exceeds RAM and the daemon is killed.
  * Building the libraries with ninja first (which schedules them one at a time and finishes in
  * seconds) and then packaging them is the same artifact with a fraction of the peak. It is also how
  * CI caches the native layer between app-only changes.
@@ -57,7 +57,7 @@ android {
                  * and the CMake version).
                  *
                  * -Paf.lowRam=true serialises the native compile and drops it to -O1. On a 2 GB
-                 * container an -O3 compile of af_vk.cpp plus the Gradle daemon exceeds RAM and the
+                 * container an -O3 native compile plus the Gradle daemon exceeds RAM and the
                  * build daemon is killed; with the flag the same APK builds. Shipping builds do not
                  * use it (see BUILD.md).
                  */
@@ -108,6 +108,14 @@ android {
             useLegacyPackaging = true
         }
     }
+}
+
+/* A prebuilt shortcut must not resurrect the removed backend from stale binaries. */
+if (prebuiltJni != null) {
+    tasks.register<Exec>("verifyPrebuiltGles") {
+        commandLine("python3", rootProject.file("tools/verify_gles_artifacts.py").absolutePath, prebuiltJni)
+    }
+    tasks.matching { it.name == "preBuild" }.configureEach { dependsOn("verifyPrebuiltGles") }
 }
 
 dependencies {

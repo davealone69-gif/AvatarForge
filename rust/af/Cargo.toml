@@ -2,7 +2,7 @@
 #  AvatarForge :: af  --  safe Rust wrapper over the kernel and (optionally) the renderer
 # ==============================================================================================
 #  No dependencies. The only feature, `renderer`, links against libafrender.so - leave it off for
-#  desktop builds and unit tests (the renderer needs an Android window and a Vulkan/GLES driver),
+#  desktop builds and unit tests (the renderer needs an Android window and a GLES driver),
 #  turn it on when building inside the Android app.
 # ==============================================================================================
 [package]
@@ -21,7 +21,7 @@ af-sys = { path = "../af-sys", version = "0.9.0" }
 
 [features]
 default = []
-# Drives the custom Vulkan/GLES renderer through the C ABI in native/src/render/af_render_capi.cpp.
+# Drives the custom GLES renderer through the C ABI in native/src/render/af_render_capi.cpp.
 # Requires libafrender.so to be linkable (Android target only).
 renderer = []
 

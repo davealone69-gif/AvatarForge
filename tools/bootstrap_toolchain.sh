@@ -15,7 +15,7 @@
 #      build-tools 34  aapt2, d8, apksigner - what actually produces the APK
 #      platform-tools  adb, for installing on a device
 #      cmake 3.22.1    builds native/CMakeLists.txt (the NDK's own cmake is not on PATH)
-#      ndk r26b        clang 17 + the Vulkan/GLES/EGL stub libraries the renderer links against
+#      ndk r26b        clang 17 + the GLES/EGL stub libraries the renderer links against
 #      gradle 8.9      the AGP 8.5 build
 #      jdk 17          AGP 8.x requires it; the system JDK is usually 11
 #      kotlin 1.9.24   standalone compiler, used to type-check the SDK without Gradle

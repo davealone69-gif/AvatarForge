@@ -2,7 +2,7 @@
  * AvatarForge :: deterministic renderer recovery (no AI, no network).
  *
  * This is a bounded stability path, not autonomous code modification. It classifies a renderer
- * failure, tries a small ladder of known-safe settings/backends, and records enough evidence for a
+ * failure, tries a small ladder of known-safe GLES settings, and records enough evidence for a
  * human or CI regression test to act on. It never claims that pixels are visible: the on-device probe
  * only verifies sustained frame submission with non-zero submitted geometry.
  */
@@ -16,22 +16,12 @@ import java.util.Locale
 
 enum class RecoveryStage { STARTUP, FRAME, RESIZE }
 
+/** UNKNOWN means no renderer info yet, not permission to select another graphics API. */
 enum class RecoveryBackend {
-    VULKAN, GLES, UNKNOWN;
-
-    fun opposite(): RecoveryBackend = when (this) {
-        VULKAN -> GLES
-        GLES -> VULKAN
-        UNKNOWN -> UNKNOWN
-    }
-
+    GLES, UNKNOWN;
     companion object {
-        fun from(infoBackend: String?, preferVulkan: Boolean): RecoveryBackend = when {
-            infoBackend.equals("vulkan", ignoreCase = true) -> VULKAN
-            infoBackend != null && infoBackend.startsWith("gles", ignoreCase = true) -> GLES
-            preferVulkan -> VULKAN
-            else -> GLES
-        }
+        fun from(infoBackend: String?): RecoveryBackend =
+            if (infoBackend != null && infoBackend.startsWith("gles", ignoreCase = true)) GLES else UNKNOWN
     }
 }
 
@@ -88,19 +78,12 @@ data class RecoveryCandidate(
 data class RecoveryStatus(val phase: String, val message: String)
 
 object RendererRecoveryPolicy {
-    const val MAX_AUTOMATIC_ATTEMPTS = 2
+    const val MAX_AUTOMATIC_ATTEMPTS = 1
 
-    /** Disables optional GPU cost while preserving camera, exposure and the generated avatar. */
-    fun safeSettings(current: RenderSettings, preferVulkan: Boolean): RenderSettings = current.copy(
-        quality = Quality.LOW,
-        preferVulkan = preferVulkan,
-        shadows = false,
-        bloom = false,
-        sss = false,
-        groundPlane = false,
-        msaa = 1,
-        shadowMapSize = 1024,
-        bloomLevels = 0,
+    /** One conservative GLES retry; camera, exposure and generated geometry are preserved. */
+    fun safeSettings(current: RenderSettings): RenderSettings = current.copy(
+        quality = Quality.LOW, shadows = false, bloom = false, sss = false,
+        groundPlane = false, msaa = 1, shadowMapSize = 1024, bloomLevels = 0,
     )
 
     fun isSafe(settings: RenderSettings): Boolean =
@@ -117,23 +100,9 @@ object RendererRecoveryPolicy {
         tried: Set<String>,
     ): RecoveryCandidate? {
         if (automaticAttempts >= MAX_AUTOMATIC_ATTEMPTS) return null
-        val primary = if (actualBackend == RecoveryBackend.UNKNOWN) {
-            RecoveryBackend.from(null, current.preferVulkan)
-        } else actualBackend
-        val order = listOf(primary, primary.opposite()).distinct()
-        for (backend in order) {
-            if (backend == RecoveryBackend.UNKNOWN) continue
-            val id = "safe-${backend.name.lowercase(Locale.ROOT)}"
-            if (id in tried) continue
-            val preferVulkan = backend == RecoveryBackend.VULKAN
-            return RecoveryCandidate(
-                id = id,
-                label = if (preferVulkan) "safe Vulkan" else "safe OpenGL ES",
-                backend = backend,
-                settings = safeSettings(current, preferVulkan),
-            )
-        }
-        return null
+        val id = "safe-gles"
+        if (id in tried) return null
+        return RecoveryCandidate(id, "safe OpenGL ES", RecoveryBackend.GLES, safeSettings(current))
     }
 }
 
@@ -174,9 +143,9 @@ object RecoveryAdvisor {
         if (lastFailure == null) {
             val fallback = records.lastOrNull { it.kind == RecoveryRecordKind.BACKEND_FALLBACK }
             return if (fallback != null) {
-                "Vulkan was requested but the renderer fell back to ${fallback.backend}. This is recorded, not a fault. Export the report if you need the driver pair investigated."
+                "Historical backend-fallback record found. Current builds support GLES only; old journal entries remain readable for diagnosis."
             } else {
-                "No renderer fault is recorded. Run the viewer normally; use Safe recovery only after a fault."
+                "No renderer fault is recorded. Run the GLES viewer normally; use Safe recovery only after a fault."
             }
         }
         val lastStable = records.lastOrNull { it.kind == RecoveryRecordKind.FRAME_SUBMISSION_STABLE }
@@ -186,10 +155,10 @@ object RecoveryAdvisor {
         val repeats = records.count { it.kind == RecoveryRecordKind.FAILURE && it.fingerprint == lastFailure.fingerprint }
         val base = when (lastFailure.category) {
             RecoveryFaultCategory.OUT_OF_MEMORY -> "Keep LOW quality, close other apps, and retry. If repeated, export the report for a memory-budget regression."
-            RecoveryFaultCategory.SHADER_COMPILE, RecoveryFaultCategory.SHADER_LINK -> "Try the alternate backend and export the report; the shader/driver pair needs a source regression test."
+            RecoveryFaultCategory.SHADER_COMPILE, RecoveryFaultCategory.SHADER_LINK -> "Try Safe recovery and export the report; the GLES shader/driver pair needs a source regression test."
             RecoveryFaultCategory.EGL_CONTEXT, RecoveryFaultCategory.EGL_SURFACE, RecoveryFaultCategory.CONTEXT_LOST -> "Reopen the viewer to recreate the Surface, then try Safe recovery. If repeated, export the lifecycle report."
             RecoveryFaultCategory.FRAMEBUFFER -> "Safe recovery disables MSAA/HDR-dependent extras. If repeated, export the report for a render-target regression."
-            RecoveryFaultCategory.GL_INVALID_OPERATION -> "Try Safe recovery and the alternate backend; export the report so the invalid GL call can be traced."
+            RecoveryFaultCategory.GL_INVALID_OPERATION -> "Try Safe recovery; export the report so the invalid GL call can be traced."
             RecoveryFaultCategory.RESIZE -> "Retry after rotation/resize completes. If repeated, export the report for a resize-target regression."
             RecoveryFaultCategory.UNKNOWN, null -> "Try Safe recovery once, then export the report. Do not keep retrying in a loop."
         }
