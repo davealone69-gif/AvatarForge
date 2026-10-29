@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Production GLES integration test on headless Mesa (Debian/Ubuntu packages:
+# Production GLES-only integration test on headless Mesa (Debian/Ubuntu packages:
 # g++ libegl1-mesa-dev libgles2-mesa-dev). Uses a pbuffer, not a mock GL implementation.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
