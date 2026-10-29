@@ -9,8 +9,7 @@
 #                        beyond zlib and the C++ runtime, which is why the identical sources build
 #                        and pass their test harness on a desktop.
 #
-#     libafrender.so     the custom renderer: OpenGL ES 3.1 only. Links EGL/GLES and Android system libraries; Vulkan is
-#                        not compiled, linked, probed or shipped.
+#     libafrender.so     the custom renderer: OpenGL ES 3.1 only. Links EGL/GLES and Android system libraries; the Vulkan API is not compiled, linked, probed or shipped.
 #
 #     libavatarforge.so  the JNI bridge, which is the only place Kotlin meets C++.
 #
