@@ -1266,51 +1266,54 @@ bool VulkanRenderer::createBuffers(std::string* error) {
         *error = "ground vertex buffer failed";
         return false;
     }
-    /* One-shot copy. */
-    {
+    /* One-shot copy. A failed command or submit is an initialization failure, not a valid
+       ground buffer with undefined vertices. createSwapchain already owns commandPool_. */
+    VkResult groundCopyResult = VK_ERROR_INITIALIZATION_FAILED;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (commandPool_ != VK_NULL_HANDLE) {
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool = commandPool_;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        VkCommandPoolCreateInfo pool{};
-        pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool.queueFamilyIndex = queueFamily_;
-        VkCommandPool tmpPool = VK_NULL_HANDLE;
-        if (commandPool_ == VK_NULL_HANDLE) {
-            vkCreateCommandPool(device_, &pool, nullptr, &tmpPool);
-            ai.commandPool = tmpPool;
+        groundCopyResult = vkAllocateCommandBuffers(device_, &ai, &cb);
+        if (groundCopyResult == VK_SUCCESS) {
+            VkCommandBufferBeginInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            groundCopyResult = vkBeginCommandBuffer(cb, &bi);
         }
-        vkAllocateCommandBuffers(device_, &ai, &cb);
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb, &bi);
-        VkBufferCopy copy{0, 0, sizeof(quad)};
-        vkCmdCopyBuffer(cb, staging, groundBuffer_, 1, &copy);
-        VkBufferMemoryBarrier bar{};
-        bar.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        bar.srcQueueFamilyIndex = bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.buffer = groundBuffer_;
-        bar.offset = 0;
-        bar.size = sizeof(quad);
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                             0, 0, nullptr, 1, &bar, 0, nullptr);
-        vkEndCommandBuffer(cb);
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cb;
-        vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(queue_);
-        vkFreeCommandBuffers(device_, ai.commandPool, 1, &cb);
-        if (tmpPool != VK_NULL_HANDLE) vkDestroyCommandPool(device_, tmpPool, nullptr);
+        if (groundCopyResult == VK_SUCCESS) {
+            VkBufferCopy copy{0, 0, sizeof(quad)};
+            vkCmdCopyBuffer(cb, staging, groundBuffer_, 1, &copy);
+            VkBufferMemoryBarrier bar{};
+            bar.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+            bar.srcQueueFamilyIndex = bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.buffer = groundBuffer_;
+            bar.offset = 0;
+            bar.size = sizeof(quad);
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                                 0, 0, nullptr, 1, &bar, 0, nullptr);
+            groundCopyResult = vkEndCommandBuffer(cb);
+        }
+        if (groundCopyResult == VK_SUCCESS) {
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cb;
+            groundCopyResult = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+            if (groundCopyResult == VK_SUCCESS) groundCopyResult = vkQueueWaitIdle(queue_);
+        }
+        if (cb != VK_NULL_HANDLE) vkFreeCommandBuffers(device_, commandPool_, 1, &cb);
     }
     vkDestroyBuffer(device_, staging, nullptr);
     vkFreeMemory(device_, stagingMem, nullptr);
+    if (groundCopyResult != VK_SUCCESS) {
+        setError(error, "ground vertex upload", groundCopyResult);
+        return false;
+    }
 
     /* Skeleton overlay: one segment per joint (71 joints, 2 vertices each, 28 bytes per vertex)
        with generous headroom for future rig revisions. */
@@ -2221,7 +2224,8 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cmd;
             submitResult = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
-            commandOk = submitResult == VK_SUCCESS && vkQueueWaitIdle(queue_) == VK_SUCCESS;
+            if (submitResult == VK_SUCCESS) submitResult = vkQueueWaitIdle(queue_);
+            commandOk = submitResult == VK_SUCCESS;
         }
         if (cmd) vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
         vkDestroyBuffer(device_, staging, nullptr);
@@ -3201,7 +3205,16 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
 void VulkanRenderer::applyOptionChanges() {
     targetsDirty_ = false;
     if (!device_) return;
-    vkDeviceWaitIdle(device_);
+    const VkResult idle = vkDeviceWaitIdle(device_);
+    if (idle != VK_SUCCESS) {
+        frameError_ = "vkDeviceWaitIdle before Vulkan target rebuild failed (VkResult " +
+                      std::to_string(int(idle)) + ")";
+        lastFrameVkResult_ = idle;
+        stats_.lastVkResult = int(idle);
+        frameFatal_ = true;
+        stats_.frameFatal = true;
+        return;
+    }
     const RendererOptions rollback = activeTargetOptions_;
 
     const auto rebuild = [&](std::string* error) {

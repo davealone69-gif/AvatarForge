@@ -37,8 +37,9 @@ playback inside the viewer, not an encoded recording.
 - The Vulkan backend owns an Android window reference across surface recreation. It propagates
   unrecoverable `vkAcquire`/`vkResetCommandBuffer`/record/submit/present and target-rebuild errors
   through `frameError()` to JNI's exception and one safe GLES recovery. Atlas upload, white
-  placeholder clear, material-buffer and descriptor failures also stop rather than reporting a
-  presented but untextured avatar. Submission/accepted-present counters are only advanced after
+  placeholder clear, ground-vertex upload, material-buffer and descriptor failures also stop
+  rather than reporting a presented but untextured/undefined avatar. Target rebuilding rejects
+  a failed device-idle wait before touching in-flight resources. Submission/accepted-present counters are only advanced after
   their respective successful calls; **none proves visible pixels**. Anisotropy is clamped against
   the actual physical-device limit and capped at 4×.
 - Android build links the **system** `libvulkan.so` alongside EGL/GLES. The artifact gate requires
