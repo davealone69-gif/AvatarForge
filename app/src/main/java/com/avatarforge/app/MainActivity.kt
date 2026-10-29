@@ -70,6 +70,12 @@ import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererStats
+import com.avatarforge.sdk.recovery.RecoveryAdvisor
+import com.avatarforge.sdk.recovery.RecoveryBackend
+import com.avatarforge.sdk.recovery.RecoveryJournal
+import com.avatarforge.sdk.recovery.RecoveryRecordKind
+import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 private enum class Screen { INPUT, PROGRESS, VIEWER }
@@ -123,6 +129,8 @@ class MainActivity : ComponentActivity() {
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
         var showDiagnostics by remember { mutableStateOf(false) }
+        val recoveryJournal = remember { RecoveryJournal(context.filesDir) }
+        var recoveryReportToSave by remember { mutableStateOf<String?>(null) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -156,6 +164,25 @@ class MainActivity : ComponentActivity() {
                 glbToSave = null
             }
 
+            val recoveryReportLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.CreateDocument("text/plain"),
+            ) { uri: Uri? ->
+                val pending = recoveryReportToSave
+                if (uri != null && pending != null) {
+                    val written = runCatching {
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                            out.write(pending.toByteArray(Charsets.UTF_8))
+                        } ?: error("the chosen destination could not be opened")
+                    }
+                    Toast.makeText(
+                        context,
+                        if (written.isSuccess) "Recovery report saved" else "Export failed: ${written.exceptionOrNull()?.message}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                recoveryReportToSave = null
+            }
+
             fun begin(started: JobHandle) {
                 job = started
                 screen = Screen.PROGRESS
@@ -177,6 +204,9 @@ class MainActivity : ComponentActivity() {
             }
 
         LaunchedEffect(job) { job?.status?.collect { status = it } }
+        LaunchedEffect(surfaceViewState) {
+            surfaceViewState?.effectiveSettings?.collect { settings = it }
+        }
         LaunchedEffect(Unit) {
             if (!health.usable) Toast.makeText(context, health.problem ?: "engine unavailable", Toast.LENGTH_LONG).show()
         }
@@ -401,6 +431,8 @@ class MainActivity : ComponentActivity() {
             val info = surfaceViewState?.rendererInfo?.value
             val frameStats = surfaceViewState?.stats?.value
             val viewerError = surfaceViewState?.error?.value
+            val recoveryStatus = surfaceViewState?.recoveryStatus?.value
+            val records = recoveryJournal.recent(20)
             val report = buildString {
                 append(AvatarForge.deviceReport(context))
                 appendLine()
@@ -422,8 +454,41 @@ class MainActivity : ComponentActivity() {
                 }
                 appendLine("Last error  : ${viewerError ?: "none"}")
                 appendLine("Settings    : preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
+                appendLine()
+                appendLine("Self-improvement path (deterministic, no AI, no network)")
+                appendLine("Recovery    : ${recoveryStatus?.let { "${it.phase}: ${it.message}" } ?: "idle"}")
+                appendLine("Journal     : ${if (recoveryJournal.isAvailable) "available" else "unavailable (${recoveryJournal.lastStorageError})"}")
+                appendLine("Next step   : ${RecoveryAdvisor.recommendation(records)}")
+                appendLine("Recent events:")
+                if (records.isEmpty()) appendLine("  none") else records.takeLast(12).forEach { appendLine("  ${it.toReportLine()}") }
             }
-            DiagnosticsDialog(report = report, onDismiss = { showDiagnostics = false })
+            DiagnosticsDialog(
+                report = report,
+                recoveryStatus = recoveryStatus?.let { "${it.phase}: ${it.message}" },
+                onSafeRecovery = {
+                    val view = surfaceView
+                    if (view != null) {
+                        view.runSafeRecovery()
+                    } else {
+                        val backend = RecoveryBackend.from(null, settings.preferVulkan)
+                        settings = RendererRecoveryPolicy.safeSettings(settings, backend == RecoveryBackend.VULKAN)
+                        recoveryJournal.record(
+                            RecoveryRecordKind.MANUAL_SAFE_RECOVERY,
+                            backend = backend.name,
+                            candidate = "safe-${backend.name.lowercase()}",
+                        )
+                        Toast.makeText(context, "Safe settings armed for the next viewer", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onExportReport = {
+                    recoveryReportToSave = report
+                    recoveryReportLauncher.launch("avatarforge-recovery-${System.currentTimeMillis()}.txt")
+                },
+                onClearJournal = {
+                    surfaceView?.clearRecoveryJournal() ?: recoveryJournal.clear()
+                },
+                onDismiss = { showDiagnostics = false },
+            )
         }
     }
 }

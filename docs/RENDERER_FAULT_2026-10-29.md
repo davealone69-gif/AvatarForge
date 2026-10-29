@@ -71,3 +71,11 @@ geometry.
    and retry after a failure.
 5. Record the result and device/GPU/Android version here or in `DEVICE.md`. Do not mark the fault closed
    from a successful build or a successful host mock test alone.
+
+## Stability follow-up
+
+The viewer now has a deterministic no-AI stability path: startup/frame/resize faults are classified and
+journaled privately, a bounded policy tries safe settings and the alternate backend, and a frame probe
+checks sustained non-empty submission. `MENU -> Self diagnostics` can copy/export the report, run Safe
+recovery, or clear the journal. This is a regression-evidence loop, not proof of visible pixels. See
+[SELF_IMPROVEMENT_PATH.md](SELF_IMPROVEMENT_PATH.md).

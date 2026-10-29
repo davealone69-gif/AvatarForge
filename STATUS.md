@@ -9,6 +9,14 @@ arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the 
 statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
 what that means and what is outstanding.
 
+### 2026-10-29 stability self-improvement path
+
+A no-AI, offline renderer-stability path is implemented: bounded safe fallback (max two automatic
+attempts), private fault journal, frame-submission probe, and copyable/exportable diagnostics report.
+It is covered by SDK JVM tests and the renderer host suite in CI. **Device visibility remains
+unverified**; the probe does not claim that pixels are visible. See
+[docs/SELF_IMPROVEMENT_PATH.md](docs/SELF_IMPROVEMENT_PATH.md).
+
 ### 2026-10-29 device fault
 
 A supplied phone screenshot shows successful generation (417,150 triangles) followed by a viewer

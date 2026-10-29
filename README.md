@@ -79,6 +79,20 @@ On hardware:
 tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
 ```
 
+## Stability self-improvement path (no AI)
+
+AvatarForge has a bounded, offline renderer-stability loop: diagnostics -> safe fallback -> private
+fault journal -> frame-submission probe -> exportable regression report. It does not use AI, upload
+data, or rewrite code. Open **MENU -> Self diagnostics** to copy/export the report, run **Safe
+recovery**, or clear the journal. See [docs/SELF_IMPROVEMENT_PATH.md](docs/SELF_IMPROVEMENT_PATH.md).
+The probe proves sustained non-empty frame submission, **not** visible pixels; device visibility still
+requires human confirmation.
+
+```bash
+./gradlew :sdk:testDebugUnitTest      # recovery policy/probe/journal JVM regressions
+bash tools/test_renderer_host.sh      # renderer fault-injection regressions
+```
+
 ## Design rules this codebase holds itself to
 
 * **Airplane mode is the normal case.** No HTTP, sockets, telemetry, or remote model fetches. Models

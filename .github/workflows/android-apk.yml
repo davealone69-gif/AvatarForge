@@ -68,6 +68,14 @@ jobs:
             sha256sum "prebuilt/arm64-v8a/$lib"
           done
 
+      - name: SDK JVM regression tests (recovery policy, probe, journal)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace --console=plain \
+            :sdk:testDebugUnitTest \
+            -Paf.abIs=arm64-v8a \
+            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+
       - name: Build debug APK, release APK, and SDK AAR
         run: |
           chmod +x ./gradlew

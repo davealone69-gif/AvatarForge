@@ -9,16 +9,13 @@
  * frame loop off the main thread entirely - a 60 Hz viewer on the main thread would drop frames
  * during recomposition, which is exactly when the user is dragging the camera.
  *
- * The thread's protocol is deliberately small:
- *
- *     CMD_CREATE(surface)   -> build the renderer, attach the engine if one is pending
- *     CMD_ATTACH(engine)    -> hand a freshly generated avatar to the GPU
- *     CMD_FRAME             -> draw one frame (posted by the choreographer while visible)
- *     CMD_CONFIG(closure)   -> run renderer calls that must happen on the render thread
- *     CMD_QUIT              -> destroy the renderer and exit
- *
  * Everything the UI needs to know (backend name, fps, current clip) is published through
  * StateFlows that the Compose layer collects.
+ *
+ * Stability path: startup/frame/resize failures are classified and journaled locally, then a bounded
+ * deterministic policy tries safe settings and the alternate backend. This is not AI and does not
+ * modify code. A post-recovery probe checks sustained non-empty frame submission only; visible output
+ * still requires human/device confirmation.
  */
 package com.avatarforge.sdk.render
 
@@ -32,6 +29,15 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import com.avatarforge.sdk.recovery.RecoveryBackend
+import com.avatarforge.sdk.recovery.RecoveryFrameProbe
+import com.avatarforge.sdk.recovery.RecoveryJournal
+import com.avatarforge.sdk.recovery.RecoveryProbeOutcome
+import com.avatarforge.sdk.recovery.RecoveryRecordKind
+import com.avatarforge.sdk.recovery.RecoveryStage
+import com.avatarforge.sdk.recovery.RecoveryStatus
+import com.avatarforge.sdk.recovery.RecoveryFailureClassifier
+import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,6 +50,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     private val thread = HandlerThread("avatarforge-render").apply { start() }
     private val handler = Handler(thread.looper)
 
+    /** Private, bounded, offline fault journal. The UI may read/clear the same file. */
+    val recoveryJournal = RecoveryJournal(context.applicationContext.filesDir)
+
     private val _rendererInfo = MutableStateFlow<RendererInfo?>(null)
     val rendererInfo: StateFlow<RendererInfo?> = _rendererInfo.asStateFlow()
 
@@ -52,6 +61,13 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _effectiveSettings = MutableStateFlow(RenderSettings())
+    /** Settings actually requested by the view, including deterministic recovery changes. */
+    val effectiveSettings: StateFlow<RenderSettings> = _effectiveSettings.asStateFlow()
+
+    private val _recoveryStatus = MutableStateFlow<RecoveryStatus?>(null)
+    val recoveryStatus: StateFlow<RecoveryStatus?> = _recoveryStatus.asStateFlow()
 
     /** Set by the UI; applied on the render thread before the next frame. */
     @Volatile private var settings: RenderSettings = RenderSettings()
@@ -72,6 +88,12 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var surfaceReady = false
     @Volatile private var released = false
 
+    /* Render-thread recovery state. Bounded: at most two automatic attempts per failure session. */
+    private var automaticAttempts = 0
+    private val triedConfigurations = mutableSetOf<String>()
+    private var recoveryProbe: RecoveryFrameProbe? = null
+    private var recoveryCandidateId: String? = null
+
     init {
         holder.addCallback(this)
         /* The renderer wants every pixel the view has, and it will letterbox nothing: the camera
@@ -83,9 +105,11 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Applies render settings (quality, environment, overlays). Safe from the UI thread. */
     fun applySettings(newSettings: RenderSettings) {
-        settings = newSettings
+        val changed = newSettings != settings
+        publishSettings(newSettings)
         onRenderThread {
             if (released) return@onRenderThread
+            if (changed) resetRecoverySession()
             val current = renderer
             if (current != null && activePreferVulkan != newSettings.preferVulkan) {
                 /* setOptions cannot change the native backend. Recreate on the owning thread;
@@ -99,15 +123,60 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Recreate after a startup/frame failure, optionally switching backend for this attempt. */
     fun retryRenderer(newSettings: RenderSettings = settings) {
-        settings = newSettings
+        publishSettings(newSettings)
         handler.post {
             if (released) return@post
+            resetRecoverySession()
+            val backend = currentBackend()
+            triedConfigurations.add(RendererRecoveryPolicy.configurationId(newSettings, backend))
+            recoveryCandidateId = "manual-retry"
+            recoveryProbe = RecoveryFrameProbe()
+            recoveryJournal.record(
+                RecoveryRecordKind.MANUAL_RETRY,
+                backend = backend.name,
+                candidate = "manual-retry",
+            )
             if (!surfaceReady) {
                 _error.value = "The drawing surface is not ready. Return to the editor and reopen the viewer."
                 return@post
             }
             restartRenderer(holder.surface, surfaceGeneration)
         }
+    }
+
+    /** User-initiated safe recovery. If no Surface exists yet, arms safe settings for the next viewer. */
+    fun runSafeRecovery() {
+        handler.post {
+            if (released) return@post
+            val backend = currentBackend().let {
+                if (it == RecoveryBackend.UNKNOWN) RecoveryBackend.from(null, settings.preferVulkan) else it
+            }
+            resetRecoverySession()
+            triedConfigurations.add(RendererRecoveryPolicy.configurationId(settings, backend))
+            val safe = RendererRecoveryPolicy.safeSettings(settings, backend == RecoveryBackend.VULKAN)
+            val candidateId = "safe-${backend.name.lowercase()}"
+            triedConfigurations.add(candidateId)
+            recoveryCandidateId = candidateId
+            recoveryProbe = RecoveryFrameProbe()
+            publishSettings(safe)
+            recoveryJournal.record(
+                RecoveryRecordKind.MANUAL_SAFE_RECOVERY,
+                backend = backend.name,
+                candidate = candidateId,
+            )
+            if (surfaceReady) {
+                _recoveryStatus.value = RecoveryStatus("RETRYING", "Trying $candidateId with optional GPU effects disabled.")
+                restartRenderer(holder.surface, surfaceGeneration)
+            } else {
+                _recoveryStatus.value = RecoveryStatus("ARMED", "Safe settings are armed. Open the 3D viewer to test them.")
+            }
+        }
+    }
+
+    fun clearRecoveryJournal(): Boolean {
+        val cleared = recoveryJournal.clear()
+        onRenderThread { resetRecoverySession() }
+        return cleared
     }
 
     /** Applies camera state (orbit). Safe from the UI thread; called on every drag frame. */
@@ -172,17 +241,17 @@ class RenderSurfaceView @JvmOverloads constructor(
             try {
                 r.setCamera(camera)
                 r.frame(delta.coerceIn(0f, 0.1f))
-                _stats.value = r.stats()
+                val frameStats = r.stats()
+                _stats.value = frameStats
+                observeRecoveryProbe(frameStats)
             } catch (t: Throwable) {
+                val backend = currentBackend()
                 Log.e(RENDER_LOG_TAG, "Renderer frame failed", t)
-                destroyRenderer()
-                _error.value = "Renderer frame failed: ${t.message ?: t.javaClass.simpleName}"
+                handleRendererFailure(RecoveryStage.FRAME, "Renderer frame failed: ${t.message ?: t.javaClass.simpleName}", backend)
                 return
             }
             if (visible) {
-                /* The previous loop always slept 16 ms *after* doing the render work. A 22 ms
-                   frame therefore became 38 ms (~26 FPS), which falsely triggered the quality
-                   downgrade. Sleep only for the unused part of the 60 Hz budget. */
+                /* Sleep only for the unused part of the 60 Hz budget, not a fixed 16 ms after work. */
                 val elapsedNs = System.nanoTime() - frameStartNs
                 val remainingNs = (FRAME_INTERVAL_NS - elapsedNs).coerceAtLeast(0L)
                 val delayMs = (remainingNs + 999_999L) / 1_000_000L
@@ -194,6 +263,104 @@ class RenderSurfaceView @JvmOverloads constructor(
     private inline fun onRenderThread(crossinline block: (RenderSurfaceView) -> Unit) {
         if (Looper.myLooper() == thread.looper) block(this)
         else handler.post { block(this) }
+    }
+
+    private fun publishSettings(newSettings: RenderSettings) {
+        settings = newSettings
+        _effectiveSettings.value = newSettings
+    }
+
+    private fun currentBackend(): RecoveryBackend =
+        RecoveryBackend.from(_rendererInfo.value?.backend, settings.preferVulkan)
+
+    private fun resetRecoverySession() {
+        automaticAttempts = 0
+        triedConfigurations.clear()
+        recoveryProbe = null
+        recoveryCandidateId = null
+        _recoveryStatus.value = null
+    }
+
+    private fun observeRecoveryProbe(frameStats: RendererStats) {
+        val probe = recoveryProbe ?: return
+        if (attachedEngineHandle == 0L) return
+        val outcome = probe.observe(frameStats) ?: return
+        val backend = currentBackend().name
+        val candidate = recoveryCandidateId ?: "recovery"
+        recoveryProbe = null
+        when (outcome) {
+            RecoveryProbeOutcome.FRAME_SUBMISSION_STABLE -> {
+                recoveryJournal.record(
+                    RecoveryRecordKind.FRAME_SUBMISSION_STABLE,
+                    backend = backend,
+                    attempt = automaticAttempts,
+                    candidate = candidate,
+                )
+                _recoveryStatus.value = RecoveryStatus(
+                    "STABLE",
+                    "Frame submission is stable with $candidate. Visible avatar output still needs human confirmation.",
+                )
+            }
+            RecoveryProbeOutcome.PROBE_TIMEOUT -> {
+                recoveryJournal.record(
+                    RecoveryRecordKind.PROBE_TIMEOUT,
+                    backend = backend,
+                    attempt = automaticAttempts,
+                    candidate = candidate,
+                )
+                _recoveryStatus.value = RecoveryStatus(
+                    "UNVERIFIED",
+                    "Renderer started, but non-empty frame submission was not verified. Export diagnostics before changing settings.",
+                )
+            }
+        }
+    }
+
+    private fun handleRendererFailure(stage: RecoveryStage, message: String, backend: RecoveryBackend) {
+        val failure = RecoveryFailureClassifier.classify(stage, message)
+        recoveryJournal.record(
+            RecoveryRecordKind.FAILURE,
+            stage = failure.stage,
+            category = failure.category,
+            fingerprint = failure.fingerprint,
+            backend = backend.name,
+            attempt = automaticAttempts,
+        )
+        destroyRenderer()
+        _error.value = message
+        triedConfigurations.add(RendererRecoveryPolicy.configurationId(settings, backend))
+        val candidate = RendererRecoveryPolicy.next(settings, backend, automaticAttempts, triedConfigurations)
+        if (candidate == null) {
+            recoveryProbe = null
+            recoveryCandidateId = null
+            _recoveryStatus.value = RecoveryStatus(
+                "STOPPED",
+                "Automatic recovery stopped after $automaticAttempts attempt(s). Open MENU → Self diagnostics for Safe recovery or export the report.",
+            )
+            return
+        }
+        automaticAttempts++
+        triedConfigurations.add(candidate.id)
+        recoveryCandidateId = candidate.id
+        recoveryProbe = RecoveryFrameProbe()
+        publishSettings(candidate.settings)
+        recoveryJournal.record(
+            RecoveryRecordKind.AUTOMATIC_ATTEMPT,
+            stage = failure.stage,
+            category = failure.category,
+            fingerprint = failure.fingerprint,
+            backend = candidate.backend.name,
+            attempt = automaticAttempts,
+            candidate = candidate.id,
+        )
+        _recoveryStatus.value = RecoveryStatus(
+            "RETRYING",
+            "Automatic recovery $automaticAttempts/${RendererRecoveryPolicy.MAX_AUTOMATIC_ATTEMPTS}: ${candidate.label}. Optional GPU effects are disabled.",
+        )
+        handler.post {
+            if (!released && surfaceReady) restartRenderer(holder.surface, surfaceGeneration)
+            else _recoveryStatus.value = RecoveryStatus("WAITING_SURFACE", "Safe settings are armed. Reopen the viewer to test them.")
+        }
     }
 
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
@@ -216,8 +383,9 @@ class RenderSurfaceView @JvmOverloads constructor(
         frameLoop.resetClock()
         destroyRenderer()
         _error.value = null
+        val requested = settings
+        val requestedBackend = RecoveryBackend.from(null, requested.preferVulkan)
         try {
-            val requested = settings
             val created = AvatarRenderer.create(surface, requested)
             renderer = created
             activePreferVulkan = requested.preferVulkan
@@ -226,11 +394,21 @@ class RenderSurfaceView @JvmOverloads constructor(
             created.setCamera(camera)
             created.applyOptions(settings)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            if (recoveryProbe != null) {
+                _recoveryStatus.value = if (pendingEngineHandle != 0L) {
+                    RecoveryStatus("VERIFYING", "Checking sustained non-empty frame submission. This does not prove visible pixels.")
+                } else {
+                    RecoveryStatus("WAITING_GEOMETRY", "Renderer started. Attach an avatar to verify frame submission.")
+                }
+            }
             if (visible) handler.post(frameLoop)
         } catch (t: Throwable) {
-            Log.e(RENDER_LOG_TAG, "Renderer initialization failed (preferVulkan=${settings.preferVulkan})", t)
-            destroyRenderer()
-            _error.value = t.message ?: t.javaClass.simpleName
+            Log.e(RENDER_LOG_TAG, "Renderer initialization failed (preferVulkan=${requested.preferVulkan})", t)
+            handleRendererFailure(
+                RecoveryStage.STARTUP,
+                t.message ?: t.javaClass.simpleName,
+                requestedBackend,
+            )
         }
     }
 
@@ -247,8 +425,12 @@ class RenderSurfaceView @JvmOverloads constructor(
             if (!surfaceReady || generation != surfaceGeneration || rendererSurfaceGeneration != generation) return@post
             val current = renderer ?: return@post
             if (!current.resize(width, height)) {
-                destroyRenderer()
-                _error.value = "GPU render targets could not be resized. Retry the viewer to rebuild them."
+                val backend = currentBackend()
+                handleRendererFailure(
+                    RecoveryStage.RESIZE,
+                    "GPU render targets could not be resized. Safe recovery will rebuild them.",
+                    backend,
+                )
                 return@post
             }
             if (visible) {
@@ -265,6 +447,7 @@ class RenderSurfaceView @JvmOverloads constructor(
         val generation = surfaceGeneration
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
+            resetRecoverySession()
             if (!surfaceReady && rendererSurfaceGeneration == generation) destroyRenderer()
             latch.countDown()
         }
@@ -283,6 +466,7 @@ class RenderSurfaceView @JvmOverloads constructor(
         setFrameLoopEnabled(false)
         val latch = java.util.concurrent.CountDownLatch(1)
         handler.post {
+            resetRecoverySession()
             destroyRenderer()
             latch.countDown()
         }
