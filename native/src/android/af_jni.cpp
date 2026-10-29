@@ -843,7 +843,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_enginePick
 extern "C" {
 
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererCreate(
-    JNIEnv* env, jobject, jobject surface, jint quality, jboolean preferVulkan, jint msaa,
+    JNIEnv* env, jobject, jobject surface, jint quality, jint msaa,
     jint shadowSize, jint bloomLevels) {
     if (!surface) {
         throwIllegalArgument(env, "rendererCreate needs a live Surface");
@@ -857,7 +857,6 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererC
     }
     af::RendererOptions options{};
     options.quality = af::QualityPreset(quality);
-    options.preferVulkan = preferVulkan == JNI_TRUE;
     options.msaaSamples = msaa;
     options.shadowMapSize = shadowSize;
     options.bloomLevels = bloomLevels;
@@ -914,7 +913,7 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetOptions(
     JNIEnv*, jobject, jlong r, jint quality, jboolean shadows, jboolean bloom, jboolean sss,
     jfloat exposure, jfloat sunAzimuth, jfloat sunElevation, jfloat sunIntensity, jfloat turbidity,
-    jfloat environmentIntensity, jboolean groundPlane, jboolean preferVulkan, jint msaa,
+    jfloat environmentIntensity, jboolean groundPlane, jint msaa,
     jint shadowSize, jint bloomLevels, jfloat shadowSoftness) {
     af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
     if (!renderer) return;
@@ -1012,7 +1011,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
     if (outInts && env->GetArrayLength(outInts) >= 9) {
         const jint values[9] = {stats.drawCalls, stats.triangles, stats.vertices, stats.shadowMapSize,
                                 stats.msaaSamples, stats.bloomLevels, stats.qualityLevel,
-                                stats.lastVkResult, stats.frameFatal ? 1 : 0};
+                                stats.lastBackendError, stats.frameFatal ? 1 : 0};
         env->SetIntArrayRegion(outInts, 0, 9, values);
         // Optional tail preserves callers using the existing nine-int telemetry layout.
         if (env->GetArrayLength(outInts) >= 10) {
