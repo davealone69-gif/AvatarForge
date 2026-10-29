@@ -5,13 +5,10 @@
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() probes the backends in the order the user asked for. Vulkan first (it
- *      is the primary target and the only one that gives us guaranteed MSAA resolve behaviour and
- *      a well-defined depth range), then OpenGL ES 3.1. If neither initialises, create() returns
- *      nullptr with the reason from *both* attempts - the app then reports "no GPU backend" and
- *      keeps the CPU-side features (generation, export) working. There is no software rasteriser
- *      pretending to be a renderer, because a fake renderer is exactly the kind of thing that
- *      makes an app look finished while being useless.
+ *   1. Renderer::create() initialises the sole shipped OpenGL ES 3.1 backend. If it cannot
+ *      initialise, create() returns nullptr with the real GLES initialization error and the app
+ *      keeps CPU-side features (generation, export) available. There is no software rasteriser
+ *      pretending to be a renderer.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range
  *      device with a 2 GB memory ceiling, on a phone that is also thermally throttling because
