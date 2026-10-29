@@ -17,7 +17,6 @@
 package com.avatarforge.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -27,6 +26,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
+import com.avatarforge.sdk.render.CameraGesture
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
@@ -96,6 +98,13 @@ fun ViewerScreen(
     /** The SurfaceView, hoisted so this screen stays previewable in Compose tooling. */
     surface: @Composable () -> Unit,
 ) {
+    /* pointerInput(Unit) is deliberately long-lived: restarting it on every camera frame would
+       cancel the in-flight gesture. The callback therefore reads the *current* camera/callback
+       through rememberUpdatedState instead of closing over the first composition's value. */
+    val liveCamera by rememberUpdatedState(camera)
+    val liveOnCamera by rememberUpdatedState(onCamera)
+    val liveOnTapModel by rememberUpdatedState(onTapModel)
+
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         surface()
 
@@ -108,20 +117,11 @@ fun ViewerScreen(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        val yaw = camera.yawDeg - pan.x * 0.25f
-                        val pitch = (camera.pitchDeg + pan.y * 0.20f).coerceIn(-80f, 80f)
-                        val distance = (camera.distance / zoom).coerceIn(0.6f, 8f)
-                        onCamera(
-                            camera.copy(
-                                yawDeg = ((yaw % 360f) + 360f) % 360f,
-                                pitchDeg = pitch,
-                                distance = distance,
-                            )
-                        )
+                        liveOnCamera(CameraGesture.orbit(liveCamera, pan.x, pan.y, zoom))
                     }
                 }
-                .pointerInput(onTapModel) {
-                    detectTapGestures { offset -> onTapModel(offset.x, offset.y) }
+                .pointerInput(Unit) {
+                    detectTapGestures { offset -> liveOnTapModel(offset.x, offset.y) }
                 },
         )
 
@@ -174,29 +174,70 @@ fun ViewerScreen(
             }
         }
 
-        if (panel != ViewerPanel.CAMERA) {
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 56.dp),
-                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        Card(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 56.dp),
+            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                Modifier
+                    .padding(14.dp)
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when (panel) {
-                        ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
-                        ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
-                        ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
-                        ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
-                        ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
-                        ViewerPanel.CAMERA -> Unit
-                    }
+                when (panel) {
+                    ViewerPanel.CAMERA -> CameraPanel(camera, onCamera)
+                    ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
+                    ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
+                    ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
+                    ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
+                    ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CameraPanel(camera: CameraSettings, onCamera: (CameraSettings) -> Unit) {
+    val c = CameraGesture.clamped(camera)
+    Text("Camera", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Drag the model to orbit, pinch to zoom, tap to inspect. These controls move the same camera and work even if a gesture is unavailable.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        AssistChip(onClick = { onCamera(c.copy(yawDeg = CameraGesture.normalizeYaw(c.yawDeg - 15f))) }, label = { Text("Orbit left") })
+        AssistChip(onClick = { onCamera(c.copy(yawDeg = CameraGesture.normalizeYaw(c.yawDeg + 15f))) }, label = { Text("Orbit right") })
+        AssistChip(onClick = { onCamera(c.copy(pitchDeg = (c.pitchDeg + 10f).coerceIn(CameraGesture.MIN_PITCH, CameraGesture.MAX_PITCH))) }, label = { Text("Up") })
+        AssistChip(onClick = { onCamera(c.copy(pitchDeg = (c.pitchDeg - 10f).coerceIn(CameraGesture.MIN_PITCH, CameraGesture.MAX_PITCH))) }, label = { Text("Down") })
+        AssistChip(onClick = { onCamera(c.copy(distance = (c.distance / 1.2f).coerceIn(CameraGesture.MIN_DISTANCE, CameraGesture.MAX_DISTANCE))) }, label = { Text("Zoom in") })
+        AssistChip(onClick = { onCamera(c.copy(distance = (c.distance * 1.2f).coerceIn(CameraGesture.MIN_DISTANCE, CameraGesture.MAX_DISTANCE))) }, label = { Text("Zoom out") })
+        AssistChip(onClick = { onCamera(CameraSettings()) }, label = { Text("Reset") })
+    }
+    CameraSlider("Yaw", c.yawDeg, 0f..360f, "°") { onCamera(CameraGesture.clamped(c.copy(yawDeg = it))) }
+    CameraSlider("Pitch", c.pitchDeg, CameraGesture.MIN_PITCH..CameraGesture.MAX_PITCH, "°") { onCamera(CameraGesture.clamped(c.copy(pitchDeg = it))) }
+    CameraSlider("Distance", c.distance, CameraGesture.MIN_DISTANCE..CameraGesture.MAX_DISTANCE, " m") { onCamera(CameraGesture.clamped(c.copy(distance = it))) }
+    CameraSlider("Target height", c.targetY, 0f..2.5f, " m") { onCamera(CameraGesture.clamped(c.copy(targetY = it))) }
+    CameraSlider("Field of view", c.fovDeg, 20f..60f, "°") { onCamera(CameraGesture.clamped(c.copy(fovDeg = it))) }
+}
+
+@Composable
+private fun CameraSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    unit: String,
+    onChange: (Float) -> Unit,
+) {
+    Text("%s: %.1f%s".format(label, value, unit), style = MaterialTheme.typography.bodySmall)
+    Slider(value = value.coerceIn(range), onValueChange = onChange, valueRange = range)
 }
 
 @Composable

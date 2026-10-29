@@ -455,6 +455,8 @@ class MainActivity : ComponentActivity() {
                 }
                 appendLine("Last error  : ${viewerError ?: "none"}")
                 appendLine("Settings    : preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
+                appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
+                    camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
                 appendLine()
                 appendLine("Self-improvement path (deterministic, no AI, no network)")
                 appendLine("Recovery    : ${recoveryStatus?.let { "${it.phase}: ${it.message}" } ?: "idle"}")

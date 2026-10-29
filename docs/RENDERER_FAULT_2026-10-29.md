@@ -111,3 +111,34 @@ Changes made for this evidence:
 Still not claimed fixed: blocky hands, eye-shell asymmetry, garment/skin interpenetration, and any
 remaining framing overlap with the info card. Those need separate geometry/layout evidence. The
 moire fix is a bake-time band-limit; it still needs a device screenshot/export comparison.
+
+## Camera-control follow-up (16:35–16:37)
+
+The next device reports confirm the visual-quality build is running: `Textures: 90.7 MiB`, no last
+renderer error, and `BACKEND_FALLBACK` events are present when a Vulkan-preferred startup lands on
+GLES. The screenshots nevertheless show the **camera** panel selected with no camera controls, and
+the user reports the camera still cannot be moved.
+
+Source audit found two UI defects:
+
+1. The model gesture layer used `pointerInput(Unit)` but closed over the first composition's
+   `CameraSettings`. Each drag/pinch event therefore recomputed from the initial camera instead of
+   accumulating from the live camera, so orbit/zoom appeared dead or snapped back.
+2. `ViewerPanel.CAMERA` rendered `Unit`, so the selected camera panel had no sliders, buttons, or
+   reset action.
+
+Changes made for this evidence:
+
+- Gesture callbacks now read the current camera and callbacks through `rememberUpdatedState`, while
+  the pointer-input coroutine remains alive for the whole gesture.
+- The exact orbit/zoom transform moved into `CameraGesture` in the SDK and is covered by JVM
+  regression tests (accumulating deltas, pinch direction, clamping, yaw wrap, invalid input).
+- The camera panel now exposes orbit left/right, up/down, zoom in/out, reset, and sliders for yaw,
+  pitch, distance, target height, and field of view. These drive the same `CameraSettings` path as
+  gestures.
+- Diagnostics now includes a `Camera` line so a device report can prove whether the UI camera state
+  changed after a drag or slider move.
+
+This is still **unverified on the phone**. Retest by dragging the model, pinching, and moving the
+camera sliders; then export `MENU -> Self diagnostics` before and after. The `Camera` line should
+change, and the rendered view should orbit/zoom with it.
