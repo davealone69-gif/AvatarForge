@@ -3,7 +3,7 @@
  *
  * The result viewer/editor. This is where the app has to be honest about what it can do:
  *
- *   * the surface is the real renderer (Vulkan or GLES 3.1) drawing the real mesh - the same mesh
+ *   * the surface is the real GLES 3.1 renderer drawing the real mesh - the same mesh
  *     the .glb contains, deformed by the same rig;
  *   * pose and expression controls drive the kernel (applyPose / applyBlendshapes), which deforms
  *     the vertices the renderer then uploads. There is no separate "preview rig";
@@ -424,7 +424,6 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
     ToggleRow("Ground plane", settings.groundPlane) { onSettings(settings.copy(groundPlane = it)) }
-    ToggleRow("Native Vulkan first (GLES/ANGLE fallback)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
     Text("Exposure %.2f".format(settings.exposure), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.exposure, onValueChange = { onSettings(settings.copy(exposure = it)) }, valueRange = 0.3f..2.5f)
     Text("Sun azimuth %.0f°".format(settings.sunAzimuthDeg), style = MaterialTheme.typography.bodySmall)
@@ -533,8 +532,8 @@ private fun SystemCheckPanel(
     DiagnosticLine("Resource governor", "${resources.state.name} · ${resources.cpuCores} logical CPU cores · ${if (resources.lowMemory) "Android low-memory flag set" else "no low-memory flag"}")
     DiagnosticLine("Render surface", when {
         rendererError != null -> rendererError
-        stats.frameFatal -> "FATAL: Vulkan renderer stopped (VkResult ${stats.lastVkResult})"
-        stats.lastVkResult != 0 -> "Vulkan recovery/result code ${stats.lastVkResult}; inspect renderer logs"
+        stats.frameFatal -> "FATAL: graphics renderer stopped; inspect renderer logs"
+        stats.lastBackendError != 0 -> "Graphics backend error ${stats.lastBackendError}; inspect renderer logs"
         info != null && (!stats.fps.isFinite() || stats.fps <= 0f || !stats.frameMs.isFinite() || stats.frameMs <= 0f || !stats.cpuMs.isFinite() || stats.cpuMs <= 0f) ->
             "GPU backend initialised, but frame telemetry is invalid/zero; renderer health is NOT verified"
         info != null -> "GPU backend active; frame telemetry is reporting"
