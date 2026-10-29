@@ -929,7 +929,6 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
     options.turbidity = turbidity;
     options.environmentIntensity = environmentIntensity;
     options.groundPlane = groundPlane == JNI_TRUE;
-    options.preferVulkan = preferVulkan == JNI_TRUE;
     options.msaaSamples = msaa;
     options.shadowMapSize = shadowSize;
     options.bloomLevels = bloomLevels;
