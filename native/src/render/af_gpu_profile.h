@@ -17,7 +17,7 @@ enum class GpuTier : uint8_t { LOW = 0, BALANCED = 1, HIGH = 2 };
 enum class AtlasCompression : uint8_t { NONE = 0, ASTC_6X6 = 1, ETC2 = 2 };
 
 struct GpuDeviceCaps {
-    std::string backend;       /* "vulkan" or "gles31" */
+    std::string backend;       /* "gles31" */
     std::string vendorName;
     std::string deviceName;
     std::string driver;
