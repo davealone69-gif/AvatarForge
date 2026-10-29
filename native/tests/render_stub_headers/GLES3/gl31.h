@@ -87,6 +87,7 @@ typedef signed char GLbyte; typedef unsigned char GLubyte;
 #define GL_MAX_SAMPLES 0x8D57
 #define GL_VERSION 0x1F02
 #define GL_EXTENSIONS 0x1F03
+#define GL_NUM_EXTENSIONS 0x821D
 #define GL_RENDERER 0x1F01
 #define GL_VENDOR 0x1F00
 #ifdef __cplusplus
@@ -119,7 +120,7 @@ void glGenVertexArrays(GLsizei,GLuint*); void glGenerateMipmap(GLenum);
 GLenum glGetError(void); void glGetFloatv(GLenum,GLfloat*); void glGetIntegerv(GLenum,GLint*);
 void glGetProgramInfoLog(GLuint,GLsizei,GLsizei*,GLchar*); void glGetProgramiv(GLuint,GLenum,GLint*);
 void glGetShaderInfoLog(GLuint,GLsizei,GLsizei*,GLchar*); void glGetShaderiv(GLuint,GLenum,GLint*);
-const GLubyte* glGetString(GLenum);
+const GLubyte* glGetString(GLenum); const GLubyte* glGetStringi(GLenum, GLuint);
 GLuint glGetUniformBlockIndex(GLuint,const GLchar*); GLint glGetUniformLocation(GLuint,const GLchar*);
 void glLinkProgram(GLuint); void glPolygonOffset(GLfloat,GLfloat); void glReadBuffer(GLenum);
 void glRenderbufferStorageMultisample(GLenum,GLsizei,GLenum,GLsizei,GLsizei);

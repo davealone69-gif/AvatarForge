@@ -50,6 +50,8 @@ artifacts/*.aab
 artifacts/*.aar
 artifacts/*.glb
 artifacts/BUILD-*.txt
+# Device reports can include serial numbers and app logs; keep them local unless explicitly shared.
+artifacts/device-report*.txt
 out/
 
 # ---- OS / editor cruft ------------------------------------------------------------------------

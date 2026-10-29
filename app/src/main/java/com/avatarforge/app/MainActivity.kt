@@ -560,6 +560,7 @@ class MainActivity : ComponentActivity() {
                     appendLine("API         : ${info.apiVersion}")
                     appendLine("Driver      : ${info.driver}")
                     appendLine("HDR / MSAA  : ${info.supportsFloatHdr} / ${info.supportsMsaa}")
+                    appendLine("Anisotropy  : ${info.supportsAnisotropy} (capability; atlas requests up to 4x)")
                 }
                 if (frameStats != null) {
                     appendLine("FPS         : %.1f (%.2f ms presented-frame interval)".format(frameStats.fps, frameStats.frameMs))

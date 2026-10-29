@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdarg>
+#include <sstream>
 
 namespace {
 GLuint nextName = 1;
@@ -11,6 +12,12 @@ GLint nextUniform = 10000;
 void error(GLenum code) { af_test::state.glErrors.push_back(code); }
 void names(GLsizei n, GLuint* out, int& live) { for (GLsizei i = 0; i < n; ++i) { out[i] = nextName++; ++live; } }
 void drop(GLsizei n, const GLuint* out, int& live) { live -= n; (void)out; }
+std::vector<std::string> extensionNames() {
+    std::istringstream input(af_test::state.extensions);
+    std::vector<std::string> names;
+    for (std::string name; input >> name;) names.push_back(name);
+    return names;
+}
 }
 namespace af_test {
 MockState state;
@@ -139,6 +146,7 @@ void glGetIntegerv(GLenum key, GLint* value) {
         case GL_CURRENT_PROGRAM: *value = GLint(state.currentProgram); break;
         case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: *value = 256; break;
         case GL_MAX_SAMPLES: *value = 4; break;
+        case GL_NUM_EXTENSIONS: *value = GLint(extensionNames().size()); break;
         default: *value = 1; break;
     }
 }
@@ -149,12 +157,27 @@ void glGetShaderiv(GLuint p, GLenum key, GLint* value) {
     *value = key == GL_COMPILE_STATUS ? (state.fault == af_test::Fault::FragmentCompile && state.shaderTypes[p] == GL_FRAGMENT_SHADER ? 0 : 1) : 64;
 }
 const GLubyte* glGetString(GLenum key) {
+    if (key == GL_EXTENSIONS) {
+        ++state.legacyExtensionQueries;
+        raiseGlError(GL_INVALID_ENUM);  /* ES 3.x requires glGetStringi. */
+        return nullptr;
+    }
     const char* result = "";
     if (key == GL_VERSION) result = state.version.c_str();
-    if (key == GL_EXTENSIONS) result = state.extensions.c_str();
-    if (key == GL_RENDERER) result = "Host fault-injection GPU";
-    if (key == GL_VENDOR) result = "AvatarForge tests";
+    if (key == GL_RENDERER) result = state.rendererName.c_str();
+    if (key == GL_VENDOR) result = state.vendorName.c_str();
     return reinterpret_cast<const GLubyte*>(result);
+}
+const GLubyte* glGetStringi(GLenum key, GLuint index) {
+    ++state.indexedExtensionQueries;
+    const auto names = extensionNames();
+    if (key != GL_EXTENSIONS || index >= names.size()) {
+        raiseGlError(key == GL_EXTENSIONS ? GL_INVALID_VALUE : GL_INVALID_ENUM);
+        return nullptr;
+    }
+    static std::string name;
+    name = names[index];
+    return reinterpret_cast<const GLubyte*>(name.c_str());
 }
 GLuint glGetUniformBlockIndex(GLuint, const GLchar* name) {
     if (!std::strcmp(name, "CameraBlock")) return 0;
@@ -179,7 +202,12 @@ void glTexImage2D(GLenum, GLint, GLint internal, GLsizei, GLsizei, GLint, GLenum
         state.incompleteNextTextureFramebuffer = true;
     }
 }
-void glTexParameterf(GLenum, GLenum, GLfloat) {}
+void glTexParameterf(GLenum, GLenum name, GLfloat value) {
+    if (name == GL_TEXTURE_MAX_ANISOTROPY_EXT) {
+        ++state.anisotropyWrites;
+        state.lastAnisotropy = value;
+    }
+}
 void glTexParameteri(GLenum, GLenum, GLint) {}
 void glUniform1i(GLint location, GLint) {
     const GLuint owner = state.uniformOwners[location];
@@ -193,7 +221,16 @@ void glVertexAttribPointer(GLuint index, GLint, GLenum, GLboolean, GLsizei, cons
     else state.vaos[state.currentVao].attributes[index].buffer = state.currentArrayBuffer;
 }
 void glViewport(GLint, GLint, GLsizei, GLsizei) {}
-int __android_log_print(int, const char*, const char*, ...) { return 0; }
+int __android_log_print(int, const char* tag, const char* format, ...) {
+    char message[512];
+    va_list args;
+    va_start(args, format);
+    const int written = std::vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    if (tag && !std::strcmp(tag, "AvatarForgeRenderer") &&
+        std::strstr(message, "AF_GLES_CONTEXT")) state.lastContextLog = message;
+    return written;
+}
 
 /* Small engine fixture: the renderer under test is real, but no geometry generation is needed. */
 int32_t af_engine_vertex_count(const af_engine*) { return 3; }

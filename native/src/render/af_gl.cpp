@@ -331,19 +331,18 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
     uboAlignment_ = uint32_t(align > 0 ? align : 256);
 
-    /* Match complete extension tokens, not prefixes of similarly named extensions. */
-    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-    auto hasExtension = [extensions](const char* name) {
-        if (!extensions) return false;
-        const size_t length = std::strlen(name);
-        for (const char* token = extensions; *token; ) {
-            while (*token == ' ') ++token;
-            const char* end = std::strchr(token, ' ');
-            if (!end) end = token + std::strlen(token);
-            if (size_t(end - token) == length && std::strncmp(token, name, length) == 0) return true;
-            token = end;
-        }
-        return false;
+    /* In an ES 3.x context extensions are indexed, not one space-separated GL_EXTENSIONS
+       string. Querying glGetString(GL_EXTENSIONS) can produce GL_INVALID_ENUM on conforming
+       drivers; doing so again at atlas upload could stop the first animated frame. */
+    GLint extensionCount = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+    std::vector<std::string> extensions;
+    for (GLint i = 0; i < extensionCount; ++i) {
+        const char* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, GLuint(i)));
+        if (name) extensions.emplace_back(name);
+    }
+    auto hasExtension = [&extensions](const char* name) {
+        return std::find(extensions.begin(), extensions.end(), name) != extensions.end();
     };
     /* ES 3.2 makes half-float colour attachments renderable in core. */
     const bool floatColour = major > 3 || (major == 3 && minor >= 2) ||
@@ -753,6 +752,13 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
         rebuildMaterialBlocks();
         if (!checkGlError("material upload", &detail)) return failed("material upload", detail);
     }
+    /* This is the app's own current EGL context, not SurfaceFlinger's renderer. An ANGLE
+       GL_RENDERER that says "on Vulkan" describes the system's GLES implementation, not an
+       AvatarForge Vulkan initialization or dependency. Log only after successful setup. */
+    __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRenderer",
+                        "AF_GLES_CONTEXT backend=%s GL_RENDERER=\"%s\" GL_VERSION=\"%s\" GL_VENDOR=\"%s\"",
+                        info_.backend.c_str(), info_.deviceName.c_str(),
+                        info_.apiVersion.c_str(), info_.driver.c_str());
     return true;
 }
 
@@ -837,12 +843,16 @@ void GlRenderer::uploadAtlas(std::string* error) {
         /* The generated chain must not collapse to magenta when a driver limits mip depth. */
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 12);
 
-        const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-        if (ext && std::strstr(ext, "GL_EXT_texture_filter_anisotropic")) {
+        /* Anisotropy keeps atlas detail readable on oblique surfaces during clip playback.
+           Use the capability captured with glGetStringi at context creation; querying the
+           legacy extension string here can invalidate an otherwise good GLES frame. */
+        if (info_.supportsAnisotropy) {
             GLfloat maxAniso = 1.0f;
             glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso);
-            glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */,
-                            std::min(4.0f, maxAniso));
+            if (std::isfinite(maxAniso) && maxAniso >= 1.0f) {
+                glTexParameterf(GL_TEXTURE_2D, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY_EXT */,
+                                std::min(4.0f, maxAniso));
+            }
         }
     }
     atlasUploaded_ = true;

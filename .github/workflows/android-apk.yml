@@ -69,6 +69,9 @@ jobs:
       - name: Renderer initialization regression tests
         run: bash tools/test_renderer_host.sh
 
+      - name: Device report parser regressions (mock adb, no device)
+        run: bash tools/test_device_check_host.sh
+
       - name: Build ARM64 native libraries from this checkout
         run: |
           set -euo pipefail

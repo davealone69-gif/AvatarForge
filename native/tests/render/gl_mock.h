@@ -15,7 +15,12 @@ struct MockState {
     Fault fault = Fault::None;
     bool rejectFloatHdr = false;
     std::string version = "OpenGL ES 3.1 Mock";
+    std::string rendererName = "Host fault-injection GPU";
+    std::string vendorName = "AvatarForge tests";
     std::string extensions = "GL_EXT_color_buffer_float_suffix GL_EXT_texture_filter_anisotropic";
+    std::string lastContextLog;
+    int legacyExtensionQueries = 0, indexedExtensionQueries = 0, anisotropyWrites = 0;
+    GLfloat lastAnisotropy = 1.0f;
     GLuint currentProgram = 0, currentArrayBuffer = 0, currentUniformBuffer = 0, currentVao = 0, currentFramebuffer = 0;
     GLuint cameraBuffer = 0;
     GLuint currentRenderbuffer = 0, currentTexture = 0;

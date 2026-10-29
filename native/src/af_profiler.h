@@ -11,13 +11,10 @@
  *         accumulate per-stage CPU milliseconds over a ring of frames, with min/median/max and a
  *         histogram suitable for a frame-time graph in the UI.
  *
- *   GPU   only when the backend exposes timestamp queries, which is a runtime capability:
- *         Vulkan with a timestampValidBits > 0 queue (and the device not in a debugger), or GLES
- *         with EXT_disjoint_timer_query. The renderer probes for it at init and reports
- *         `gpuTimingAvailable()`. When it is false, every GPU number reads as -1 and the UI must
- *         say "not available on this device" rather than showing a plausible-looking zero. That
- *         distinction is the whole point: a fake 0.0 ms would be a lie of exactly the kind this
- *         project forbids.
+ *   GPU   GLES EXT_disjoint_timer_query has not been wired to the renderer yet. Until real
+ *         timestamp queries are implemented, the caller leaves `gpuTimingAvailable()` false and
+ *         every GPU number reads as -1. The UI must say "not available on this device" rather
+ *         than showing a plausible-looking zero; no other graphics backend exists here.
  *
  * The profiler allocates nothing per frame after warm-up: stage names are interned to small
  * integer ids at registration, and the ring buffer is fixed-size.

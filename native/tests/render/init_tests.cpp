@@ -39,6 +39,10 @@ void successAndOwnership() {
     check(r != nullptr, "GLES initializes without an engine attached");
     check(error.empty(), "successful initialization has no error");
     check(af_test::state.glErrors.empty(), "no invalid sampler/VAO calls during initialization");
+    check(af_test::state.legacyExtensionQueries == 0 && af_test::state.indexedExtensionQueries > 0,
+          "ES 3.1 capabilities use indexed extensions, not glGetString(GL_EXTENSIONS)");
+    check(contains(af_test::state.lastContextLog, "AF_GLES_CONTEXT backend=gles31"),
+          "only a successfully created app GLES context is logged");
     check(af_test::state.samplerWrites.size() >= 10, "sampler uniforms are assigned to bound programs");
     check(af_test::state.liveVaos == 4, "all four VAOs exist");
     bool validAttributes = true, validAvatarElements = false;
@@ -55,6 +59,10 @@ void successAndOwnership() {
         r->renderFrame(1.0f / 60.0f);
         check(r->stats().triangles == 1, "attached fixture reaches the real draw path");
         check(r->stats().textureBytes > 0, "uploaded atlas texture memory is reported, not zero");
+        check(af_test::state.anisotropyWrites == AF_TEX_COUNT && af_test::state.lastAnisotropy == 4.0f,
+              "atlas enables supported 4x anisotropy for oblique textures during clips");
+        check(af_test::state.legacyExtensionQueries == 0,
+              "atlas upload does not make an invalid legacy extension query on ES 3.1");
         check(r->stats().frames == 3 && r->stats().presentRequestsAccepted == 3,
               "frame counters advance only after accepted presents");
         check(r->stats().frameAttempts == 3 && r->stats().frameSubmissions == 3,
@@ -133,6 +141,33 @@ void capabilityTokens() {
     af_test::state.extensions = "GL_EXT_color_buffer_float";
     r.reset(af::createGlRenderer(window(), options(), &error));
     check(r && r->info().supportsFloatHdr, "exact float colour extension enables HDR");
+    check(r && !r->info().supportsAnisotropy, "missing anisotropy extension is reported as unsupported");
+    if (r) r->attachEngine(reinterpret_cast<af_engine*>(uintptr_t(20)));
+    check(af_test::state.anisotropyWrites == 0, "unsupported anisotropy is never requested at atlas upload");
+}
+
+void angleDriverIsStillGles() {
+    af_test::reset();
+    af_test::state.rendererName = "ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)";
+    af_test::state.vendorName = "Samsung Electronics Co., Ltd.";
+    af_test::state.version = "OpenGL ES 3.2 Driver version: 25.6.4";
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
+    check(r && r->info().backend == "gles31" && af_test::state.contextsCreated == 1,
+          "ANGLE-on-Vulkan system driver does not select or initialize an app Vulkan backend");
+    check(r && r->info().deviceName == af_test::state.rendererName &&
+          r->info().apiVersion == af_test::state.version && r->info().driver == af_test::state.vendorName,
+          "the app exposes the actual GL_RENDERER, GL_VERSION and GL_VENDOR from its own context");
+    check(contains(af_test::state.lastContextLog, "backend=gles31 GL_RENDERER=\"ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)\""),
+          "device report can distinguish GLES API from the system's ANGLE/Vulkan implementation");
+    if (r) {
+        r->attachEngine(reinterpret_cast<af_engine*>(uintptr_t(20)));
+        r->setClip(3, 1.0f, true);
+        r->renderFrame(1.0f / 60.0f);
+    }
+    check(r && r->stats().frames == 1 && r->frameError().empty(),
+          "fixture submits an animated-avatar frame through the native GLES path");
+    r.reset(); check(resourcesReleased(), "translated GLES context teardown releases resources");
 }
 /* A settings value is not a GPU allocation licence. These two cases used to reach glTexImage2D and
    glRenderbufferStorageMultisample unchanged, so a stale/corrupt preference could ask for a 16 GB
@@ -209,7 +244,8 @@ int main() {
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
-    msaaFallback(); hdrFallback(); capabilityTokens(); selector(); optionSanitisation(); renderAbi();
+    msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
+    selector(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -51,6 +51,15 @@ else
     tail -15 build-host/renderer_init_tests.txt
 fi
 
+# ------------------------------------------------------------------ device-report parser ------
+banner "device report: package ID and app-vs-system driver attribution (mock adb)"
+if bash tools/test_device_check_host.sh > build-host/device_report_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/device_report_tests.txt)"
+else
+    bad "device-report regressions - see build-host/device_report_tests.txt"
+    tail -15 build-host/device_report_tests.txt
+fi
+
 # ------------------------------------------------------------------ model-detail regressions --
 banner "model detail: hand frame and garment layer resolution"
 if bash tools/test_model_host.sh > build-host/model_detail_tests.txt 2>&1; then

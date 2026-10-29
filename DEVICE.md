@@ -192,23 +192,47 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
 ```
 
 It writes `artifacts/device-report.txt` and prints the same report. It installs nothing unless
-`--apk` is given, needs no network, and changes nothing on the device. What each column is for:
+`--apk` is given and needs no network. What each column is for:
 
 | Column | Why it is in a Phase 1 report |
 |---|---|
-| `gles renderer` | the GLES backend string and driver text the device actually reported (there is no second backend) |
-| `declared gfx` | the `opengl.*` feature flags, so a device without ES 3.1 is identified as such instead of looking like a renderer failure |
-| `thermal status` before/after | a soak that throttles is not a rendering bug; without this column it looks like one |
-| `janky`, `p50`–`p99` | frame pacing over real frames, which is the only honest source for "30 FPS minimum" |
-| `memory now` | the PSS of the running process against the < 2 GB budget |
-| `crash entries` | any native crash during the run, counted from the crash buffer rather than assumed absent |
+| `app GLES context` | This app's **own** `GL_RENDERER`, `GL_VERSION` and `GL_VENDOR`, logged after GLES initialization and scoped to the running app PID. `UNAVAILABLE` means the viewer was not started, an older APK was installed, or the log was lost; it is not a pass. |
+| `system GLES` / `system Vulkan` | SurfaceFlinger/phone capabilities **only**. They are not proof of the driver selected for the app or an app Vulkan dependency. |
+| `declared gfx` | The platform's `opengl.*` feature flags, so a device without ES 3.1 is identified. |
+| `thermal status` before/after | A soak that throttles can obscure image-quality/performance comparisons. |
+| `janky`, `p50`–`p99` | Android **UI** (`gfxinfo`) pacing; SurfaceView's native GLES frame time is **not** proved by this row. Use the in-app diagnostics FPS, frame attempts, submissions and accepted presents as well. |
+| `memory now` | The PSS of the running process against the < 2 GB budget. |
+| `crash entries` | Native crash entries for this app, counted from the crash buffer. |
 
-Any row the device will not report is printed as `UNAVAILABLE (reason)`. It never prints a zero in
-place of a missing number — a blank that looks like a pass is the failure mode this project forbids.
+Any missing measurement is printed as `UNAVAILABLE (reason)`. In particular, do not substitute
+SurfaceFlinger's GPU string for the `app GLES context` line.
 
-**Phase 1 is complete when** that report shows: a renderer string, `GLES 3.1` (not lower),
-`janky` under 5 %, `p95` under 33.3 ms, `memory now` under 1.5 GB, zero crash entries, and a thermal
-status that did not reach `SEVERE` or `CRITICAL` during the soak.
+**Phase 1 is complete when** a current app context reports `backend=gles31` and GL ES 3.1 or later,
+non-empty frames are accepted, the in-app FPS and UI jank meet their targets (`janky` < 5 %,
+`p95` < 33.3 ms, ≥ 30 native FPS), memory is under 1.5 GB, there are zero crash entries, thermal
+did not reach `SEVERE`, **and the image is visually correct on the device**. Counts alone do not
+prove visible/sharp pixels.
+
+### Samsung SM-S921B: driver and blurry clip retest
+
+1. Install the **exact-head** debug APK; run `python3 tools/verify_gles_artifacts.py <apk>` to
+   reject a bundled/linked Vulkan loader. Start the viewer, play `walk` and `run`, and run
+   `tools/device_check.sh --soak 120` with USB debugging authorised. Export **MENU → Self diagnostics**
+   during playback. Check `Backend: gles31`, the app context line, frames accepted and thermal
+   status. The previous report said `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)` and
+   `OpenGL ES 3.2 Driver version: 25.6.4`: that is GLES implemented by the **OS's ANGLE driver**;
+   the app does not initialize Vulkan. This is historical evidence, not a test of the new APK.
+2. If you specifically need the **native vendor GLES driver** rather than GLES-through-ANGLE,
+   use the phone's *per-app graphics-driver preference* to choose the system/vendor driver **if
+   offered by that Android build**, then relaunch and repeat the report. Do not infer a change
+   from the presence of a Vulkan capability flag: confirm the app's `GL_RENDERER` changes and
+   still reports `backend=gles31`. The app cannot override a platform-selected translation layer.
+3. With bloom **off**, capture one PNG with playback paused and one during `run` at the **same**
+   camera distance/FOV. Note quality level and thermal status; compare face/texture edges and
+   geometry, not screenshots at different zooms. Check orbit/pinch while playing. Share those
+   screenshots, both diagnostics exports and the exact APK SHA so the source of any remaining
+   blur can be isolated. This renderer has no motion-blur pass; disabling Vulkan in the app is
+   not by itself a sharpness fix.
 
 ### Phase 1 host-side state (what is proven, and what is not)
 

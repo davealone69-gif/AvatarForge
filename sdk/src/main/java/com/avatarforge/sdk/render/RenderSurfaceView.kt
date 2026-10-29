@@ -13,7 +13,7 @@
  * StateFlows that the Compose layer collects.
  *
  * Stability path: startup/frame/resize failures are classified and journaled locally, then a bounded
- * deterministic policy tries safe settings and the alternate backend. This is not AI and does not
+ * deterministic policy retries safe settings on the same GLES backend. This is not AI and does not
  * modify code. A post-recovery probe checks sustained non-empty frame submission only; visible output
  * still requires human/device confirmation.
  */

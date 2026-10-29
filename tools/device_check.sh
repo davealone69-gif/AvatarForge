@@ -5,8 +5,8 @@
 #
 #  The rule for this project is that no feature is "done" because it built, or because a desktop
 #  said so. It is done when a physical Android device ran it, and there is a measurement. This
-#  script is the measurement. It changes nothing on the device, installs nothing and needs no
-#  network: it reads what Android reports and writes one report you can keep.
+#  script is the measurement. Unless --apk is supplied it installs nothing and needs no network:
+#  it reads what Android reports and writes one report you can keep.
 #
 #      tools/device_check.sh                    # device report (needs adb + a connected phone)
 #      tools/device_check.sh --soak 120         # also watch frame pacing for 120 s
@@ -15,8 +15,8 @@
 #  What it records, and why each one is here:
 #
 #      identity      model, SoC, Android version, ABI - so a result is attributable to a device
-#      GPU           renderer/vendor strings: Vulkan support, GLES version, and the extensions
-#                    that decide whether GPU timing (EXT_disjoint_timer_query) is even possible
+#      GPU           system capability from SurfaceFlinger vs this app's own logged GLES context.
+#                    ANGLE-on-Vulkan in GL_RENDERER is an OS translation layer, not an app backend.
 #      thermal       thermal status and headroom before and after the run. ADPF is Phase 3, but a
 #                    soak that throttles without this column looks like a rendering bug
 #      memory        PSS high-water mark of the app process during the run (the < 2 GB budget)
@@ -32,7 +32,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ADB="${ADB:-${ANDROID_HOME:-$HOME/Android/Sdk}/platform-tools/adb}"
 # Fall back to a bare "adb" when that path does not exist, so a phone-tools-only machine works.
 [ -x "$ADB" ] || ADB="adb"
-PKG="${PKG:-com.avatarforge.app}"
+# This must match :app's applicationId (not its Kotlin namespace com.avatarforge.app).
+PKG="${PKG:-com.avatarforge}"
 APK=""
 SOAK=0
 OUT="$ROOT/artifacts/device-report.txt"
@@ -88,15 +89,14 @@ kv "abilist" "$(A shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r')
 kv "build fingerprint" "$(A shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r')"
 say ""
 
-# ---------------------------------------------------------------- 1. GPU capability
-say "## GPU capability"
-# dumpsys SurfaceFlinger carries the GLES renderer string on every Android version this targets.
+# ---------------------------------------------------------------- 1. system GPU capability (NOT the app context)
+say "## system GPU capability (SurfaceFlinger, not AvatarForge)"
 GLINFO="$(A shell dumpsys SurfaceFlinger 2>/dev/null | tr -d '\r')"
 RENDERER="$(printf '%s' "$GLINFO" | grep -i -m1 'GLES:' | sed 's/^ *GLES: *//')"
-if [ -n "${RENDERER:-}" ]; then kv "gles renderer" "$RENDERER"; else unavailable "gles renderer" "dumpsys returned no GLES line"; fi
+if [ -n "${RENDERER:-}" ]; then kv "system GLES" "$RENDERER"; else unavailable "system GLES" "dumpsys returned no GLES line"; fi
 VKVER="$(printf '%s' "$GLINFO" | grep -i -m1 'Vulkan' | sed 's/^ *//')"
-if [ -n "${VKVER:-}" ]; then kv "vulkan" "$VKVER"; else unavailable "vulkan" "no Vulkan line in dumpsys"; fi
-# The feature flags that decide what the renderer may use.
+if [ -n "${VKVER:-}" ]; then kv "system Vulkan" "$VKVER"; else unavailable "system Vulkan" "no Vulkan line in dumpsys"; fi
+# Feature flags describe platform capability; they do not select an AvatarForge backend.
 FEATURES="$(A shell pm list features 2>/dev/null | tr -d '\r' | grep -i -E 'vulkan|opengl' | sort | tr '\n' ' ')"
 FEATURES="${FEATURES:-}" 
 if [ -n "$FEATURES" ]; then kv "declared gfx" "$FEATURES"; else unavailable "declared gfx" "pm list features reported none"; fi
@@ -163,6 +163,25 @@ else
 fi
 say ""
 
+# ---------------------------------------------------------------- app's GLES context (current process only)
+say "## app graphics context (from AvatarForge, not SurfaceFlinger)"
+APP_PID="$(A shell pidof "$PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}')"
+if [ -z "$APP_PID" ]; then
+    unavailable "app GLES context" "$PKG is not running; open the viewer and rerun"
+else
+    # --pid prevents a previous launch (or SurfaceFlinger) from being mistaken for this app's
+    # active driver. No guess is made when the phone does not expose logcat for this PID.
+    CONTEXT_LOG="$(A logcat -d --pid="$APP_PID" -s AvatarForgeRenderer:I 2>/dev/null | tr -d '\r' |
+        grep -F 'AF_GLES_CONTEXT backend=' | tail -1 | sed 's/^.*AF_GLES_CONTEXT /AF_GLES_CONTEXT /')"
+    if [ -n "$CONTEXT_LOG" ]; then
+        kv "app GLES context" "${CONTEXT_LOG#AF_GLES_CONTEXT }"
+        kv "process PID" "$APP_PID"
+    else
+        unavailable "app GLES context" "no successful context log for PID $APP_PID; open the viewer using this build and rerun, or export Self diagnostics"
+    fi
+fi
+say ""
+
 # ---------------------------------------------------------------- 6. thermal after
 say "## thermal (after)"
 THERMAL2="$(A shell dumpsys thermalservice 2>/dev/null | tr -d '\r')"
@@ -174,11 +193,11 @@ say ""
 
 # ---------------------------------------------------------------- 7. our own log lines
 say "## app log (last 400 lines, ours only)"
-LOGS="$(A logcat -d -t 400 -s AvatarForge:V afcore:V DEBUG:V 2>/dev/null | tr -d '\r' | tail -60)"
+LOGS="$(A logcat -d -t 400 -s AvatarForge:V AvatarForgeRenderer:V afcore:V DEBUG:V 2>/dev/null | tr -d '\r' | tail -60)"
 if [ -n "${LOGS:-}" ]; then
     printf '%s\n' "$LOGS" | sed 's/^/  /' | tee -a "$OUT"
 else
-    unavailable "app log" "no lines tagged AvatarForge/afcore in the last 400"
+    unavailable "app log" "no lines tagged AvatarForge/AvatarForgeRenderer/afcore in the last 400"
 fi
 say ""
 
@@ -189,7 +208,8 @@ kv "crash entries for $PKG" "${CRASHES:-0}"
 say ""
 
 say "## verdict"
-say "  This report is evidence, not a pass. Read it against DEVICE.md: a phase is complete when"
-say "  every row it lists has a number here and that number meets the documented threshold."
+say "  This report is evidence, not a pass. Read it against DEVICE.md: the app context"
+say "  must be reported, numeric measurements must meet their thresholds, and pixels need"
+say "  direct visual confirmation. ANGLE-on-Vulkan is the OS driver, not an app backend."
 echo
 echo "report written to $OUT"
