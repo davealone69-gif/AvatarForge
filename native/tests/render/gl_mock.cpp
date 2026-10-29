@@ -39,7 +39,11 @@ EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint key, EGLint* value) { 
 EGLBoolean eglDestroySurface(EGLDisplay, EGLSurface) { ++state.surfacesDestroyed; return EGL_TRUE; }
 EGLBoolean eglDestroyContext(EGLDisplay, EGLContext) { ++state.contextsDestroyed; return EGL_TRUE; }
 EGLBoolean eglTerminate(EGLDisplay) { return EGL_TRUE; }
-EGLBoolean eglSwapBuffers(EGLDisplay, EGLSurface) { return EGL_TRUE; }
+EGLBoolean eglSwapBuffers(EGLDisplay, EGLSurface) {
+    if (state.fault == af_test::Fault::SwapBuffers) { state.eglError = EGL_BAD_SURFACE; return EGL_FALSE; }
+    ++state.swapBuffers;
+    return EGL_TRUE;
+}
 
 GLenum glGetError(void) {
     if (state.glErrors.empty()) return GL_NO_ERROR;

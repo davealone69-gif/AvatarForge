@@ -75,6 +75,11 @@ void trampolineProgress(void* user, int stage, float fraction, const char* messa
     jstring text = message ? g_tlsEnv->NewStringUTF(message) : nullptr;
     g_tlsEnv->CallVoidMethod(h->callbackObject, h->onProgress, jint(stage), jfloat(fraction), text);
     if (text) g_tlsEnv->DeleteLocalRef(text);
+    if (g_tlsEnv->ExceptionCheck()) {
+        /* A UI callback must not leave a pending JNI exception while native work continues. */
+        g_tlsEnv->ExceptionDescribe();
+        g_tlsEnv->ExceptionClear();
+    }
 }
 
 void trampolineLog(void* user, int severity, const char* message) {
@@ -83,12 +88,22 @@ void trampolineLog(void* user, int severity, const char* message) {
     jstring text = message ? g_tlsEnv->NewStringUTF(message) : nullptr;
     g_tlsEnv->CallVoidMethod(h->callbackObject, h->onLog, jint(severity), text);
     if (text) g_tlsEnv->DeleteLocalRef(text);
+    if (g_tlsEnv->ExceptionCheck()) {
+        g_tlsEnv->ExceptionDescribe();
+        g_tlsEnv->ExceptionClear();
+    }
 }
 
 int trampolineShouldCancel(void* user) {
     EngineHandle* h = static_cast<EngineHandle*>(user);
     if (!h || !h->callbackObject || !h->shouldCancel || !g_tlsEnv) return 0;
-    return g_tlsEnv->CallBooleanMethod(h->callbackObject, h->shouldCancel) == JNI_TRUE ? 1 : 0;
+    const jboolean cancel = g_tlsEnv->CallBooleanMethod(h->callbackObject, h->shouldCancel);
+    if (g_tlsEnv->ExceptionCheck()) {
+        g_tlsEnv->ExceptionDescribe();
+        g_tlsEnv->ExceptionClear();
+        return 1;  /* fail closed: a broken cancellation hook stops the job */
+    }
+    return cancel == JNI_TRUE ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ spec marshalling ------- */
@@ -241,6 +256,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCre
         handle->onLog = env->GetMethodID(cls, "onLog", "(ILjava/lang/String;)V");
         handle->shouldCancel = env->GetMethodID(cls, "shouldCancel", "()Z");
         if (!handle->onProgress || !handle->onLog || !handle->shouldCancel) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
             env->DeleteGlobalRef(handle->callbackObject);
             handle->callbackObject = nullptr;
             delete handle;
@@ -963,9 +979,14 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererIn
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererFrame(
-    JNIEnv*, jobject, jlong r, jfloat deltaSeconds) {
+    JNIEnv* env, jobject, jlong r, jfloat deltaSeconds) {
     af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
-    if (renderer) renderer->renderFrame(deltaSeconds);
+    if (!renderer) return;
+    renderer->renderFrame(deltaSeconds);
+    const std::string error = renderer->frameError();
+    if (!error.empty()) {
+        throwIllegalState(env, "rendererFrame", AF_ERR_INTERNAL, error);
+    }
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererWaitIdle(JNIEnv*, jobject, jlong r) {
@@ -1001,14 +1022,15 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
     if (!renderer) return AF_ERR_INVALID_ARG;
     const af::RendererStats stats = renderer->stats();
     if (outFloats && env->GetArrayLength(outFloats) >= 4) {
-        const jfloat values[4] = {stats.frameMs, stats.cpuMs, stats.fps,
-                                  float(stats.textureBytes) / (1024.0f * 1024.0f)};
-        env->SetFloatArrayRegion(outFloats, 0, 4, values);
+        const jfloat values[5] = {stats.frameMs, stats.cpuMs, stats.fps,
+                                  float(stats.textureBytes) / (1024.0f * 1024.0f), stats.gpuMs};
+        env->SetFloatArrayRegion(outFloats, 0, env->GetArrayLength(outFloats) >= 5 ? 5 : 4, values);
     }
     if (outInts && env->GetArrayLength(outInts) >= 7) {
-        const jint values[7] = {stats.drawCalls, stats.triangles, stats.vertices, stats.shadowMapSize,
-                                stats.msaaSamples, stats.bloomLevels, stats.qualityLevel};
-        env->SetIntArrayRegion(outInts, 0, 7, values);
+        const jint values[10] = {stats.drawCalls, stats.triangles, stats.vertices, stats.shadowMapSize,
+                                 stats.msaaSamples, stats.bloomLevels, stats.qualityLevel,
+                                 stats.frameAttempts, stats.frameSubmissions, stats.presentRequestsAccepted};
+        env->SetIntArrayRegion(outInts, 0, env->GetArrayLength(outInts) >= 10 ? 10 : 7, values);
     }
     return AF_OK;
 }

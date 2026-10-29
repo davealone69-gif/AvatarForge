@@ -29,6 +29,7 @@ import android.os.StatFs
 import com.avatarforge.sdk.internal.NativeBridge
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +42,8 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.Executors
 
 /* CIE L*a*b* -> linear sRGB, used to carry a garment's measured colour into the spec. */
 private fun labToLinear(lab: FloatArray): FloatArray {
@@ -185,7 +188,7 @@ class JobHandle internal constructor(
     private val completion = CompletableDeferred<EngineResult>()
 
     /** Stable id for UI history; also names the exported file. */
-    val id: Long = nextJobId++
+    val id: Long = nextJobId.getAndIncrement()
 
     /** Requests cancellation. The kernel polls this at every stage boundary. */
     fun cancel() {
@@ -214,7 +217,7 @@ class JobHandle internal constructor(
     internal fun shouldCancel(): Boolean = cancelRequested.get() || parentJob.isCancelled
 
     companion object {
-        private var nextJobId = 1L
+        private val nextJobId = AtomicLong(1L)
     }
 }
 
@@ -347,7 +350,14 @@ internal object ImageAnalysisPacking {
 
 class AvatarEngine private constructor(private val appContext: Context) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /* The kernel handle is thread-affine. Generation jobs are serialised on one daemon thread;
+       this prevents two jobs from resetting/running the same native handle concurrently. UI-thread
+       parse/analyse/export calls still need the ownership discipline documented in the audit. */
+    private val engineDispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "avatarforge-engine").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + engineDispatcher)
+    @Volatile private var released = false
 
     /** Every job ever started, so the UI can show history and the engine can cancel everything
      *  when the process is going away. */
@@ -420,6 +430,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
     /* ------------------------------------------------------------------ lifecycle ------------ */
 
     private fun openHandle(): Long {
+        check(!released) { "AvatarEngine has been released" }
         if (handle == 0L) {
             check(NativeBridge.available) {
                 "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
@@ -436,10 +447,19 @@ class AvatarEngine private constructor(private val appContext: Context) {
     }
 
     fun release() {
-        jobs.forEach { it.cancel() }
-        if (handle != 0L) {
-            NativeBridge.engineDestroy(handle)
-            handle = 0L
+        if (released) return
+        released = true
+        val snapshot = synchronized(jobs) { jobs.toList() }
+        snapshot.forEach { it.cancel() }
+        /* Destroy only after cooperative cancellation has unwound the native call. Destroying the
+           handle while engineRunAll/export is still reading it is a use-after-free. */
+        scope.launch {
+            snapshot.forEach { runCatching { it.await() } }
+            if (handle != 0L) {
+                NativeBridge.engineDestroy(handle)
+                handle = 0L
+            }
+            engineDispatcher.close()
         }
     }
 
@@ -608,15 +628,24 @@ class AvatarEngine private constructor(private val appContext: Context) {
         val request = if (unresolvedRequest.spec.heightM.isFinite() && unresolvedRequest.spec.heightM > 0f)
             unresolvedRequest
         else unresolvedRequest.copy(spec = unresolvedRequest.spec.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M))
+        check(!released) { "AvatarEngine has been released" }
+        synchronized(jobs) {
+            check(jobs.none { it.status.value.running }) {
+                "a generation is already running; cancel or await it before starting another"
+            }
+        }
         val parent = Job()
         val handleObj = JobHandle(this, request, parent)
-        synchronized(jobs) { jobs += handleObj }
+        synchronized(jobs) {
+            jobs.removeAll { !it.status.value.running }
+            jobs += handleObj
+        }
 
         scope.launch(parent) {
             val started = System.currentTimeMillis()
             /* The progress accumulators are engine-wide, not per job: clear them here or the second
                generation starts its bar where the first one finished. */
-            overall = 0f
+            progress.reset()
             lastProgressMs = 0L
             logLines.clear()
             val timings = LinkedHashMap<Stage, Float>()
@@ -697,12 +726,14 @@ class AvatarEngine private constructor(private val appContext: Context) {
                 handleObj.deliver(Result.success(result))
             } catch (t: Throwable) {
                 currentStage = null
+                val cancelled = t is kotlinx.coroutines.CancellationException || handleObj.shouldCancel()
                 handleObj.update(
                     handleObj.current().copy(
                         running = false,
-                        failed = true,
-                        error = t.message ?: t.javaClass.simpleName,
-                        message = t.message ?: "failed",
+                        cancelled = cancelled,
+                        failed = !cancelled,
+                        error = if (cancelled) null else t.message ?: t.javaClass.simpleName,
+                        message = if (cancelled) "Cancelled" else t.message ?: "failed",
                         elapsedMs = System.currentTimeMillis() - started,
                     )
                 )
@@ -736,12 +767,12 @@ class AvatarEngine private constructor(private val appContext: Context) {
             /* Overall progress is weighted by measured stage cost, not split equally: on a
                mid-range phone geometry is about two thirds of the wall clock, and a bar that races
                to 60% and then stalls for a minute reads as a hang. */
-            overall += (STAGE_WEIGHTS[s] ?: 0f) * fraction.coerceIn(0f, 1f)
+            val overallNow = progress.update(s, fraction)
             job.update(
                 JobStatus(
                     stage = s,
                     stageProgress = fraction.coerceIn(0f, 1f),
-                    overallProgress = overall.coerceIn(0f, 1f),
+                    overallProgress = overallNow,
                     message = message,
                     running = true,
                     elapsedMs = job.current().elapsedMs + delta,
@@ -768,7 +799,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
     private val callbackBridge = KernelCallbacks()
 
     private val logLines = ArrayDeque<String>()
-    private var overall = 0f
+    private val progress = GenerationProgress(STAGE_WEIGHTS)
     private var lastProgressMs = 0L
 
     private fun requery(h: Long, spec: AvatarSpec) {
@@ -806,8 +837,9 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
         /** One engine per process: the kernel owns a single 34 MB mesh budget and a GPU context. */
         fun get(context: Context): AvatarEngine =
-            instance ?: synchronized(this) {
-                instance ?: AvatarEngine(context.applicationContext).also { instance = it }
+            instance?.takeIf { !it.released } ?: synchronized(this) {
+                instance?.takeIf { !it.released }
+                    ?: AvatarEngine(context.applicationContext).also { instance = it }
             }
 
         fun health(): EngineHealth {

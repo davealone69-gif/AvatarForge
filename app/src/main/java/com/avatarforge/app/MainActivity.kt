@@ -69,6 +69,8 @@ import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
+import com.avatarforge.sdk.render.RenderThermalPolicy
+import com.avatarforge.sdk.render.SettingsStore
 import com.avatarforge.sdk.render.RendererStats
 import com.avatarforge.sdk.recovery.RecoveryAdvisor
 import com.avatarforge.sdk.recovery.RecoveryBackend
@@ -121,7 +123,9 @@ class MainActivity : ComponentActivity() {
         var result by remember { mutableStateOf<EngineResult?>(null) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
-        var settings by remember { mutableStateOf(AvatarForge.recommendedSettings(context)) }
+        val settingsStore = remember { SettingsStore(context) }
+        var settings by remember { mutableStateOf(settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context)) }
+        var effectiveSettings by remember { mutableStateOf(settings) }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
@@ -205,7 +209,7 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(job) { job?.status?.collect { status = it } }
         LaunchedEffect(surfaceViewState) {
-            surfaceViewState?.effectiveSettings?.collect { settings = it }
+            surfaceViewState?.effectiveSettings?.collect { effectiveSettings = it }
         }
         LaunchedEffect(Unit) {
             if (!health.usable) Toast.makeText(context, health.problem ?: "engine unavailable", Toast.LENGTH_LONG).show()
@@ -289,9 +293,10 @@ class MainActivity : ComponentActivity() {
                         camera = camera,
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
-                        onSettings = { settings = it; surfaceView?.applySettings(it) },
+                        onSettings = { settings = it; settingsStore.saveRenderSettings(it); surfaceView?.applySettings(it) },
                         onRetryRenderer = { requested ->
                             settings = requested
+                            settingsStore.saveRenderSettings(requested)
                             surfaceView?.retryRenderer(requested)
                         },
                         panel = panel,
@@ -447,14 +452,20 @@ class MainActivity : ComponentActivity() {
                     appendLine("HDR / MSAA  : ${info.supportsFloatHdr} / ${info.supportsMsaa}")
                 }
                 if (frameStats != null) {
-                    appendLine("FPS         : %.1f (%.2f ms)".format(frameStats.fps, frameStats.frameMs))
+                    appendLine("FPS         : %.1f (%.2f ms presented-frame interval)".format(frameStats.fps, frameStats.frameMs))
+                    appendLine("CPU submit  : %.2f ms; GPU time: %s".format(frameStats.cpuMs,
+                        if (frameStats.gpuMs < 0f) "unknown (no timestamp query)" else "%.2f ms".format(frameStats.gpuMs)))
+                    appendLine("Frames      : %d attempts, %d submissions, %d accepted presents".format(
+                        frameStats.frameAttempts, frameStats.frameSubmissions, frameStats.presentRequestsAccepted))
                     appendLine("Submitted   : %d tris, %d draw calls".format(frameStats.triangles, frameStats.drawCalls))
                     appendLine("Textures    : %.1f MiB".format(frameStats.textureMiB))
                     appendLine("Quality     : level %d, MSAA %dx, shadow %d, bloom %d".format(
                         frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
                 }
                 appendLine("Last error  : ${viewerError ?: "none"}")
-                appendLine("Settings    : preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
+                appendLine("Settings    : requested preferVulkan=${settings.preferVulkan}, quality=${settings.quality}")
+                appendLine("Effective   : preferVulkan=${effectiveSettings.preferVulkan}, quality=${effectiveSettings.quality}")
+                appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
                 appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
                     camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
                 appendLine()
@@ -475,6 +486,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         val backend = RecoveryBackend.from(null, settings.preferVulkan)
                         settings = RendererRecoveryPolicy.safeSettings(settings, backend == RecoveryBackend.VULKAN)
+                        settingsStore.saveRenderSettings(settings)
                         recoveryJournal.record(
                             RecoveryRecordKind.MANUAL_SAFE_RECOVERY,
                             backend = backend.name,

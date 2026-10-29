@@ -35,31 +35,29 @@ android {
     }
 
     /*
-     * Signing. A release build has to be signed to install. If keystore.properties exists at the
-     * repository root (see local.properties.example for the four keys) it is used; otherwise the
-     * build falls back to the debug keystore, which produces an installable, self-signed APK that
-     * is fine for a device pass and clearly not a store upload. Point it at a real keystore before
-     * publishing anything.
+     * Release signing is fail-closed. A production release/AAB requires a real keystore supplied
+     * through keystore.properties (ignored by git) or AF_RELEASE_* environment variables. CI may
+     * compile an explicitly unsigned release artifact with -Paf.allowUnsignedRelease=true, but that
+     * artifact is labelled UNSIGNED, is never published, and is not installable as an update.
+     * There is no silent debug-keystore fallback for release.
      */
     val keystoreProps = rootProject.file("keystore.properties")
-    val hasReleaseKeystore = keystoreProps.exists()
-    if (hasReleaseKeystore) {
-        /* `Properties` is imported at the top of the file: inside an Android module `java` is the
-           JavaPluginExtension, so a fully qualified java.util.Properties would not resolve. */
-        val props = Properties().apply { keystoreProps.inputStream().use { load(it) } }
+    val props = Properties().apply { if (keystoreProps.exists()) keystoreProps.inputStream().use { load(it) } }
+    fun signingValue(propKey: String, envKey: String): String? =
+        (props.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
+    val releaseStorePath = signingValue("storeFile", "AF_RELEASE_STORE_FILE")
+    val releaseStorePassword = signingValue("storePassword", "AF_RELEASE_STORE_PASSWORD")
+    val releaseKeyAlias = signingValue("keyAlias", "AF_RELEASE_KEY_ALIAS")
+    val releaseKeyPassword = signingValue("keyPassword", "AF_RELEASE_KEY_PASSWORD")
+    val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+        .all { it != null } && file(releaseStorePath!!).isFile
+    val allowUnsignedRelease = providers.gradleProperty("af.allowUnsignedRelease").orNull == "true"
+    if (hasReleaseSigning) {
         signingConfigs.create("release") {
-            storeFile = file(props.getProperty("storeFile"))
-            storePassword = props.getProperty("storePassword")
-            keyAlias = props.getProperty("keyAlias")
-            keyPassword = props.getProperty("keyPassword")
-        }
-    } else {
-        val debugKeystore = File(System.getProperty("user.home"), ".android/debug.keystore")
-        signingConfigs.create("release") {
-            storeFile = debugKeystore
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            storeFile = file(releaseStorePath!!)
+            storePassword = releaseStorePassword!!
+            keyAlias = releaseKeyAlias!!
+            keyPassword = releaseKeyPassword!!
         }
     }
 
@@ -68,7 +66,7 @@ android {
             isMinifyEnabled = false
         }
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else null
             /* R8 is off deliberately: the SDK is reached through JNI by name, and a shrinking pass
                that renamed the bridge class would fail at runtime rather than at build time. If
                shrinking is wanted later, the keep rules in consumer-rules.pro are already the
@@ -101,6 +99,21 @@ android {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
     }
 }
+
+tasks.register("verifyReleaseSigning") {
+    doLast {
+        if (!hasReleaseSigning && !allowUnsignedRelease) {
+            throw GradleException(
+                "Release signing is BLOCKED: supply keystore.properties or AF_RELEASE_* credentials. " +
+                "For compile-only CI artifacts use -Paf.allowUnsignedRelease=true; the result is UNSIGNED and must not be published."
+            )
+        }
+        if (!hasReleaseSigning) {
+            logger.warn("AvatarForge: building an explicitly UNSIGNED release artifact for compile verification only.")
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn("verifyReleaseSigning") }
 
 dependencies {
     implementation(project(":sdk"))

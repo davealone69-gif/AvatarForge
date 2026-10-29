@@ -118,6 +118,7 @@ public:
     float clipTime() const override;
     void waitIdle() override;
     RendererStats stats() const override { return stats_; }
+    std::string frameError() const override { return frameError_; }
     RendererInfo info() const override { return info_; }
 
 private:
@@ -179,6 +180,8 @@ private:
     RendererOptions activeTargetOptions_{};  /* last target/pipeline set that built successfully */
     RendererInfo info_{};
     RendererStats stats_{};
+    std::string frameError_;
+    bool frameFatal_ = false;
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
@@ -2630,34 +2633,73 @@ void VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
  *  Frame loop
  * ============================================================================================ */
 void VulkanRenderer::renderFrame(float deltaSeconds) {
-    if (targetsDirty_) applyOptionChanges();
-    if (!device_ || swapchain_ == VK_NULL_HANDLE) return;
+    frameError_.clear();
+    if (frameFatal_) return;
+    if (!device_ || swapchain_ == VK_NULL_HANDLE) {
+        frameError_ = "Vulkan device or swapchain is unavailable";
+        frameFatal_ = true;
+        return;
+    }
+    ++stats_.frameAttempts;
 
-    stats_.frames++;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        /* Exponential smoothing over ~30 frames: responsive enough for the quality controller,
-           stable enough not to oscillate on a single slow frame. */
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
+    const auto fail = [this](VkResult result, const char* operation) {
+        frameError_ = std::string(operation) + " failed (VkResult " + std::to_string(int(result)) + ")";
+        frameFatal_ = true;
+        std::fprintf(stderr, "AvatarForge Vulkan: %s\n", frameError_.c_str());
+    };
+    const auto recreateFromSurface = [this, &fail]() -> bool {
+        VkSurfaceCapabilitiesKHR caps{};
+        const VkResult capResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps);
+        if (capResult != VK_SUCCESS) { fail(capResult, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"); return false; }
+        int w = int(caps.currentExtent.width), h = int(caps.currentExtent.height);
+        if (w <= 0 || h <= 0 || w == int(UINT32_MAX) || h == int(UINT32_MAX)) {
+            w = int(swapExtent_.width); h = int(swapExtent_.height);
+        }
+        if (w <= 0 || h <= 0) { fail(VK_ERROR_INITIALIZATION_FAILED, "surface extent"); return false; }
+        swapExtent_.width = 0;  /* force rebuild even when the extent is unchanged */
+        std::string error;
+        if (!resize(w, h)) {
+            frameError_ = "swapchain recreation failed: " + error;
+            frameFatal_ = true;
+            return false;
+        }
+        framebufferResized_ = false;
+        return true;
+    };
+
+    if (targetsDirty_) {
+        applyOptionChanges();
+        if (frameFatal_) return;
     }
 
-    vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    const VkResult waited = vkWaitForFences(device_, 1, &inFlight_[frameIndex_], VK_TRUE, UINT64_MAX);
+    if (waited != VK_SUCCESS) { fail(waited, "vkWaitForFences"); return; }
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                                    imageAvailable_[frameIndex_], VK_NULL_HANDLE, &imageIndex);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-        framebufferResized_ = true;
+        recreateFromSurface();
+        return;
+    }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        fail(acquired, "vkAcquireNextImageKHR");
+        return;
+    }
+    if (imageIndex >= swapFramebuffers_.size() || imageIndex >= renderFinished_.size()) {
+        fail(VK_ERROR_INITIALIZATION_FAILED, "acquired swapchain image index");
         return;
     }
     if (acquired == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
-    vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+
+    const VkResult fenceReset = vkResetFences(device_, 1, &inFlight_[frameIndex_]);
+    if (fenceReset != VK_SUCCESS) { fail(fenceReset, "vkResetFences"); return; }
 
     updateScene(deltaSeconds);
     updateAnimation(deltaSeconds);
 
-    vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    const VkResult commandReset = vkResetCommandBuffer(cmd_[frameIndex_], 0);
+    if (commandReset != VK_SUCCESS) { fail(commandReset, "vkResetCommandBuffer"); return; }
     recordCommands(cmd_[frameIndex_], imageIndex);
 
     VkSubmitInfo submit{};
@@ -2670,7 +2712,9 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     submit.pCommandBuffers = &cmd_[frameIndex_];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &renderFinished_[imageIndex];
-    if (vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]) != VK_SUCCESS) return;
+    const VkResult submitted = vkQueueSubmit(queue_, 1, &submit, inFlight_[frameIndex_]);
+    if (submitted != VK_SUCCESS) { fail(submitted, "vkQueueSubmit"); return; }
+    ++stats_.frameSubmissions;
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -2680,19 +2724,26 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     const VkResult presented = vkQueuePresentKHR(queue_, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
-
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;
 
-    if (framebufferResized_) {
-        framebufferResized_ = false;
-        int w = 0, h = 0;
-        VkSurfaceCapabilitiesKHR caps{};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps) == VK_SUCCESS) {
-            w = int(caps.currentExtent.width);
-            h = int(caps.currentExtent.height);
+    if (presented == VK_SUCCESS || presented == VK_SUBOPTIMAL_KHR) {
+        ++stats_.presentRequestsAccepted;
+        ++stats_.frames;
+        if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
+            const float alpha = 0.06f;
+            stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
+            stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
         }
-        if (w > 0 && h > 0) resize(w, h);
+        if (presented == VK_SUBOPTIMAL_KHR) framebufferResized_ = true;
+    } else if (presented == VK_ERROR_OUT_OF_DATE_KHR) {
+        framebufferResized_ = true;
+    } else {
+        fail(presented, "vkQueuePresentKHR");
+        return;
+    }
+
+    if (framebufferResized_) {
+        recreateFromSurface();
     }
 }
 
@@ -2727,6 +2778,9 @@ void VulkanRenderer::applyOptionChanges() {
         activeTargetOptions_ = options_;
         stats_.shadowMapSize = options_.enableShadows ? options_.shadowMapSize : 0;
         stats_.bloomLevels = options_.enableBloom ? bloomLevels_ : 0;
+    } else {
+        frameError_ = "render-target rollback failed: " + rollbackError;
+        frameFatal_ = true;
     }
 }
 

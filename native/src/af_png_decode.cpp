@@ -381,8 +381,13 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
             }
             interlace = body[12];
             sawIhdr = true;
-            if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+            if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
                 if (error) *error = "png: unreasonable dimensions";
+                return false;
+            }
+            const uint64_t decodedBytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4ull;
+            if (decodedBytes > 256ull * 1024 * 1024) {
+                if (error) *error = "png: decoded image exceeds the 256 MiB limit";
                 return false;
             }
             if (interlace != 0) {
@@ -404,6 +409,10 @@ bool decodePng(const uint8_t* data, size_t size, DecodedImage* out, std::string*
         } else if (std::memcmp(type, "tRNS", 4) == 0) {
             if (colorType == 3) paletteAlpha.assign(body, body + len);
         } else if (std::memcmp(type, "IDAT", 4) == 0) {
+            if (idat.size() + len > 64ull * 1024 * 1024) {
+                if (error) *error = "png: compressed IDAT exceeds the 64 MiB limit";
+                return false;
+            }
             idat.insert(idat.end(), body, body + len);
         } else if (std::memcmp(type, "IEND", 4) == 0) {
             sawIend = true;

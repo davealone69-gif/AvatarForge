@@ -38,6 +38,7 @@ import com.avatarforge.sdk.recovery.RecoveryStage
 import com.avatarforge.sdk.recovery.RecoveryStatus
 import com.avatarforge.sdk.recovery.RecoveryFailureClassifier
 import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
+import java.util.concurrent.Executor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,6 +70,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     private val _recoveryStatus = MutableStateFlow<RecoveryStatus?>(null)
     val recoveryStatus: StateFlow<RecoveryStatus?> = _recoveryStatus.asStateFlow()
 
+    /** Last platform thermal status, or null when unavailable. Read-only for diagnostics. */
+    val thermalStatusForDiagnostics: Int? get() = thermalStatus
+
     /** Set by the UI; applied on the render thread before the next frame. */
     @Volatile private var settings: RenderSettings = RenderSettings()
     @Volatile private var camera: CameraSettings = CameraSettings()
@@ -87,6 +91,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var surfaceGeneration = 0L
     @Volatile private var surfaceReady = false
     @Volatile private var released = false
+    @Volatile private var thermalStatus: Int? = null
+    private var thermalMonitor: AutoCloseable? = null
 
     /* Render-thread recovery state. Bounded: at most two automatic attempts per failure session. */
     private var automaticAttempts = 0
@@ -99,6 +105,19 @@ class RenderSurfaceView @JvmOverloads constructor(
         /* The renderer wants every pixel the view has, and it will letterbox nothing: the camera
            aspect is recomputed on resize so the avatar never stretches. */
         holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+        thermalStatus = AndroidThermalMonitor.currentStatus(context)
+        thermalMonitor = AndroidThermalMonitor.register(context, Executor { handler.post(it) }) { status ->
+            thermalStatus = status
+            onRenderThread {
+                _effectiveSettings.value = RenderThermalPolicy.cap(settings, thermalStatus)
+                renderer?.applyOptions(_effectiveSettings.value)
+                frameLoop.resetClock()
+                if (visible && surfaceReady) {
+                    handler.removeCallbacks(frameLoop)
+                    handler.post(frameLoop)
+                }
+            }
+        }
     }
 
     /* ------------------------------------------------------------------ public API ------------ */
@@ -116,7 +135,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                    the Surface and generated engine remain owned by this view. */
                 restartRenderer(holder.surface, surfaceGeneration)
             } else {
-                current?.applyOptions(newSettings)
+                current?.applyOptions(RenderThermalPolicy.cap(newSettings, thermalStatus))
             }
         }
     }
@@ -253,7 +272,7 @@ class RenderSurfaceView @JvmOverloads constructor(
             if (visible) {
                 /* Sleep only for the unused part of the 60 Hz budget, not a fixed 16 ms after work. */
                 val elapsedNs = System.nanoTime() - frameStartNs
-                val remainingNs = (FRAME_INTERVAL_NS - elapsedNs).coerceAtLeast(0L)
+                val remainingNs = (RenderThermalPolicy.frameIntervalNs(thermalStatus) - elapsedNs).coerceAtLeast(0L)
                 val delayMs = (remainingNs + 999_999L) / 1_000_000L
                 handler.postDelayed(this, delayMs)
             }
@@ -267,7 +286,7 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     private fun publishSettings(newSettings: RenderSettings) {
         settings = newSettings
-        _effectiveSettings.value = newSettings
+        _effectiveSettings.value = RenderThermalPolicy.cap(newSettings, thermalStatus)
     }
 
     private fun currentBackend(): RecoveryBackend =
@@ -470,6 +489,8 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun release() {
         if (released) return
         released = true
+        thermalMonitor?.close()
+        thermalMonitor = null
         surfaceReady = false
         setFrameLoopEnabled(false)
         val latch = java.util.concurrent.CountDownLatch(1)

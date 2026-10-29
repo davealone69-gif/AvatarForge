@@ -152,6 +152,7 @@ public:
     float clipTime() const override { return clipTime_; }
     void waitIdle() override { glFinish(); }
     RendererStats stats() const override { return stats_; }
+    std::string frameError() const override { return frameError_; }
     RendererInfo info() const override { return info_; }
 
 private:
@@ -244,6 +245,7 @@ private:
     int triangles_ = 0;
     bool targetsDirty_ = false;
     bool contextLost_ = false;
+    std::string frameError_;
 };
 
 /* ============================================================================================
@@ -1185,7 +1187,12 @@ void GlRenderer::drawComposite() {
 }
 
 void GlRenderer::renderFrame(float deltaSeconds) {
-    if (contextLost_ || display_ == EGL_NO_DISPLAY) return;
+    frameError_.clear();
+    if (contextLost_ || display_ == EGL_NO_DISPLAY) {
+        frameError_ = "EGL context lost or display unavailable";
+        return;
+    }
+    ++stats_.frameAttempts;
     if (targetsDirty_) {
         targetsDirty_ = false;
         const RendererOptions rollback = activeTargetOptions_;
@@ -1208,12 +1215,6 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         }
     }
 
-    stats_.frames++;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-    }
     drawCalls_ = 0;
     triangles_ = 0;
 
@@ -1234,19 +1235,30 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     drawForwardPass();
     drawBloom();
     drawComposite();
+    ++stats_.frameSubmissions;
 
     std::string frameError;
     if (!checkGlError("GLES frame", &frameError)) {
+        frameError_ = frameError;
+        contextLost_ = true;
         __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRenderer", "%s", frameError.c_str());
+        return;
     }
 
     if (!eglSwapBuffers(display_, surface_)) {
-        /* A lost context cannot be recovered by this backend: report it and stop drawing rather
-           than rendering into nothing. AvatarEngine.health() surfaces the flag. */
         const EGLint err = eglGetError();
-        if (err == EGL_CONTEXT_LOST || err == EGL_BAD_SURFACE) contextLost_ = true;
+        frameError_ = "eglSwapBuffers failed (EGL error " + std::to_string(int(err)) + ")";
+        contextLost_ = true;
+        return;
     }
 
+    ++stats_.presentRequestsAccepted;
+    ++stats_.frames;
+    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
+        const float alpha = 0.06f;
+        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
+        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
+    }
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
     stats_.vertices = vertexCount_;

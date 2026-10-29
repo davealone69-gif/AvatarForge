@@ -197,7 +197,8 @@ internal object NativeBridge {
     /** outStrings = [backend, device, apiVersion, driver]; outFlags = [shadows, msaa, hdr, aniso]. */
     external fun rendererInfo(renderer: Long, outStrings: Array<String?>, outFlags: IntArray): Int
 
-    /** outFloats = [frameMs, cpuMs, fps, textureMiB]; outInts = [draws, tris, verts, shadow, msaa, bloom, quality]. */
+    /** outFloats = [frameIntervalMs, cpuSubmitMs, fps, textureMiB, gpuMs(-1 unknown)];
+     *  outInts = [draws, tris, verts, shadow, msaa, bloom, quality, attempts, submissions, presentsAccepted]. */
     external fun rendererStats(renderer: Long, outFloats: FloatArray, outInts: IntArray): Int
 
     external fun rendererCurrentClip(renderer: Long): Int

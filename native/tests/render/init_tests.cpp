@@ -60,6 +60,11 @@ void successAndOwnership() {
         r->renderFrame(1.0f / 60.0f);
         check(r->stats().triangles == 1, "attached fixture reaches the real draw path");
         check(r->stats().textureBytes > 0, "uploaded atlas texture memory is reported, not zero");
+        check(r->stats().frames == 3 && r->stats().presentRequestsAccepted == 3,
+              "frame counters advance only after accepted presents");
+        check(r->stats().frameAttempts == 3 && r->stats().frameSubmissions == 3,
+              "attempt and submission counters are distinct from accepted presents");
+        check(r->frameError().empty(), "successful frames record no frame error");
         check(af_test::state.glErrors.empty(), "camera UBO slices stay in bounds across alternating frames");
         check(af_test::state.cameraBuffer != 0 &&
               af_test::state.bufferSizes[af_test::state.cameraBuffer] >= 1024,
@@ -70,6 +75,23 @@ void successAndOwnership() {
     }
     r.reset();
     check(resourcesReleased(), "successful renderer teardown releases every tracked resource");
+}
+void swapFailureIsRecoverableByOwner() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "swap-failure fixture initializes");
+    if (r) {
+        af_test::state.fault = af_test::Fault::SwapBuffers;
+        r->renderFrame(1.0f / 60.0f);
+        check(!r->frameError().empty(), "failed eglSwapBuffers is exposed as a frame error");
+        check(contains(r->frameError(), "eglSwapBuffers"), "frame error names the failed operation");
+        check(r->stats().frameAttempts == 1, "failed present still counts as an attempt");
+        check(r->stats().frames == 0 && r->stats().presentRequestsAccepted == 0,
+              "failed present is not counted as a rendered frame");
+    }
+    r.reset();
+    check(resourcesReleased(), "swap-failure teardown releases tracked resources");
 }
 void failureCase(af_test::Fault fault, const char* expected, const char* label, bool ext = false) {
     af_test::reset();
@@ -143,6 +165,7 @@ int main() {
     failureCase(af_test::Fault::ProgramLink, "link forward/forward: injected link failure", "shader link failure");
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
+    swapFailureIsRecoverableByOwner();
     msaaFallback(); hdrFallback(); capabilityTokens(); selector();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;

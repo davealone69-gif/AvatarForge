@@ -25,6 +25,7 @@
 #include "af_render_common.h"
 #include "af_environment.h"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 
@@ -86,6 +87,7 @@ public:
     float clipTime() const override { return backend_->clipTime(); }
     void waitIdle() override { backend_->waitIdle(); }
     RendererInfo info() const override { return backend_->info(); }
+    std::string frameError() const override { return backend_->frameError(); }
 
     RendererOptions options() const override { return requested_; }
 
@@ -97,8 +99,11 @@ public:
     }
 
     void renderFrame(float deltaSeconds) override {
+        const auto start = std::chrono::steady_clock::now();
         backend_->renderFrame(deltaSeconds);
+        const auto end = std::chrono::steady_clock::now();
         stats_ = backend_->stats();
+        stats_.cpuMs = std::chrono::duration<float, std::milli>(end - start).count();
         stats_.qualityLevel = tier_;
         updateBudget(deltaSeconds);
     }

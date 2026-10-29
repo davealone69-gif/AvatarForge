@@ -245,12 +245,23 @@ def main():
                 vk_entries.append(((name, stage), []))
 
     if check:
-        print("--check: nothing written")
+        if not glslc:
+            raise SystemExit("--check requires glslc; refusing to claim shader validation without a compiler")
+        print("--check: all required GLES and Vulkan stages compiled; nothing written")
         return
 
-    emit_vk(vk_entries, os.path.join(OUT_DIR, "af_shaders_vk.h"))
     emit_gl(gl_entries, os.path.join(OUT_DIR, "af_shaders_gl.h"))
-    print("wrote native/src/render/af_shaders_vk.h and af_shaders_gl.h")
+    vk_path = os.path.join(OUT_DIR, "af_shaders_vk.h")
+    if glslc:
+        emit_vk(vk_entries, vk_path)
+        print("wrote native/src/render/af_shaders_vk.h and native/src/render/af_shaders_gl.h")
+    else:
+        # Never overwrite a checked-in SPIR-V table with an empty one. A missing compiler is a
+        # Vulkan build blocker, not a silent runtime fallback.
+        existing = open(vk_path, encoding="utf-8").read() if os.path.exists(vk_path) else ""
+        if "kTable[] = {\n};" in existing or not existing:
+            raise SystemExit("glslc not found and no non-empty af_shaders_vk.h exists; Vulkan would be dead")
+        print("glslc not found: wrote GLES table and preserved existing SPIR-V table (Vulkan not revalidated)")
 
 
 if __name__ == "__main__":

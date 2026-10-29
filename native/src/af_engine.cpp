@@ -1308,6 +1308,10 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
         e->lastError = "import: no data";
         return static_cast<int32_t>(AF_ERR_INVALID_ARG);
     }
+    if (size > 128ull * 1024 * 1024) {
+        e->lastError = "import: file exceeds the 128 MiB limit";
+        return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+    }
     GlbAsset asset;
     std::string error;
     const int rc = importGlb(bytes, size, &asset, &error);
@@ -1327,6 +1331,10 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     for (size_t i = 0; i < asset.pools.size(); ++i) {
         poolBase[i] = static_cast<uint32_t>(total);
         total += asset.pools[i].size();
+    }
+    if (total > 2000000) {
+        e->lastError = "import: vertex count exceeds the 2,000,000 limit";
+        return static_cast<int32_t>(AF_ERR_INVALID_ARG);
     }
     verts.reserve(total);
     for (const auto& pool : asset.pools) {
@@ -1532,6 +1540,11 @@ int32_t af_engine_import_glb(af_engine* engine, const char* absolute_path) {
             std::fclose(f);
             engine->lastError = "import: empty file";
             return static_cast<int32_t>(AF_ERR_IO);
+        }
+        if (static_cast<uint64_t>(len) > 128ull * 1024 * 1024) {
+            std::fclose(f);
+            engine->lastError = "import: file exceeds the 128 MiB limit";
+            return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         }
         std::vector<uint8_t> bytes(static_cast<size_t>(len));
         const size_t got = std::fread(bytes.data(), 1, bytes.size(), f);

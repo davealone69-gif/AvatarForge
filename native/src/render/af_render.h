@@ -94,9 +94,10 @@ struct CameraState {
 
 /* Per-frame timing the UI shows in the stats drawer, and the budget controller reads. */
 struct RendererStats {
-    float frameMs        = 0.0f;   /* GPU-side frame time, 16-frame rolling mean              */
-    float cpuMs          = 0.0f;   /* CPU submit cost for the same window                     */
+    float frameMs        = 0.0f;   /* presented-frame interval EMA, not a GPU timestamp       */
+    float cpuMs          = 0.0f;   /* CPU wall time inside renderFrame()                      */
     float fps            = 0.0f;
+    float gpuMs          = -1.0f;  /* -1 = unknown; no GPU timestamp query is implemented     */
     int   drawCalls      = 0;
     int   triangles      = 0;
     int   vertices       = 0;
@@ -105,7 +106,10 @@ struct RendererStats {
     int   bloomLevels    = 0;
     uint64_t textureBytes = 0;
     int   qualityLevel   = 2;      /* effective QualityPreset after automatic stepping        */
-    int   frames         = 0;
+    int   frames         = 0;      /* accepted present requests, not mere loop iterations     */
+    int   frameAttempts  = 0;
+    int   frameSubmissions = 0;
+    int   presentRequestsAccepted = 0;
 };
 
 struct RendererInfo {
@@ -133,6 +137,10 @@ public:
     static Renderer* create(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
     virtual ~Renderer() {}
+
+    /* Non-empty after a frame failed. JNI converts this into an exception so the bounded
+       recovery policy can act; an empty string means no frame error was recorded. */
+    virtual std::string frameError() const { return {}; }
 
     /* Surface size in pixels. Safe to call every frame with the current size; the backend
        recreates swapchain/framebuffers only when the size actually changed. */

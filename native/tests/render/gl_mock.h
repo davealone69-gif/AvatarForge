@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace af_test {
-enum class Fault { None, EglContext, FragmentCompile, ProgramLink, VertexArray, MsaaStorage, HdrFramebuffer };
+enum class Fault { None, EglContext, FragmentCompile, ProgramLink, VertexArray, MsaaStorage, HdrFramebuffer, SwapBuffers };
 struct VertexAttribute { GLuint buffer = 0; };
 struct VertexArray { GLuint elementBuffer = 0; std::map<GLuint, VertexAttribute> attributes; };
 struct MockState {
@@ -29,6 +29,7 @@ struct MockState {
     std::map<GLint, GLuint> uniformOwners;
     std::vector<std::pair<GLuint, GLint>> samplerWrites;
     std::vector<std::pair<GLuint, GLuint>> elementDraws;
+    int swapBuffers = 0;
     int contextsCreated = 0, contextsDestroyed = 0, surfacesCreated = 0, surfacesDestroyed = 0;
     int livePrograms = 0, liveShaders = 0, liveBuffers = 0, liveTextures = 0;
     int liveFramebuffers = 0, liveRenderbuffers = 0, liveVaos = 0;

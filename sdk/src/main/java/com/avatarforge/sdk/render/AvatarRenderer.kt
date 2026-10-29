@@ -52,6 +52,11 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
+    /** -1 means no GPU timestamp query is implemented; never display this as measured GPU time. */
+    val gpuMs: Float = -1f,
+    val frameAttempts: Int = 0,
+    val frameSubmissions: Int = 0,
+    val presentRequestsAccepted: Int = 0,
 ) {
     val meetsTarget: Boolean get() = fps >= 30f
 }
@@ -134,13 +139,15 @@ class AvatarRenderer private constructor(private var handle: Long) {
     }
 
     fun stats(): RendererStats {
-        val floats = FloatArray(4)
-        val ints = IntArray(7)
+        val floats = FloatArray(5)
+        val ints = IntArray(10)
         NativeBridge.rendererStats(handle, floats, ints)
         return RendererStats(
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
             msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
+            gpuMs = floats[4], frameAttempts = ints[7], frameSubmissions = ints[8],
+            presentRequestsAccepted = ints[9],
         )
     }
 
