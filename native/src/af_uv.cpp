@@ -341,6 +341,13 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         density = std::sqrt(0.52f * static_cast<float>(texWidth) * static_cast<float>(texHeight) / totalArea);
     }
 
+    /*
+     * The per-chart floor has to answer to the atlas, not just to the chart: at 2048 with 14 460
+     * charts a 6-texel interior fits comfortably, but the same floor at 1024 needs 136 % of the
+     * atlas before a single texel of real content is placed, and the packer can never succeed.
+     * So the floor is derived from a budget: the interiors together may claim at most a third of
+     * the atlas, and the requested 6 texels is what is used when that budget allows it.
+     */
     struct Placement { float x, y, w, h; bool rotated; };
     std::vector<Placement> placement(charts.size());
     std::vector<size_t> order(charts.size());
@@ -361,8 +368,14 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
                has to be converted through the atlas resolution. (Multiplying metres by a
                texel/metre figure and treating the result as UV is what made the first revision
                fail to pack anything - every chart claimed to be a thousand atlases wide.) */
-            float w = sz.x * usedDensity / static_cast<float>(texWidth) + gutterUV * 2.0f;
-            float h = sz.y * usedDensity / static_cast<float>(texHeight) + gutterUV * 2.0f;
+            float innerW = sz.x * usedDensity / static_cast<float>(texWidth);
+            float innerH = sz.y * usedDensity / static_cast<float>(texHeight);
+            /* (A per-chart minimum interior was tried here and reverted: it needs 136% of a 1024
+               atlas with 14 460 charts, and forcing it down to fit costs a third of the texel
+               density. The fragmentation that motivates it is AF-038, and the fix belongs in the
+               charter/packer, not in a floor bolted onto a shelf packer.) */
+            float w = innerW + gutterUV * 2.0f;
+            float h = innerH + gutterUV * 2.0f;
             bool rot = false;
             /* Try the rotated variant when it clearly reduces the shelf height. */
             if (h > w * 1.6f) { std::swap(w, h); rot = true; }

@@ -904,6 +904,15 @@ static void testTexturing() {
     UVLayout layout;
     const bool unwrapped = unwrapAtlas(&av.mesh, 1024, 1024, &layout);
     CHECK(unwrapped, "atlas unwrapped");
+    /*
+     * Bail out cleanly. A failed unwrap leaves no charts and no UVs, and every assertion below
+     * indexes into them - without this return a packer regression segfaulted the harness instead
+     * of reporting one failure, which is the worst possible way for a test to fail.
+     */
+    if (!unwrapped || layout.charts.empty()) {
+        std::printf("     unwrap failed; skipping the bake assertions\n");
+        return;
+    }
     CHECK(layout.charts.size() > 0, "charts produced (%zu)", layout.charts.size());
     CHECK(layout.coverage > 0.40f, "atlas is at least 40%% covered (%.3f)", layout.coverage);
     CHECK(layout.texelsPerMeter > 150.0f && layout.texelsPerMeter < 4000.0f,
