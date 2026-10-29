@@ -544,7 +544,7 @@ private fun SystemCheckPanel(
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
     DiagnosticLine("Mesh draw selection", "${stats.triangles} triangles selected · ${stats.vertices} vertices in mesh · ${stats.drawCalls} draw calls")
     DiagnosticLine("Avatar LOD / triangle budget", when {
-        stats.triangleBudgetExceeded -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · BUDGET EXCEEDED: even the coarsest generated LOD exceeds 50,000 triangles"
+        stats.triangleBudgetExceeded -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · BUDGET EXCEEDED: even the coarsest available draw level exceeds 50,000 triangles"
         stats.availableLods > 0 -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · generated mesh is within the 50,000-triangle mobile budget"
         else -> "LOD diagnostics unavailable; generated index ranges were not reported"
     })
