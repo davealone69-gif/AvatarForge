@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft.
+Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`, head `1fcbe6c`. PR #20 remains draft.
 
 ## Active checkpoint
 
@@ -8,7 +8,7 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## Verified now
 
-- GLES-only CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40864270280 succeeded on `973f70f`.
+- Exact-head GLES-only + model-detail CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40867172914 succeeded on `1fcbe6c`.
 - Renderer host fault injection: **57 checks, 0 failures**.
 - Focused model-detail regressions: **19 checks, 0 failures**.
 - Full kernel host harness: **406 checks, 0 failures**.
@@ -23,7 +23,7 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## CI artifact
 
-Latest verified GLES-only artifact: `AvatarForge-Android-973f70f042132679228dd50e54853a6b815508f1` (id 12892579593, 17,609,630 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only. The geometry/header patch adds further CI gates; use its exact-head artifact once green.
+Exact-head artifact: `AvatarForge-Android-1fcbe6cc73425ecd369f797b222eb2cc85315652` (id 12893609460, 17,608,790 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not an installable production release.
 
 ## Still not proven
 

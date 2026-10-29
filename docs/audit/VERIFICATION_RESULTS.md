@@ -19,12 +19,12 @@ Checkpoint: 2026-10-29, branch `arena/aaf85469-avatarforge`.
 
 ## CI
 
-**REAL + VERIFIED:** run https://github.com/davealone69-gif/AvatarForge/actions/runs/40864270280 succeeded on head `973f70f042132679228dd50e54853a6b815508f1`.
+**REAL + VERIFIED:** run https://github.com/davealone69-gif/AvatarForge/actions/runs/40867172914 succeeded on head `1fcbe6cc73425ecd369f797b222eb2cc85315652` in 7m46s.
 
 - GLES shader compile/diff gate passed; there is no SPIR-V warning because the SPIR-V table was deleted.
-- Renderer host tests, ARM64 native build, SDK JVM tests, debug APK, unsigned release AAB, SDK AAR, GLES-only linkage verification, artifact verification and upload passed.
-- Artifact: `AvatarForge-Android-973f70f042132679228dd50e54853a6b815508f1`, id `12892579593`, 17,609,630 bytes. It contains a debug APK, an explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS and PROVENANCE.json.
-- The subsequent geometry/header patch adds model-detail and full kernel-host CI gates; its exact-head run is pending at the time of this record.
+- Model-detail regressions, full kernel host harness, renderer host tests, ARM64 native build, SDK JVM tests, debug APK, unsigned release AAB, SDK AAR, GLES-only linkage verification, artifact verification and upload passed.
+- Artifact: `AvatarForge-Android-1fcbe6cc73425ecd369f797b222eb2cc85315652`, id `12893609460`, 17,608,790 bytes. It contains a debug APK, an explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS and PROVENANCE.json.
+- Earlier GLES-only run 40864270280 (`973f70f`) is superseded by this exact-head model-fixed run.
 
 ## Device evidence
 
