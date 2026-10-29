@@ -318,3 +318,13 @@ Next action: implement a separate consumer smoke-test app/module, build and insp
 - Device runtime, sustained FPS, RAM/thermal behavior, and the actual system driver path: **UNVERIFIED** until the exact APK is installed on the Samsung S24.
 - Important distinction: removing AvatarForge's native Vulkan backend does not force Android's system-selected ANGLE implementation to stop using Vulkan internally. Device driver identity must be checked after installation.
 - `main` remains untouched. PR #21 continues to target `work/android-engine-dev`; do not merge before exact-head CI and device verification.
+
+## Deep repair continuation — 2026-10-29
+
+- Work remains isolated on `fix/avatarforge-visual-quality-performance-2026-10-29`; PR #21 targets `work/android-engine-dev`. `main` remains untouched.
+- Fixed a real Kotlin compile error after Vulkan removal: `AvatarForge.kt` still supplied the deleted `preferVulkan` argument. Removed the stale setting and its obsolete comment instead of restoring a dead API parameter.
+- Added end-to-end LOD observability: native renderer stats now expose selected LOD, selectable index levels, and whether even the coarsest level exceeds the 50,000-triangle mobile target. JNI appends these fields while preserving the legacy nine/ten-integer telemetry layout.
+- Viewer Diagnostics now reports the selected LOD and budget state. This is instrumentation, not proof that the target is met on the Samsung device.
+- The last completed Android workflow failed on the stale `preferVulkan` Kotlin argument; host shader/regression and importer sanitizer jobs had passed on that SHA. A new exact-head workflow is required after this checkpoint.
+- Current acceptance: native Vulkan removal **REAL + VERIFIED in source**; GLES host regression **PASS on earlier SHA, final-head recheck pending**; Android package build **PENDING/UNVERIFIED**; artifact dependency inspection **UNVERIFIED**; Samsung installed-runtime and sustained performance **UNVERIFIED**.
+- Performance investigation remains evidence-led: compare actual generated LOD counts, selected triangles, CPU render-call time, FPS/frame interval, and repeatable visual captures. Do not assume the 50,000-triangle budget is met merely because the culler contains that policy.

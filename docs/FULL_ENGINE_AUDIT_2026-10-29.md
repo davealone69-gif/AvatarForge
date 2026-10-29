@@ -79,12 +79,11 @@ This is one user-observed session, not a sustained benchmark. It does not tie th
 ## Current status
 
 - Audit branch and source changes: **REAL + VERIFIED** on GitHub.
-- Importer sanitizer job for current head: **PASS**.
-- Headless GLES/Vulkan regression job for current head: **PASS**.
-- Android build/full workflow for current head: **PENDING at last check**.
-- Vulkan shared-buffer frame serialization: **CONFIRMED concern; not fixed**.
-- Exact avatar LOD selection/target attainment: **UNVERIFIED**.
-- Visual artifact root cause: **UNVERIFIED**.
+- Importer sanitizer and headless GLES pixel jobs: passed on earlier branch revisions; the exact final head must pass again.
+- Android package build/full workflow: **PENDING/UNVERIFIED** for the final head.
+- Native Vulkan backend: removed from this branch; ANGLE may still use Vulkan internally.
+- Exact avatar LOD selection/50,000-triangle target attainment: **UNVERIFIED**; new telemetry now reports the selected level and whether the coarsest level still exceeds budget.
+- Visual artifact root cause: **UNVERIFIED**; no material/shader change is accepted without repeatable captures.
 - Installed Samsung S24 runtime on this branch: **UNVERIFIED**.
 - Release signing: **UNVERIFIED** until artifact and signature are inspected.
 

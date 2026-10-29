@@ -41,7 +41,7 @@ Evidence classification: **REAL + USER-OBSERVED** for this displayed session onl
 ## Acceptance gates
 
 - **Build:** Android package and native regression workflows pass for the exact branch head; record the SHA and workflow URL.
-- **Renderer correctness:** no black frame, fatal Vulkan state, stale positive FPS after failed presentation, or invalid frame-sequence progression.
+- **Renderer correctness:** no black frame, fatal GLES state, stale positive FPS after failed presentation, or invalid frame-sequence progression.
 - **Performance:** report measured values and test duration. Do not claim a 30 FPS floor from a short screenshot.
 - **Visual quality:** compare repeatable captures. No shader/material fix is accepted solely because it sounds plausible.
 - **Device runtime:** install and test the exact produced APK on the Samsung phone. Until that happens, runtime remains **UNVERIFIED**.
@@ -51,9 +51,12 @@ Evidence classification: **REAL + USER-OBSERVED** for this displayed session onl
 
 - Branch creation: **REAL + VERIFIED** by GitHub branch creation response.
 - User screenshot baseline: **REAL + USER-OBSERVED**.
-- Source-level controller/renderer review: **PARTIAL**.
-- Changes to rendering algorithms: **NOT YET MADE**. Avoid speculative edits until the visual artifact and AUTO-tier transition are reproducible.
-- Build on this new branch: **UNVERIFIED**.
+- Native Vulkan backend removal: **REAL + VERIFIED** in the isolated source branch; system-selected ANGLE may still use Vulkan internally.
+- GLES shader-table regression and host harness: **PASS on the last completed tested source SHA**; exact current head remains subject to CI.
+- Kotlin/JNI telemetry: extended to expose selected LOD, available selectable levels, and whether the coarsest level exceeds the 50,000-triangle budget.
+- Diagnostics UI: now reports the measured LOD/budget status instead of leaving the budget failure invisible.
+- Exact generated avatar's LOD selection and visual fidelity: **UNVERIFIED** until device evidence is collected.
+- Build on the current branch head: **PENDING/UNVERIFIED**.
 - Installed-device test of a build from this branch: **UNVERIFIED**.
 
 ## Backend decision update — 2026-10-29
