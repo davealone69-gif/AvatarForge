@@ -543,6 +543,11 @@ private fun SystemCheckPanel(
     DiagnosticLine("Current FPS / frame interval", "%.1f FPS · %.2f ms".format(stats.fps, stats.frameMs))
     DiagnosticLine("Renderer-call CPU wall time", "%.2f ms (not a GPU timer)".format(stats.cpuMs))
     DiagnosticLine("Mesh draw selection", "${stats.triangles} triangles selected · ${stats.vertices} vertices in mesh · ${stats.drawCalls} draw calls")
+    DiagnosticLine("Avatar LOD / triangle budget", when {
+        stats.triangleBudgetExceeded -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · BUDGET EXCEEDED: even the coarsest generated LOD exceeds 50,000 triangles"
+        stats.availableLods > 0 -> "LOD ${stats.activeLod + 1}/${stats.availableLods} selected · generated mesh is within the 50,000-triangle mobile budget"
+        else -> "LOD diagnostics unavailable; generated index ranges were not reported"
+    })
     DiagnosticLine("Texture memory", "%.1f MiB avatar-atlas estimate only; total GPU memory is not exposed".format(stats.textureMiB))
     val currentThermal = thermalStatus ?: resources.thermalStatus
     DiagnosticLine("Thermal status", when (currentThermal) { 0 -> "none"; 1 -> "light"; 2 -> "moderate"; 3 -> "severe"; 4 -> "critical"; 5 -> "emergency"; 6 -> "shutdown"; null -> "unavailable"; else -> "unknown ($currentThermal)" })
