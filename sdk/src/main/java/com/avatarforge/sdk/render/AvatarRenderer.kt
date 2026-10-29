@@ -2,7 +2,7 @@
  * AvatarForge :: AvatarRenderer.kt
  *
  * Kotlin wrapper over the custom renderer's C ABI (native/src/render/af_render_capi.cpp). The
- * renderer itself is C++ (Vulkan first, OpenGL ES 3.1 fallback) and shares nothing with any game
+ * renderer itself is C++ (OpenGL ES 3.1 only) and shares nothing with any game
  * engine - see native/src/render/af_render.h for the architecture.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
