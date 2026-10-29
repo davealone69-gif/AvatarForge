@@ -94,6 +94,41 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
     }
 
     /*
+     * Region labels are graded per vertex by position, so along a boundary the majority-of-three
+     * vote above flips from one region to the other and back at triangle scale. Charting gates on
+     * the label, so every flip cut the chart, and the atlas ended up with 19 766 charts for
+     * 367 698 faces - 12 296 of them a single triangle. Those charts are smaller than the gutter
+     * they need, so their texels are never resolvable: the bake comes out as speckle, and the
+     * albedo/normal lookups land on whatever texel happens to be nearest.
+     *
+     * Two majority passes over the edge-neighbourhood remove the flicker without moving a real
+     * boundary by more than one triangle: a face keeps its label unless strictly fewer than two of
+     * its three neighbours agree with it. Boundaries that are genuinely closed (the mouth, a
+     * cuff) are unaffected in shape; only the salt-and-pepper is removed.
+     */
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<int32_t> smoothed = faceRegion;
+        for (size_t f = 0; f < faceCount; ++f) {
+            int tally[16] = {0};
+            tally[faceRegion[f]] += 2;          /* its own label counts double: ties keep it */
+            for (int e = 0; e < 3; ++e) {
+                const auto it = edgeFaces.find(ekey(faces[f][static_cast<size_t>(e)],
+                                                    faces[f][static_cast<size_t>((e + 1) % 3)]));
+                if (it == edgeFaces.end()) continue;
+                for (uint32_t nb : it->second) {
+                    if (nb == f) continue;
+                    const int r = faceRegion[nb];
+                    if (r >= 0 && r < 16) tally[r] += 1;
+                }
+            }
+            int best = faceRegion[f], bestCount = tally[faceRegion[f]];
+            for (int r = 0; r < 16; ++r) if (tally[r] > bestCount) { bestCount = tally[r]; best = r; }
+            smoothed[f] = best;
+        }
+        faceRegion.swap(smoothed);
+    }
+
+    /*
      * Charting: DFS growth inside a cone anchored on the seed face's normal.
      *
      * The cone must be anchored to the seed and not to a running average. On a closed surface the
@@ -101,16 +136,16 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
      * a chart then either freezes after a few faces or keeps absorbing unrelated ones. Anchoring
      * the cone makes growth deterministic and stable, and it doubles as the projection axis.
      *
-     * Why a cone and not the dihedral test: measured on this mesh, 4.2% of faces (5967 of 142404)
-     * have NO neighbour within 40 degrees - the folds where the surface doubles back inside
-     * sub-lattice notches between fingers, toes, nostrils and ears. A dihedral flood fill therefore
-     * fragments into 11505 islands, while the cone test keeps a curved surface together and the
-     * folded faces become their own (correct) islands: 8205 islands, 0.68 atlas coverage.
+     * Measured on the current mesh: 90% of adjacent face pairs turn by less than 15 degrees and
+     * 2.6% turn by more than 100 degrees (the folds where the surface doubles back inside
+     * sub-lattice notches between fingers, toes, nostrils and ears), so a cone keeps a curved
+     * surface together and the folded faces become their own islands.
      */
     const float kCosTolerance = std::cos(radians(62.0f));
     std::vector<int32_t> faceChart(faceCount, -1);
     std::vector<UVChart> charts;
     std::vector<int32_t> chartFaces;
+    std::vector<Vec3> chartAxis;   /* seed normal of each chart: kept for diagnostics */
 
     for (size_t seed = 0; seed < faceCount; ++seed) {
         if (faceChart[seed] >= 0) continue;
@@ -143,6 +178,7 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         }
         ch.faceCount = static_cast<int32_t>(chartFaces.size()) - ch.firstFace;
         charts.push_back(ch);
+        chartAxis.push_back(seedNormal);
     }
 
     /* Unassigned faces can only appear if two faces share no edge (isolated triangles). */
@@ -155,6 +191,7 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
             chartFaces.push_back(static_cast<int32_t>(f));
             faceChart[f] = static_cast<int32_t>(charts.size());
             charts.push_back(ch);
+            chartAxis.push_back(faceNormals[f]);
         }
     }
 
@@ -273,6 +310,21 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         }
         std::printf("[uv] charts=%zu thin-x=%zu thin-y=%zu degenerate=%zu | axis coherence %.4f..%.4f\n",
                     charts.size(), thinX, thinY, degenerate, minAxis, maxAxis);
+        /* Chart-size histogram: fragmentation shows up here before it shows up as a blurry bake. */
+        int sizeBuckets[6] = {0, 0, 0, 0, 0, 0};
+        const int edges[5] = {1, 2, 8, 64, 512};
+        size_t singleton = 0, huge = 0;
+        for (size_t c = 0; c < charts.size(); ++c) {
+            const int n = charts[c].faceCount;
+            if (n == 1) ++singleton;
+            if (n >= 4096) ++huge;
+            int b = 0;
+            while (b < 5 && n > edges[b]) ++b;
+            ++sizeBuckets[b];
+        }
+        std::printf("[uv] chart sizes: 1=%d 2-2:%d 3-8:%d 9-64:%d 65-512:%d >512:%d (singletons %zu, >4096 %zu)\n",
+                    sizeBuckets[0], sizeBuckets[1], sizeBuckets[2], sizeBuckets[3], sizeBuckets[4],
+                    sizeBuckets[5], singleton, huge);
     }
 #endif
 
@@ -341,16 +393,32 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
     nreg.reserve(npos.capacity());
     ncurv.reserve(npos.capacity());
 
+    /* Placement always lands a chart inside its own shelf cell, so any UV outside [0,1] is a
+       packing bug. It used to be clamped instead, which silently folded the offending vertices
+       onto the atlas border and collapsed their triangles to zero texel area (measured: 10 788
+       clamped vertices, 17 271 dead triangles, and the albedo/normal atlases sampling arbitrary
+       texels - the grey "static" patches in the field screenshots). Count it, then prove it. */
+    size_t uvOverflow = 0;
+
     for (size_t c = 0; c < charts.size(); ++c) {
         const UVChart& ch = charts[c];
         const Chart2D& p2 = projected[c];
         const Placement& pl = placement[c];
         const Vec2 chartSize = p2.bounds.size();
+        /*
+         * The scale factors belong to the ORIENTATION the chart is written in, not to the
+         * projection axes. A rotated placement stores (w, h) already swapped and the local
+         * coordinates are rotated below, so the extents have to be swapped with them: dividing a
+         * rotated coordinate by the un-rotated extent is what pushed tall thin charts (limbs,
+         * fingers, hair strands) past the right edge of their cell.
+         */
+        const Vec2 ext = pl.rotated ? Vec2(chartSize.y, chartSize.x) : chartSize;
+        const float innerW = pl.w - gutterUV * 2.0f;
+        const float innerH = pl.h - gutterUV * 2.0f;
         /* UV units per metre for this chart: the shelf cell (minus its gutter) divided by the
-           chart's projected extent. Using the same density for w and h keeps the chart
-           undistorted even when the atlas is not square. */
-        const float sx = chartSize.x > 1e-9f ? (pl.w - gutterUV * 2.0f) / chartSize.x : 0.0f;
-        const float sy = chartSize.y > 1e-9f ? (pl.h - gutterUV * 2.0f) / chartSize.y : 0.0f;
+           chart's projected extent in the orientation it is written in. */
+        const float sx = ext.x > 1e-9f ? innerW / ext.x : 0.0f;
+        const float sy = ext.y > 1e-9f ? innerH / ext.y : 0.0f;
 
         for (int32_t i = 0; i < ch.faceCount; ++i) {
             const uint32_t f = static_cast<uint32_t>(chartFaces[static_cast<size_t>(ch.firstFace + i)]);
@@ -374,11 +442,11 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
                     /* A 90-degree ROTATION, not a transpose: transposing mirrors the chart, which
                        flips the winding of every triangle in it and bakes mirrored textures. */
                     if (pl.rotated) local = Vec2(chartSize.y - local.y, local.x);
-                    local.x *= sx; local.y *= sy;
-                    const float u = pl.x + gutterUV + local.x;
+                    const float u = pl.x + gutterUV + local.x * sx;
                     /* glTF UV origin is top-left; flipping v here means the baked images need no
                        vertical flip anywhere downstream. */
-                    const float v = pl.y + gutterUV + local.y;
+                    const float v = pl.y + gutterUV + local.y * sy;
+                    if (u < -1e-6f || u > 1.0f + 1e-6f || v < -1e-6f || v > 1.0f + 1e-6f) ++uvOverflow;
                     nuv.push_back(clampf(u, 0.0f, 1.0f));
                     nuv.push_back(clampf(v, 0.0f, 1.0f));
                 }
@@ -389,6 +457,17 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         UVChart& placed = charts[c];
         placed.rectMin = Vec2(pl.x, pl.y);
         placed.rectMax = Vec2(pl.x + pl.w, pl.y + pl.h);
+    }
+
+    /*
+     * Fail closed. A chart that leaves its shelf cell cannot be repaired by clamping, and shipping
+     * one bakes an atlas whose texels belong to the wrong surface. Return the failure so the caller
+     * retries or reports it, instead of producing a broken avatar that looks plausible.
+     */
+    if (uvOverflow > 0) {
+        std::fprintf(stderr, "[uv] atlas overflow: %zu vertices outside [0,1] across %zu charts\n",
+                     uvOverflow, charts.size());
+        return false;
     }
 
     float occupied = 0.0f;

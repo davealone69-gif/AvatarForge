@@ -4,7 +4,8 @@
 |---|---|---|---|
 | Native GLES host mock | `tools/test_renderer_host.sh` | AF-002/003 frame error/counters/cleanup/C ABI parity; AF-025 option sanitisation | REAL + VERIFIED: **64 checks, 0 failures** (2026-10-29, up from 57) |
 | Native model detail host | `tools/test_model_host.sh` | AF-017 palm/garment; AF-019 eye labels/extraction symmetry, chest shell, hair eye-line | REAL + VERIFIED: 33 checks, 0 failures |
-| Native kernel host | `build-host/host_tests` | kernel regressions, import limits, GLES shader count | REAL + VERIFIED: 406 checks, 0 failures; previous SPIR-V count failure is obsolete |
+| Pose cost (host, measured not asserted) | `/home/user/fault-review/probe/pose_time.cpp` (throwaway) | AF-035 skinning matrix hoist, cofactor normals, fused vertex write | REAL + VERIFIED on host: `af_engine_apply_clip` **10.14 ms → 4.65 ms** per frame for 266 212 vertices / 367 698 triangles. Device frame rate still **UNVERIFIED** |
+| Native kernel host | `build-host/host_tests` | kernel regressions, import limits, GLES shader count, **AF-034 atlas overflow (UV density percentiles + zero-texel footprint) added 2026-10-30** | REAL + VERIFIED: **411 checks, 0 failures** (2026-10-30; was 406) |
 | SDK JVM | `:sdk:testDebugUnitTest` | AF-004/005/006 thermal, settings, progress; GLES-only recovery; AF-025 codec clamping; stale Vulkan key ignored | REAL + VERIFIED by CI on the exact head of this pass (two new codec cases); local JVM execution unavailable (no JDK) |
 | Android CI | `.github/workflows/android-apk.yml` | AF-001/009/014 signing/AAB/shader staleness/GLES-only linkage | REAL + VERIFIED: run 40895347516 passed on `39c8cf6`, including model-detail and full kernel-host gates |
 | Device camera | SM-S921B drag/pinch/chips/sliders | AF-010 | PARTIAL: user confirms camera works; exact build SHA/counters not supplied |

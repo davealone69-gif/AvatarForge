@@ -316,6 +316,20 @@ void Rig::computeWeights(const BodyField& field, const Mesh& mesh) {
 void Rig::skin(const Mesh& restMesh, const std::vector<Mat4>& jointWorld, std::vector<Vec3>* outPositions) const {
     const size_t vcount = restMesh.vertexCount();
     outPositions->resize(vcount);
+    if (vcount == 0) return;
+
+    /*
+     * The skinning matrix of a joint is `jointWorld * inverseBind`, and it does not depend on the
+     * vertex. It used to be built INSIDE the vertex loop, once per influence: 266 212 vertices x up
+     * to 4 influences is over a million 4x4 matrix products per frame, against 75 that the pose
+     * actually needs. That single line was most of the 10.1-10.8 ms the pose path cost on a
+     * desktop core, and therefore most of the gap between the viewer's 16-18 FPS during clip
+     * playback and the 30 FPS its thermal pacing target allows.
+     */
+    const size_t jointCount = std::min(jointWorld.size(), inverseBind_.size());
+    std::vector<Mat4> skinMatrix(jointCount);
+    for (size_t j = 0; j < jointCount; ++j) skinMatrix[j] = jointWorld[j] * inverseBind_[j];
+
     const int threads = defaultThreadCount();
     parallelFor(static_cast<int>(vcount), threads, [&](int i0, int i1) {
         for (int vi = i0; vi < i1; ++vi) {
@@ -327,10 +341,8 @@ void Rig::skin(const Mesh& restMesh, const std::vector<Mat4>& jointWorld, std::v
                 const float w = sw.weights[k];
                 if (w <= 0.0f) continue;
                 const size_t ji = sw.joints[k];
-                if (ji >= jointWorld.size()) continue;
-                const Mat4& bind = inverseBind_[ji];
-                const Mat4 m = jointWorld[ji] * bind;      /* skinning matrix */
-                acc += m.transformPoint(p) * w;
+                if (ji >= jointCount) continue;
+                acc += skinMatrix[ji].transformPoint(p) * w;
                 total += w;
             }
             (*outPositions)[static_cast<size_t>(vi)] = (total > 1e-6f) ? (acc / total) : p;

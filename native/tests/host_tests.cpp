@@ -918,7 +918,21 @@ static void testTexturing() {
         if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f)) ++outside;
         if (u == 0.0f && v == 0.0f) ++missing;
     }
-    CHECK(outside == 0, "every UV lies inside the atlas (%zu outside)", outside);
+    /*
+     * This assertion used to be unfalsifiable: the unwrapper clamped every UV into [0,1] with
+     * clampf(), so "every UV lies inside the atlas" held even when the packer had written charts
+     * past the right edge of their shelf cell. The clamp then folded those vertices onto the
+     * border, which collapsed their triangles to no texel area at all - 10 788 clamped vertices and
+     * 17 271 dead triangles, and the albedo/normal atlases sampling whatever texel happened to be
+     * nearest. Renderer-side that is a grey "static" wash over the torso, a speckled shirt and a
+     * torn arm, which is exactly what the field screenshots showed.
+     *
+     * The clamp is gone (the unwrapper now fails closed and returns false instead), so the check
+     * below is meaningful again. The density check that follows is the one that actually catches
+     * the collapse: a chart that has degenerated to a point still has its UVs inside the atlas,
+     * but its triangles own a thousandth of the texel area of their neighbours.
+     */
+    CHECK(outside == 0, "every UV lies inside the atlas without clamping (%zu outside)", outside);
     CHECK(missing == 0, "no vertex left at the origin UV (%zu)", missing);
 
     /*
@@ -934,6 +948,9 @@ static void testTexturing() {
      * and mirrored triangles together may not own a hundredth of it.
      */
     size_t flipped = 0, degenerate = 0, mirroredWithFootprint = 0;
+    /* 3D area of every triangle whose projection owns no texel, so the assertion below can ask
+       whether that loss could have been visible (see the check after the density block). */
+    std::vector<double> collapsedArea3;
     double uvAreaAll = 0.0, uvAreaMirrored = 0.0;
     /* A fold must own at least one whole atlas texel before it can invert a sampled normal.
        Sub-texel folds at nostril/dental rims are numerical dust, not a visible material defect. */
@@ -945,7 +962,13 @@ static void testTexturing() {
         const float cx = av.mesh.uvs[c * 2], cy = av.mesh.uvs[c * 2 + 1];
         const double area = (static_cast<double>(bx) - ax) * (cy - ay) - (static_cast<double>(cx) - ax) * (by - ay);
         uvAreaAll += std::fabs(area) * 0.5;
-        if (std::fabs(area) < 1e-14) ++degenerate;
+        if (std::fabs(area) < 1e-14) {
+            ++degenerate;
+            const Vec3& pa = av.mesh.positions[a];
+            const Vec3& pb = av.mesh.positions[b];
+            const Vec3& pc = av.mesh.positions[c];
+            collapsedArea3.push_back((pb - pa).cross(pc - pa).length() * 0.5);
+        }
         if (area < 0.0) {
             ++flipped;
             uvAreaMirrored += std::fabs(area) * 0.5;
@@ -959,6 +982,62 @@ static void testTexturing() {
           mirroredWithFootprint, flipped);
     CHECK(mirroredAreaShare < 0.01, "mirrored triangles own under 1%% of the atlas area (%.3f%%)",
           mirroredAreaShare * 100.0);
+    /*
+     * Texel-density spread. Every triangle should own UV area in proportion to its own area in
+     * space - that is what "the chart was flattened" means. A chart projected onto a degenerate
+     * axis, or one whose scale collapsed, shows up as a cluster of triangles thousands of times
+     * below the median. Comparing percentiles against the median is scale-free, so it works at any
+     * atlas resolution and does not need a per-model expectation.
+     */
+    double densityMedian = 0.0;
+    {
+        std::vector<double> density;
+        density.reserve(triCount);
+        for (size_t t = 0; t + 2 < av.mesh.indices.size(); t += 3) {
+            const uint32_t a = av.mesh.indices[t], b = av.mesh.indices[t + 1], c = av.mesh.indices[t + 2];
+            const Vec3& pa = av.mesh.positions[a];
+            const Vec3& pb = av.mesh.positions[b];
+            const Vec3& pc = av.mesh.positions[c];
+            const double area3 = (pb - pa).cross(pc - pa).length() * 0.5;
+            if (area3 < 1e-12) continue;
+            const double ax = av.mesh.uvs[a * 2], ay = av.mesh.uvs[a * 2 + 1];
+            const double bx = av.mesh.uvs[b * 2], by = av.mesh.uvs[b * 2 + 1];
+            const double cx = av.mesh.uvs[c * 2], cy = av.mesh.uvs[c * 2 + 1];
+            const double areaUv = std::fabs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) * 0.5;
+            density.push_back(areaUv / area3);
+        }
+        CHECK(!density.empty(), "texel-density sample is not empty");
+        std::sort(density.begin(), density.end());
+        const double median = density[density.size() / 2];
+        densityMedian = median;
+        const double p01 = density[density.size() / 100];
+        const double p99 = density[(density.size() * 99) / 100];
+        CHECK(median > 0.0, "median texel density is positive (%.4g uv/m2)", median);
+        CHECK(p01 > median / 400.0,
+              "the worst 1%% of triangles still own a quarter of the median texel density"
+              " (%.4g against %.4g uv/m2)",
+              p01, median);
+        CHECK(p99 < median * 400.0, "the densest 1%% stays within 400x of the median (%.4g)", p99);
+        std::printf("     texel density uv/m2: p01=%.4g median=%.4g p99=%.4g (spread %.0fx)\n",
+                    p01, median, p99, p99 > 0.0 ? p99 / std::max(p01, 1e-30) : 0.0);
+    }
+    /*
+     * A triangle that owns no texel is only a defect if it could have been seen. Its expected
+     * footprint is its own surface area times the median texel density, so a triangle whose
+     * footprint is under one texel is exactly the sub-texel dust this file already documents, and
+     * one above a texel is a hole in the material. Before AF-034 was fixed this count was 17 271
+     * triangles and the atlas was visibly a mosaic; the assertion is what keeps it from coming
+     * back.
+     */
+    size_t collapsedVisible = 0;
+    for (double a3 : collapsedArea3) {
+        if (a3 * densityMedian * static_cast<double>(1024 * 1024) >= 1.0) ++collapsedVisible;
+    }
+    CHECK(collapsedVisible == 0,
+          "no triangle big enough to own a texel collapsed to zero UV area (%zu of %zu zero-texel"
+          " triangles; the rest are sub-texel dust)",
+          collapsedVisible, degenerate);
+
     std::printf("     charts=%zu coverage=%.2f density=%.0f texels/m | uv-degenerate %zu, mirrored %zu of %zu"
                 " (all sub-texel: %.3f%% of the atlas)\n",
                 layout.charts.size(), layout.coverage, layout.texelsPerMeter, degenerate, flipped, triCount,
