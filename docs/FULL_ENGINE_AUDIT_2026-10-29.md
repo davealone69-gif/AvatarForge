@@ -91,3 +91,9 @@ This is one user-observed session, not a sustained benchmark. It does not tie th
 ## Guardrails
 
 Never merge this branch or claim a green build until the exact head SHA has completed required checks. Never claim the app is fixed or production-ready until the exact produced APK has been installed and exercised on the physical Samsung phone. Preserve `main`; keep this work isolated until it earns promotion.
+
+## Superseding decision — native Vulkan removed (2026-10-29)
+
+The earlier F-03 finding about Vulkan serializing in-flight fences is retained as historical evidence but is no longer a planned repair for this branch. The user explicitly requested removing Vulkan. The branch now removes the native Vulkan implementation, its SPIR-V table, Vulkan-only host test/script, CMake link dependency, Kotlin preference UI, JNI/C ABI option, Rust option, and CI validation steps. The active renderer is GLES 3.1 only; camera and shadow projection math now uses OpenGL depth range only.
+
+See [GLES-only migration record](GLES_ONLY_MIGRATION_2026-10-29.md). Exact-head build, final GLES pixel regression, artifact dependency inspection, and physical Samsung runtime remain **UNVERIFIED/PENDING**. Android may still route GLES through a system-selected ANGLE build that uses Vulkan internally; ordinary app code cannot reliably force a different system graphics driver. Do not claim zero Vulkan anywhere in the Android graphics stack until the actual device driver path is verified.
