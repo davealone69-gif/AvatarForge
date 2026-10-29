@@ -9,18 +9,16 @@
 #                        beyond zlib and the C++ runtime, which is why the identical sources build
 #                        and pass their test harness on a desktop.
 #
-#     libafrender.so     the custom renderer: Vulkan primary, OpenGL ES 3.1 fallback. Links
-#                        libvulkan/libEGL/libGLESv3/libandroid/liblog and nothing else - there is
-#                        no rendering framework in this project (see native/src/render/).
+#     libafrender.so     the custom renderer: OpenGL ES 3.1 only. Links EGL/GLES and Android system libraries; Vulkan is
+#                        not compiled, linked, probed or shipped.
 #
 #     libavatarforge.so  the JNI bridge, which is the only place Kotlin meets C++.
 #
 #  The Gradle app module points at this file through externalNativeBuild, and the desktop test
 #  harness in native/tests/ compiles the same kernel sources with a host compiler (see BUILD.md).
 #
-#  Shaders are checked in pre-compiled (native/src/render/af_shaders_vk.h holds validated SPIR-V,
-#  af_shaders_gl.h the GLSL ES text), so a clean clone needs neither Python nor glslc. The
-#  `regenerate_shaders` target re-bakes them when the GLSL changes; it needs both tools.
+#  GLES shaders are checked in as GLSL ES text in af_shaders_gl.h, so a clean clone needs neither
+#  Python nor glslc. The `regenerate_shaders` target updates the generated GLES shader table.
 # ==============================================================================================
 
 cmake_minimum_required(VERSION 3.22)
@@ -145,7 +143,6 @@ set_target_properties(EtcLib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set(AF_RENDER_SOURCES
     src/render/af_render.cpp
     src/render/af_render_capi.cpp
-    src/render/af_vk.cpp
     src/render/af_gl.cpp
     src/render/af_shaders.cpp
     src/render/af_avatar_culler.cpp
@@ -163,7 +160,7 @@ target_include_directories(afrender
 target_compile_options(afrender PRIVATE ${AF_OPT_FLAGS} -Wall -Wextra)
 target_link_libraries(afrender
     PUBLIC afcore
-    PRIVATE vulkan EGL GLESv3 android log ${AF_ASTCENC_TARGET} EtcLib)
+    PRIVATE EGL GLESv3 android log ${AF_ASTCENC_TARGET} EtcLib)
 
 # ----------------------------------------------------------------------------------------------
 #  JNI bridge
