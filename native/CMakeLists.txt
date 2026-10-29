@@ -36,7 +36,7 @@ endif()
 # IEEE float semantics for its watertightness tests (signed-zero handling in the isosurface
 # extractor), and fast-math is free to break exactly that.
 # The optimisation level is a cache variable so a memory-constrained build machine can drop it to
-# -O1: clang's -O3 on the kernel and the Vulkan backend needs well over a gigabyte of RAM per
+# -O1: clang's -O3 on the kernel and renderer needs well over a gigabyte of RAM per
 # translation unit, and a machine with 2 GB total will be killed by the OOM reaper mid-build. The
 # shipped configuration is -O3.
 set(AF_OPT_FLAGS "-O3" CACHE STRING "Optimisation flags for the kernel and renderer")
@@ -101,7 +101,7 @@ endif()
 # ----------------------------------------------------------------------------------------------
 # Texture encoders are renderer-private: the public af_texture C ABI and exported GLB images stay
 # raw. Build the ASTC core for the selected Android ABI without `native` ISA flags (those would
-# target the build host when cross-compiling); ETC2 is the GLES 3.x / Vulkan fallback.
+# target the build host when cross-compiling); ETC2 is the GLES 3.x fallback.
 set(ASTCENC_CLI OFF CACHE BOOL "" FORCE)
 set(ASTCENC_UNITTEST OFF CACHE BOOL "" FORCE)
 set(ASTCENC_SHAREDLIB OFF CACHE BOOL "" FORCE)
@@ -179,5 +179,5 @@ if(AF_PYTHON)
     add_custom_target(regenerate_shaders
         COMMAND ${AF_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_shaders.py
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-        COMMENT "Re-baking GLSL -> SPIR-V (af_shaders_vk.h) and GLSL ES -> af_shaders_gl.h")
+        COMMENT "Re-baking the GLES shader table (af_shaders_gl.h)")
 endif()
