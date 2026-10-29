@@ -1,17 +1,17 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_gl.cpp  --  the fallback renderer: EGL + OpenGL ES 3.1
+ *  AvatarForge :: af_gl.cpp  --  the renderer: EGL + OpenGL ES 3.1
  * ============================================================================================
  *
- *  Same shading model, same shader source, same frame structure as the Vulkan backend - this file
- *  is the other half of "runs on any Android device the app installs on":
+ *  The sole shipped graphics backend. This renderer uses the GLSL ES shader source across
+ *  supported Android devices:
  *
  *      EGL window surface -> MSAA HDR framebuffer -> resolve to HDR texture
  *                         -> bloom chain (down + additive up)
  *                         -> composite (exposure, ACES, vignette, dither, sRGB) -> window
- *      plus a depth-only shadow pass with a comparison-sampler map, exactly as in af_vk.cpp.
+ *      plus a depth-only shadow pass with a comparison-sampler map.
  *
- *  Differences from the Vulkan path, all of them API-mandated and commented where they matter:
+ *  GLES-specific implementation details:
  *      * objects are bound to the context instead of recorded into command buffers
  *      * multisampling is a framebuffer property here, so the HDR attachment is a multisampled
  *        renderbuffer that is blitted into a texture (GLES has no resolve-at-end-of-pass)
