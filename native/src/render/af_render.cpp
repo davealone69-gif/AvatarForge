@@ -33,8 +33,7 @@
 
 namespace af {
 
-/* Implemented in af_vk.cpp and af_gl.cpp respectively. */
-Renderer* createVulkanRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
+/* Only the OpenGL ES 3.1 renderer is built and shipped. */
 Renderer* createGlRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
 namespace {
@@ -178,27 +177,17 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
         return nullptr;
     }
 
-    std::string vulkanError = "the Vulkan backend is switched off in the viewer settings";
-    Renderer* backend = nullptr;
-    if (options.preferVulkan) backend = createVulkanRenderer(window, options, &vulkanError);
+    std::string glError;
+    Renderer* backend = createGlRenderer(window, options, &glError);
     if (backend) {
-        __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRender", "Vulkan backend initialized successfully");
+        __android_log_print(ANDROID_LOG_INFO, "AvatarForgeRender",
+                            "OpenGL ES 3.1 renderer initialized successfully");
         return new BudgetRenderer(backend, options);
     }
-    __android_log_print(ANDROID_LOG_ERROR, "AvatarForgeRender",
-                        "Vulkan backend failed; falling back to GLES. preferVulkan=%d reason=%s",
-                        options.preferVulkan ? 1 : 0, vulkanError.c_str());
-
-    std::string glError = "not attempted";
-    backend = createGlRenderer(window, options, &glError);
-    if (backend) return new BudgetRenderer(backend, options);
 
     if (error) {
-        std::string text = "no GPU backend available - Vulkan: ";
-        text += vulkanError.empty() ? std::string("unknown failure") : vulkanError;
-        text += "; OpenGL ES 3.1: ";
-        text += glError.empty() ? std::string("unknown failure") : glError;
-        *error = text;
+        *error = "OpenGL ES 3.1 renderer unavailable: ";
+        *error += glError.empty() ? std::string("unknown initialization failure") : glError;
     }
     return nullptr;
 }
