@@ -111,11 +111,6 @@ def describe(name, stage, size):
     print("  %-12s %-4s  %d bytes of GLSL ES" % (name, stage, size))
 
 
-def describe(name, stage, words, size=None):
-    extra = "%d words" % len(words) if words is not None else "%d bytes of GLSL ES" % size
-    print("  %-12s %-4s  %s" % (name, stage, extra))
-
-
 def c_string(text):
     """Emits a C string literal, one source line per shader line (so compiler errors from the GL
     driver still point at something readable)."""
