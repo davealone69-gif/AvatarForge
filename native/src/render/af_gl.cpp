@@ -1088,7 +1088,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(frame) * cameraStride_, sizeof(CameraUbo), &scene_.camera);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    /* Post slices, laid out exactly like the Vulkan path so the two cannot drift. */
+    /* Post-processing slices use one GLES-only implementation. */
     if (bloomLevels_ > 0) {
         PostUbo p{};
         const float hdrThreshold = (hdrInternalFormat_ == GL_RGBA16F) ? 1.0f : 0.62f;
