@@ -14,18 +14,18 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              GLES 3.1 renderer ◀────────────┤
+                              GLES 3.1 / opt-in native Vulkan ◀──┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The renderer is **GLES 3.1 only**; the
-Vulkan backend, SPIR-V table and backend preference have been removed. Camera movement is
-**user-confirmed working** on a physical device (exact build SHA not supplied). CI rebuilds and
-packages the Android artifacts, but device pixel correctness, sustained performance/thermal behaviour
-and production signing remain unverified or BLOCKED. `PROJECT_STATUS.md` and `docs/audit/` carry the
-current evidence labels; `DEVICE.md` is the ordered hardware sheet.
+The default renderer is **GLES 3.1**; an **opt-in native Vulkan** path has been restored separately,
+with GLES fallback on Vulkan startup/frame failure. The UV-atlas overflow and clip skinning hot path
+have focused host regressions, but the Vulkan restoration is **not yet verified on a Samsung GPU**.
+Camera movement was user-confirmed earlier (exact build SHA not supplied). CI builds exact-head
+Android artifacts; visible pixels, sustained performance/thermal behaviour and production signing
+remain unverified or BLOCKED. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ current evidence labels; `DEVICE.md` is the ordered hardware sheet.
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom OpenGL ES 3.1 renderer, written from scratch |
+| `native/src/render/` | Separate native GLES 3.1 and experimental Vulkan backends, no game engine |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
 | `rust/af-sys/`, `rust/af/` | Raw FFI bindings and the safe Rust wrapper |
@@ -64,7 +64,9 @@ Every one of these is a gate that fails loudly; none of them needs a device.
 ```bash
 tools/verify.sh                       # everything below, in one run
 tools/build_host.sh test              # kernel checks: geometry, rig, bake, ABI, GLB round trip, scene
-bash tools/test_renderer_host.sh      # GLES init/fallback/cleanup fault injection (no GPU)
+bash tools/test_renderer_host.sh      # GLES fault injection + Vulkan selector double (no GPU)
+python3 tools/test_renderer_artifacts.py # dual API ELF/package guard tests
+python3 tools/embed_vulkan_shaders.py --check # requires NDK glslc; validates native SPIR-V
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
 python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so

@@ -207,38 +207,42 @@ It writes `artifacts/device-report.txt` and prints the same report. It installs 
 Any missing measurement is printed as `UNAVAILABLE (reason)`. In particular, do not substitute
 SurfaceFlinger's GPU string for the `app GLES context` line.
 
-**Phase 1 is complete when** a current app context reports `backend=gles31` and GL ES 3.1 or later,
-non-empty frames are accepted, the in-app FPS and UI jank meet their targets (`janky` < 5 %,
-`p95` < 33.3 ms, ≥ 30 native FPS), memory is under 1.5 GB, there are zero crash entries, thermal
-did not reach `SEVERE`, **and the image is visually correct on the device**. Counts alone do not
-prove visible/sharp pixels.
+**Phase 1 is complete when** Self diagnostics reports the actual selected backend (`gles31`
+with GL ES 3.1+, or native `vulkan` with its own API/driver string), non-empty frames are accepted,
+the in-app FPS and UI jank meet their targets (`janky` < 5 %, `p95` < 33.3 ms, ≥ 30 native FPS),
+memory is under 1.5 GB, there are zero crash entries, thermal did not reach `SEVERE`, **and the
+image is visually correct on the device**. The `app GLES context` line applies only to GLES;
+system Vulkan capability and frame counters alone do not prove visible/sharp pixels.
 
 ### Samsung SM-S921B: driver and blurry clip retest
 
 1. Install the **exact-head** debug APK; run `python3 tools/verify_gles_artifacts.py <apk>` to
-   reject a bundled/linked Vulkan loader. Start the viewer, play `walk` and `run`, and run
-   `tools/device_check.sh --soak 120` with USB debugging authorised. Export **MENU → Self diagnostics**
-   during playback. Check `Backend: gles31`, the app context line, frames accepted and thermal
-   status. The previous report said `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)` and
-   `OpenGL ES 3.2 Driver version: 25.6.4`: that is GLES implemented by the **OS's ANGLE driver**;
-   the app does not initialize Vulkan. This is historical evidence, not a test of the new APK.
-2. If you specifically need the **native vendor GLES driver** rather than GLES-through-ANGLE,
-   use the phone's *per-app graphics-driver preference* to choose the system/vendor driver **if
-   offered by that Android build**, then relaunch and repeat the report. Do not infer a change
-   from the presence of a Vulkan capability flag: confirm the app's `GL_RENDERER` changes and
-   still reports `backend=gles31`. The app cannot override a platform-selected translation layer.
-3. With bloom **off**, capture one PNG with playback paused and one during `run` at the **same**
-   camera distance/FOV. Note quality level and thermal status; compare face/texture edges and
-   geometry, not screenshots at different zooms. Check orbit/pinch while playing. Share those
-   screenshots, both diagnostics exports and the exact APK SHA so the source of any remaining
-   blur can be isolated. This renderer has no motion-blur pass; disabling Vulkan in the app is
-   not by itself a sharpness fix.
+   require system-Vulkan plus GLES linkage and reject a **bundled** Vulkan loader. Start with
+   **GLES (default)**, play `walk` and `run`, and run `tools/device_check.sh --soak 120` with USB
+   debugging authorised. Export **MENU → Self diagnostics** during playback. Record the actual
+   `Backend: gles31`, app GLES context/driver, accepted presents, CPU frame time and thermal status.
+   The older `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)` report describes Android's GLES
+   translation layer, **not** this app's native Vulkan renderer.
+2. In RENDER settings opt into **Native Vulkan (experimental)**. The viewer must recreate the
+   native renderer. Capture another diagnostics export: `Backend: vulkan` with `API: Vulkan ...`
+   and the app's device/driver string confirms the distinct API was selected. If it still reports
+   `gles31`, initialization fell back; save the BACKEND_FALLBACK journal entry and
+   `adb logcat -s AvatarForgeRenderer:V` showing the Vulkan error. Test `walk`, `run`, rotation,
+   background/foreground, zoom/orbit and **Safe recovery**; a fatal VkResult must stop Vulkan and
+   re-create using safe GLES, not count blank frames. A third-party Vulkan Checker result does not
+   substitute for any of these in-app checks. To compare vendor GLES versus ANGLE, use the phone's
+   per-app driver setting if offered; the app cannot force that platform choice.
+3. With bloom **off**, capture paused and running PNGs for **each** active backend at the same
+   camera distance/FOV and quality/thermal state. Compare actual face/cloth/gear texture edges,
+   geometry and motion; the UV fix is a bake change, so regenerate the avatar with this APK rather
+   than reopening an older export. Share the matched captures, diagnostics and exact APK SHA.
+   This renderer has no motion-blur pass; Vulkan capabilities alone cannot establish sharpness.
 
 ### Phase 1 host-side state (what is proven, and what is not)
 
 | Phase 1 item | Host evidence | Device evidence |
 |---|---|---|
-| rendering runs | shader tables compile (12 stages), draw path exercised through the API surface | **none yet** — cannot be claimed |
+| rendering runs | 12 GLES stages / 13 Vulkan SPIR-V stages are CI-gated; GLES draw path and API selection are host-tested, not Vulkan pixels | **none yet** — cannot be claimed |
 | GLB loading | harness `[14]`: the exporter's own 34 MB file imports back with all 10 primitives sharing one vertex pool, 71 joints, inverse bind matrices, 52 morph targets, 5 decoded PNGs, and 45 hostile inputs rejected cleanly | **none yet** |
 | crash-free lifecycle | harness `[14]` hostile-input sweep (truncation, bit flips, cyclic graphs, bad accessor ranges) under ASan/UBSan; cancel/rotate paths are §9 below | **none yet** |
 | profiling | harness `[15]`: CPU stage timings exact against a synthetic clock, GPU timings reported as −1 when the device cannot measure them | **none yet** |

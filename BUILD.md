@@ -106,7 +106,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-android.ps1
 ```
 
 `native/CMakeLists.txt` builds three targets: the kernel (`afcore`), the renderer (`afrender`,
-links EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The Gradle build runs
+links system Vulkan plus EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). GLES is the
+app default; native Vulkan is an explicit per-viewer option. The Gradle build runs
 exactly this through `externalNativeBuild`; the manual invocation is there so the native side can be
 iterated without Gradle in the loop, and so the `.so` files can be built once and packaged many times
 (`-Paf.prebuiltJni=/path/to/prebuilt`, which is also the way to build the APK on a machine that has
@@ -114,9 +115,12 @@ no NDK - see the RAM note in §4).
 
 `tools/build_android.sh` produces `prebuilt/arm64-v8a/{libafcore,libafrender,libavatarforge}.so`
 (static-STL; Gradle strips them when packaging). `prebuilt/` is generated and git-ignored: stale
-Vulkan-era binaries were removed from tracking, and `tools/verify_gles_artifacts.py` rejects any
-prebuilt or packaged library that still links a Vulkan loader. `tools/build-android.ps1` is the
-Windows port and has **not** been executed here; use `-DryRun` to inspect its command lines.
+Old Vulkan-era binaries were removed from tracking. Despite its legacy filename,
+`tools/verify_gles_artifacts.py` now requires `libafrender.so` to link system `libvulkan.so` and
+EGL/GLESv3, and rejects bundling a Vulkan loader inside any APK/AAB/AAR. The checked-in Vulkan
+SPIR-V table is compiled from `native/src/render/shaders_vk/`; editing those sources requires NDK
+`glslc` and `python3 tools/embed_vulkan_shaders.py`. The GLES table remains independent.
+`tools/build-android.ps1` has **not** been executed here; use `-DryRun` to inspect its commands.
 
 ---
 
@@ -155,8 +159,8 @@ Generated binaries are no longer tracked. The authoritative deliverables are the
 artifacts from the **Android APK** workflow: `AvatarForge-debug-arm64.apk`, an explicitly
 `AvatarForge-release-UNSIGNED-arm64.aab` (compile verification only), `AvatarForge-sdk.aar`,
 `SHA256SUMS` and `PROVENANCE.json`. CI rebuilds the ARM64 natives from the checkout, verifies
-GLES-only linkage, checks the APK/AAB/AAR, and uploads the result. Production signed AAB/APK delivery
-requires real signing credentials and remains BLOCKED until they are supplied.
+dual-API/system-loader linkage, checks the APK/AAB/AAR, and uploads the result. Production signed
+AAB/APK delivery requires real signing credentials and remains BLOCKED until they are supplied.
 
 
 ## 5. Rust crates

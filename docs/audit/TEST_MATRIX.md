@@ -1,5 +1,19 @@
 # Test matrix
 
+## Current branch — 2026-10-30
+
+| Gate | Result | Limit |
+|---|---|---|
+| Host kernel/UV/clip | **411 checks / 0 failures** | CPU and atlas invariants; not Samsung pixels |
+| GLES mocks + Vulkan selector double | **81 / 0** | No native Vulkan commands or GPU presentation |
+| Dual-API package guard unit tests | **3 / 0** | APK linkage still requires exact-head CI |
+| Vulkan SPIR-V provenance regressions | **4 / 0** | No local NDK `glslc` or `spirv-val`; CI compiles/validates |
+| Vulkan translation-unit syntax | **pass** with fetched headers | Not an NDK build or real GPU driver |
+| Android CI and SDK JVM | **pending** after shader-toolchain mismatch found | Must pass before APK delivery |
+| Live animation sharpness, startup, recovery | **UNVERIFIED** | Requires exact-head APK on SM-S921B |
+
+## Historical matrix — preceding GLES-only branch
+
 | Layer | Test | Defect tied | Current result |
 |---|---|---|---|
 | Native GLES host mock | `tools/test_renderer_host.sh` | AF-002/003 frame error/counters/cleanup/C ABI parity; AF-025 option sanitisation | REAL + VERIFIED: **64 checks, 0 failures** (2026-10-29, up from 57) |

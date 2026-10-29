@@ -5,7 +5,7 @@
 | Text → avatar | InputScreen generate | `AvatarEngine.generateFromText/generate` | `af_engine_analyze_prompt`, `af_engine_run_all` | PARTIAL: host kernel + prior CI; current exact-head CI pending |
 | Image cues → avatar | InputScreen images | `analyseImages`, `specFromImages` | `af_engine_analyze_images` | PARTIAL: coarse classical cues only; not identity reconstruction |
 | GLB export | Viewer export | `engineExportGlb`, SAF copy | `af_engine_export_glb` | REAL + VERIFIED by user GLB files and validator; current-head device export pending |
-| 3D viewer | ViewerScreen surface | `RenderSurfaceView`, `rendererFrame` | GLES 3.1 backend (Vulkan removed) | PARTIAL: prior device renders; current frame-error path device-unverified |
+| 3D viewer | ViewerScreen surface + native Vulkan opt-in | `RenderSurfaceView`, `rendererFrame`, actual-backend diagnostics | GLES 3.1 default + separate Vulkan renderer, bounded GLES fallback | PARTIAL: selector/GLES host-tested; restored Vulkan pixels device-unverified |
 | Camera orbit/zoom/panel | ViewerScreen gestures/chips/sliders | `CameraGesture`, `rendererSetCamera` | `CameraState` UBO | PARTIAL: JVM gesture tests + CI; device movement unverified |
 | Animation clips | Viewer pose/clip controls | `rendererSetClip`, `engineApplyClip` | clip sampling/skinning | PARTIAL: device reports show triangles; clip correctness needs visual matrix |
 | Blendshapes | Viewer expression controls | `engineApplyBlendshapes` | morph bake/apply | PARTIAL: 52 morphs in GLB census; visual quality unverified |

@@ -11,7 +11,7 @@ Status: **PARTIAL** — source trace is real; Android/device execution remains C
 | Render view | `sdk/.../render/RenderSurfaceView.kt` | Dedicated `HandlerThread`; Surface create/resize/destroy generation tokens | REAL + VERIFIED by source and host sequencing tests; physical Surface lifecycle unverified |
 | JNI | `native/src/android/af_jni.cpp` | Translates Kotlin arrays/direct buffers; callback global refs | PARTIAL: bounds checks exist; callback exception cleanup added; raw handle validity still relies on Kotlin lifetime |
 | Kernel | `native/src/af_engine.cpp` + geometry/rig/UV/texture/GLB | Thread-affine handle; borrowed pointers valid until next mutation | REAL + VERIFIED by host harness; concurrent renderer reads are not fully fenced |
-| Renderer | `native/src/render/af_render.cpp` → `af_gl.cpp` (GLES 3.1 only; `af_vk.cpp` deleted) | One renderer per Surface, one owning thread | PARTIAL: frame errors now propagate; GLES device pixels still unverified |
+| Renderer | `native/src/render/af_render.cpp` → `af_gl.cpp` (default GLES 3.1) or restored `af_vk.cpp` (opt-in native Vulkan) | One renderer per Surface, one owning thread | PARTIAL: startup/frame failures propagate; Vulkan host mock tests selection, not device pixels |
 | Rust | `rust/af`, `rust/af-core`, `rust/af-sys` | Optional RAII binding; not a Gradle module | UNVERIFIED: no Rust toolchain in this environment; renderer C ABI telemetry not yet mirrored |
 
 ## Critical execution paths

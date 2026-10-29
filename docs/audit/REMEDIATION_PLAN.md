@@ -1,5 +1,11 @@
 # Remediation plan
 
+**Current-branch override (2026-10-30):** The GLES-only plan below is a historical snapshot.
+The user explicitly requested the separate native Vulkan renderer be restored. Source and host
+checks are documented in [the restoration report](../VULKAN_RESTORE_2026-10-30.md); the first P0
+item is now matched **GLES versus native Vulkan** live-clip/device testing with a safe-GLES fallback.
+Do not describe the earlier removal/linker-guard outcome as the current APK.
+
 ## Done in the 2026-10-29 zero-trust pass
 
 - Close the read/write ownership hole (was P0 #2): one `KernelAccess` fence around every mesh-mutating
@@ -28,7 +34,7 @@
 
 ## P0 — safety and truth
 
-1. Device-retest the GLES-only build and capture diagnostics before/after; camera is user-confirmed but exact-build evidence is still needed.
+1. Device-retest the exact-head build with GLES first, then opt-in native Vulkan during live walk/run clips; capture actual-backend diagnostics, matched paused/live PNGs, fallback/errors and thermal state. Camera is user-confirmed but exact-build evidence is still needed.
 2. ~~Add a full engine read/write fence or ownership transfer so render-thread reads cannot race UI mutations/generation.~~ **DONE (AF-020)** — source + host compile proof; a device soak with clip playback, camera drags and expression edits still has to run.
 3. Implement diagnostic scene ladder and label submission vs visible output separately.
 4. Supply production signing credentials to unblock signed AAB/APK release.

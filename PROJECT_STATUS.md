@@ -1,6 +1,21 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft. `main` is untouched at `40ef65b`.
+## Current branch — 2026-10-30 (`arena/c87f5c50-avatarforge`)
+
+The user reversed the GLES-only direction and requested **a separate native Vulkan renderer**,
+with blur occurring during **live animation clips**. GLES remains the default and a safe fallback;
+Vulkan is an explicit viewer toggle, *not* the OS's ANGLE-on-Vulkan GLES implementation. UV atlas
+packing (AF-034) and animation skinning (AF-035) fixes were ported from the newer upstream branch.
+Host verification: kernel **411/0**, renderer GLES/selector double **81/0**, linkage-guard tests
+**3/0**, Vulkan source host C++ syntax check passed. Exact-head Android CI, Vulkan shader compiler
+verification, Kotlin tests and Samsung GPU/pixel evidence are still pending; neither backend is
+claimed visually correct on the phone. See [restoration report](docs/VULKAN_RESTORE_2026-10-30.md)
+and [device checklist](DEVICE.md). The older branch snapshot below is historical.
+
+## Historical snapshot — prior `arena/aaf85469-avatarforge` branch (2026-10-29)
+
+PR #20 remained draft when recorded below; `main` was then at `40ef65b`. Statements that Vulkan
+was removed or linkage was GLES-only describe that earlier checkpoint, **not this branch**.
 
 ## Active checkpoint — zero-trust audit and repair pass (2026-10-29)
 

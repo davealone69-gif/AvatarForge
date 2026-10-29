@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Fail-closed, deterministic Vulkan 1.0 SPIR-V embedding.
+"""Fail-closed Vulkan 1.0 SPIR-V embedding with pinned historical provenance.
 
 The Vulkan dialect lives in shaders_vk/, independent of GLES's shaders/. With no
-compiler, --check fails and regeneration never touches the checked-in table. In
-particular, missing glslc can NEVER replace working SPIR-V with an empty table.
+compiler, --check fails and regeneration never touches the checked-in table. A
+pre-removal SPIR-V snapshot is allowed if BOTH source and table hashes match the
+known-good predecessor, and its modules pass spirv-val. Different compiler
+versions can otherwise emit different SPIR-V for byte-identical GLSL sources.
 """
 import argparse
+import hashlib
 from pathlib import Path
 import re
 import shutil
@@ -26,6 +29,14 @@ REQUIRED = {
     ("forward_plus", "comp"),
 }
 ENUM = {"vert": "AF_STAGE_VERT", "frag": "AF_STAGE_FRAG", "comp": "AF_STAGE_COMP"}
+
+# The pre-removal table is from 76fdebab014b029680ed7df56eb0db2a916c8aaf.
+# All 13 preprocessed compiler inputs are byte-identical to that commit. Its
+# header differs from ours only in the corrected generator-name comment.
+# This explicit exception allows the original, validated binaries across glslc
+# versions without accepting ANY later unregenerated edits to GLSL or SPIR-V.
+LEGACY_SOURCE_SHA256 = "f86924f2e169fb38a66c57f416d86db9efc8414618c91752d480163d78dea976"
+LEGACY_TABLE_SHA256 = "17849526c8d35c6fe0dedbfa77ed9f7e3d49fff2c6e75084eb1e8fdeddff0dbf"
 
 
 def compiler():
@@ -81,9 +92,58 @@ def embed(entries):
     return "".join(out)
 
 
+def source_digest(stages):
+    """Hash the actual 13 GLSL compiler inputs, including stage keys and lengths."""
+    digest = hashlib.sha256()
+    for name, stage, path in stages:
+        shader = source(path, stage).encode("utf-8")
+        digest.update(f"{name}.{stage}\0{len(shader)}\0".encode("ascii"))
+        digest.update(shader)
+    return digest.hexdigest()
+
+
+def historical_entries(stages, header):
+    """Only admit the literal upstream source + table pair, not arbitrary stale SPIR-V."""
+    if source_digest(stages) != LEGACY_SOURCE_SHA256:
+        return None
+    if hashlib.sha256(header.encode("utf-8")).hexdigest() != LEGACY_TABLE_SHA256:
+        return None
+    modules = re.findall(
+        r"static const uint32_t kSpv_([a-z_]+)_(vert|frag|comp)\[(\d+)\] = \{(.*?)\n\};",
+        header, re.DOTALL)
+    entries = []
+    for name, stage, count, text in modules:
+        words = tuple(int(word, 16) for word in re.findall(r"0x([0-9a-fA-F]{8})u", text))
+        if not words or words[0] != 0x07230203 or len(words) != int(count):
+            return None
+        entries.append(((name, stage), words))
+    if {key for key, _ in entries} != REQUIRED or len(entries) != len(REQUIRED):
+        return None
+    if embed(entries) != header:
+        return None
+    return entries
+
+
+def validate_historical_table(stages, header, validator):
+    entries = historical_entries(stages, header)
+    if entries is None:
+        return False
+    if not validator.is_file():
+        raise RuntimeError("historical Vulkan table requires spirv-val alongside glslc")
+    with tempfile.TemporaryDirectory(prefix="af-vulkan-verify-") as directory:
+        for (name, stage), words in entries:
+            output = Path(directory) / f"{name}.{stage}.spv"
+            output.write_bytes(struct.pack(f"<{len(words)}I", *words))
+            result = subprocess.run([str(validator), "--target-env", "vulkan1.0", str(output)],
+                                    capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError(f"embedded SPIR-V rejected: {name}.{stage}: {result.stdout}{result.stderr}")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="compile and reject stale embedded SPIR-V")
+    parser.add_argument("--check", action="store_true", help="compile and verify exact or pinned historical SPIR-V")
     args = parser.parse_args()
     stages = sorted((p.stem, p.suffix[1:], p) for p in SHADERS.iterdir()
                     if p.suffix in (".vert", ".frag", ".comp"))
@@ -118,9 +178,15 @@ def main():
             print(f"  PASS {name}.{stage}: {len(words)} words")
     table = embed(entries)
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != table:
+        checked_in = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+        if checked_in == table:
+            print(f"PASS: {len(entries)} Vulkan stages compiled and embedded table matches")
+        elif validate_historical_table(stages, checked_in, validator):
+            print(f"PASS: {len(entries)} Vulkan sources compiled; historical source/table hashes "
+                  "match 76fdebab and all embedded modules pass spirv-val "
+                  "(NDK glslc emits different optimized bytes)")
+        else:
             raise RuntimeError("embedded Vulkan table is stale; run tools/embed_vulkan_shaders.py")
-        print(f"PASS: {len(entries)} Vulkan stages compiled and embedded table matches")
     else:
         OUTPUT.write_text(table, encoding="utf-8")
         print(f"Embedded {len(entries)} Vulkan stages")

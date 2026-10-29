@@ -1,5 +1,11 @@
 # AvatarForge — status
 
+**Current branch (2026-10-30).** The default is GLES 3.1, with an explicitly selectable native
+Vulkan backend restored. The Vulkan path has source/host checks but no completed device pixel test;
+see [PROJECT_STATUS.md](PROJECT_STATUS.md) and [the restoration report](docs/VULKAN_RESTORE_2026-10-30.md).
+The entries below preserve an older 2026-10-18/29 checkpoint and its artifact references; they
+are not proof that the current branch was built or tested on a phone.
+
 **What this is.** A standalone Android app that generates, auto-rigs, animates and renders a
 photorealistic full-body 3D avatar entirely on the device, from a text prompt, a photo, or a
 two-image reference flow (identity + equipment). No server, no network, no game engine.
