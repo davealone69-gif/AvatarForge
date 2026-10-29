@@ -11,7 +11,6 @@
  *  Architecture
  *  ------------
  *      Renderer (abstract)                 af_render.h      <- this file; the app/JNI talks to this
- *        ├── VulkanRenderer                af_vk.cpp        <- VK 1.0/1.1 core, no extensions required
  *        └── GlRenderer                    af_gl.cpp        <- EGL + OpenGL ES 3.1
  *
  *      create() initialises OpenGL ES 3.1 against the ANativeWindow. If GLES cannot initialise,
@@ -109,8 +108,8 @@ struct RendererStats {
     uint64_t frameAttempts = 0;
     uint64_t frameSubmissions = 0;
     uint64_t presentRequestsAccepted = 0;
-    int   lastVkResult = 0;     /* VK_SUCCESS is zero; exact last failing VkResult otherwise */
-    bool  frameFatal = false;   /* renderer stopped after unrecoverable Vulkan/surface failure */
+    int   lastBackendError = 0; /* reserved graphics error code; zero means no reported error */
+    bool  frameFatal = false;   /* renderer stopped after unrecoverable graphics/surface failure */
 };
 
 struct RendererInfo {
