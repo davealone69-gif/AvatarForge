@@ -71,10 +71,19 @@ jobs:
       - name: SDK JVM regression tests (recovery policy, probe, journal)
         run: |
           chmod +x ./gradlew
+          set +e
           ./gradlew --no-daemon --stacktrace --console=plain \
             :sdk:testDebugUnitTest \
             -Paf.abIs=arm64-v8a \
-            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt"
+            -Paf.prebuiltJni="$GITHUB_WORKSPACE/prebuilt" > sdk-jvm-tests.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            python3 tools/report_jvm_failures.py sdk-jvm-tests.log sdk/build/test-results
+            tail -n 120 sdk-jvm-tests.log
+            exit "$status"
+          fi
+          tail -n 20 sdk-jvm-tests.log
 
       - name: Build debug APK, release APK, and SDK AAR
         run: |
