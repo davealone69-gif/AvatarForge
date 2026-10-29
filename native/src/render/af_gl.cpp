@@ -1057,9 +1057,7 @@ void GlRenderer::updateScene(float deltaSeconds) {
     projectToSh(env_, &sh_, 1024);
 
     modelBounds(engine_, scene_.modelMin, scene_.modelMax, &scene_.hasModel);
-    /* depthZeroToOne = false: GL clip space, which is also why the ES dialect of the shaders has
-       AF_CLIP_Y = +1 and rescales the shadow lookup's z. */
-    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_, false);
+    buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_);
     int lodIndexCounts[kAvatarLodLevels] = {};
     int lodCount = avatarLods_.levelCount();
     if (lodCount > 0) {
