@@ -1023,7 +1023,7 @@ static void testTexturing() {
         const double p99 = density[(density.size() * 99) / 100];
         CHECK(median > 0.0, "median texel density is positive (%.4g uv/m2)", median);
         CHECK(p01 > median / 400.0,
-              "the worst 1%% of triangles still own a quarter of the median texel density"
+              "the worst 1%% of triangles retain at least 1/400 of median texel density"
               " (%.4g against %.4g uv/m2)",
               p01, median);
         CHECK(p99 < median * 400.0, "the densest 1%% stays within 400x of the median (%.4g)", p99);

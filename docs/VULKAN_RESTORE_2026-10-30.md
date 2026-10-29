@@ -36,9 +36,11 @@ playback inside the viewer, not an encoded recording.
   cannot silently select the experimental backend.
 - The Vulkan backend owns an Android window reference across surface recreation. It propagates
   unrecoverable `vkAcquire`/`vkResetCommandBuffer`/record/submit/present and target-rebuild errors
-  through `frameError()` to JNI's exception and one safe GLES recovery. Submission/accepted-present
-  counters are only advanced after their respective successful calls; **none proves visible pixels**.
-  Anisotropy is clamped against the actual physical-device limit and capped at 4×.
+  through `frameError()` to JNI's exception and one safe GLES recovery. Atlas upload, white
+  placeholder clear, material-buffer and descriptor failures also stop rather than reporting a
+  presented but untextured avatar. Submission/accepted-present counters are only advanced after
+  their respective successful calls; **none proves visible pixels**. Anisotropy is clamped against
+  the actual physical-device limit and capped at 4×.
 - Android build links the **system** `libvulkan.so` alongside EGL/GLES. The artifact gate requires
   all three, rejects a bundled Vulkan loader, and runs on APK/AAB/AAR. Shader regeneration is
   fail-closed if NDK `glslc` is missing: it cannot overwrite SPIR-V with an empty table.
@@ -51,12 +53,17 @@ playback inside the viewer, not an encoded recording.
 - `bash tools/test_renderer_host.sh`: **81 checks, 0 failures** (real GLES/EGL mock and a
   factory-only Vulkan double). It does not execute Vulkan commands.
 - `python3 tools/test_renderer_artifacts.py`: **3 tests pass**; package/linkage logic only.
+- `python3 tools/test_embed_vulkan_shaders.py`: **6 tests pass**. Sources and the actual checked-in
+  SPIR-V table match the byte-identical pre-removal snapshot; mutations to either are rejected.
+  Validator calls are mocked in this local test, **not** a local SPIR-V compilation.
 - `g++ -fsyntax-only` against temporarily fetched Vulkan headers: `af_vk.cpp` and its helper
   translation units compile on the host. **Not an NDK build or GPU test.** `python3
   tools/embed_vulkan_shaders.py --check` requires NDK `glslc`, unavailable locally; CI runs it.
-- Android exact-head CI and Kotlin/JVM regression results: **pending**. This line must be updated
-  from the run status before treating the APK as built. No `adb`, local Android SDK/NDK, or
-  SM-S921B is attached here; neither backend's live image can be visually approved here.
+- Android APK workflow compiles both shader dialects, validates the SHA-pinned historical Vulkan
+  SPIR-V modules with NDK `spirv-val`, and gates ARM64 native build, JVM tests and APK packaging.
+  **Check the run for the current commit before treating its APK as built**; a green build still
+  cannot approve pixels. No `adb`, local Android SDK/NDK, or SM-S921B is attached here, so
+  neither backend's live image has been visually approved.
 
 **Device gate:** install the exact-head debug APK, regenerate an avatar, compare paused `REST`
 with live `walk`/`run` at matched camera/quality/thermal state on both GLES and explicit native

@@ -66,7 +66,8 @@ tools/verify.sh                       # everything below, in one run
 tools/build_host.sh test              # kernel checks: geometry, rig, bake, ABI, GLB round trip, scene
 bash tools/test_renderer_host.sh      # GLES fault injection + Vulkan selector double (no GPU)
 python3 tools/test_renderer_artifacts.py # dual API ELF/package guard tests
-python3 tools/embed_vulkan_shaders.py --check # requires NDK glslc; validates native SPIR-V
+python3 tools/test_embed_vulkan_shaders.py # pinned-source/table provenance regressions
+python3 tools/embed_vulkan_shaders.py --check # requires NDK glslc + spirv-val for pinned table
 python3 tools/abi_manifest.py --check # the checked-in manifest still matches afcore.h
 python3 tools/abi_conformance.py build-host/libafcore.so --require-complete
 python3 tools/abi_conformance.py rust/target/release/libafcore.so --reference build-host/libafcore.so

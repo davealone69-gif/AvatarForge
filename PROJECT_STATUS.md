@@ -7,9 +7,10 @@ with blur occurring during **live animation clips**. GLES remains the default an
 Vulkan is an explicit viewer toggle, *not* the OS's ANGLE-on-Vulkan GLES implementation. UV atlas
 packing (AF-034) and animation skinning (AF-035) fixes were ported from the newer upstream branch.
 Host verification: kernel **411/0**, renderer GLES/selector double **81/0**, linkage-guard tests
-**3/0**, Vulkan source host C++ syntax check passed. Exact-head Android CI, Vulkan shader compiler
-verification, Kotlin tests and Samsung GPU/pixel evidence are still pending; neither backend is
-claimed visually correct on the phone. See [restoration report](docs/VULKAN_RESTORE_2026-10-30.md)
+**3/0**, SPIR-V provenance regressions **6/0**, Vulkan source host C++ syntax check passed.
+Check the Android APK workflow for the **current commit's** shader/NDK/Kotlin/artifact outcome;
+its status cannot be inferred from a prior commit. Samsung GPU/pixel evidence is still missing;
+neither backend is claimed visually correct on the phone. See [restoration report](docs/VULKAN_RESTORE_2026-10-30.md)
 and [device checklist](DEVICE.md). The older branch snapshot below is historical.
 
 ## Historical snapshot — prior `arena/aaf85469-avatarforge` branch (2026-10-29)

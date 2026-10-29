@@ -1903,7 +1903,7 @@ bool VulkanRenderer::createDescriptorPool(std::string* error) {
 
 bool VulkanRenderer::writeDescriptorSets(std::string* error) {
     if (!descriptorPool_) return true;
-    vkResetDescriptorPool(device_, descriptorPool_, 0);
+    AF_VK_CHECK(vkResetDescriptorPool(device_, descriptorPool_, 0));
 
     /* One descriptor set per post pass (each needs its own source image), plus one for the
        geometry pass and one for the material set. All of them carry the camera block (dynamic
@@ -2045,11 +2045,10 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
     /* A fresh image's contents are undefined, and an undefined value in a PBR multiply is not
        acceptable even when the shader is about to ignore it, so each placeholder is cleared to
        white with a one-shot command buffer. */
-    VkCommandPool tmpPool = VK_NULL_HANDLE;
-    VkCommandPoolCreateInfo poolCi{};
-    poolCi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolCi.queueFamilyIndex = queueFamily_;
-    if (commandPool_ == VK_NULL_HANDLE) vkCreateCommandPool(device_, &poolCi, nullptr, &tmpPool);
+    if (commandPool_ == VK_NULL_HANDLE) {
+        if (error) *error = "atlas placeholder needs a command pool";
+        return false;
+    }
 
     for (int i = 0; i < AF_TEX_COUNT; ++i) {
         if (atlasViews_[i] != VK_NULL_HANDLE) continue;
@@ -2064,20 +2063,23 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool = tmpPool ? tmpPool : commandPool_;
+        ai.commandPool = commandPool_;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
-        vkAllocateCommandBuffers(device_, &ai, &cmd);
+        VkResult result = vkAllocateCommandBuffers(device_, &ai, &cmd);
+        if (result != VK_SUCCESS) {
+            setError(error, "atlas vkAllocateCommandBuffers", result);
+            return false;
+        }
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        const VkResult beginResult = vkBeginCommandBuffer(cmd, &bi);
-    if (beginResult != VK_SUCCESS) {
-        lastFrameVkResult_ = beginResult;
-        stats_.lastVkResult = int(beginResult);
-        std::fprintf(stderr, "AvatarForge Vulkan: vkBeginCommandBuffer failed (VkResult %d)\\n", int(beginResult));
-        return false;
-    }
+        result = vkBeginCommandBuffer(cmd, &bi);
+        if (result != VK_SUCCESS) {
+            setError(error, "atlas vkBeginCommandBuffer", result);
+            vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+            return false;
+        }
         imageBarrier(cmd, atlasImages_[i], VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         VkClearColorValue white{};
@@ -2095,16 +2097,21 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
         toShader.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &toShader);
-        vkEndCommandBuffer(cmd);
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd;
-        vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(queue_);
-        vkFreeCommandBuffers(device_, ai.commandPool, 1, &cmd);
+        result = vkEndCommandBuffer(cmd);
+        if (result == VK_SUCCESS) {
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+            result = vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+            if (result == VK_SUCCESS) result = vkQueueWaitIdle(queue_);
+        }
+        vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+        if (result != VK_SUCCESS) {
+            setError(error, "atlas placeholder clear/submit", result);
+            return false;
+        }
     }
-    if (tmpPool) vkDestroyCommandPool(device_, tmpPool, nullptr);
     atlasWidth_ = 0;
     atlasHeight_ = 0;
     return true;
@@ -2363,7 +2370,7 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
 
 /** Writes one std140 material block per submesh, plus one extra block for the studio ground. */
 void VulkanRenderer::rebuildMaterialBlocks() {
-    if (!engine_ || !device_) return;
+    if (!engine_ || !device_ || frameFatal_) return;
     const int submeshCount = af_engine_submesh_count(engine_);
     const af_submesh* submeshes = af_engine_submeshes(engine_);
     const af_material* materials = af_engine_materials(engine_);
@@ -2376,7 +2383,16 @@ void VulkanRenderer::rebuildMaterialBlocks() {
     if (needed > materialUboSize_) {
         /* Grow once and for all: the descriptor points at the buffer object, so it has to be
            rewritten, and that must not happen while a frame is still reading the old one. */
-        vkDeviceWaitIdle(device_);
+        const VkResult idle = vkDeviceWaitIdle(device_);
+        if (idle != VK_SUCCESS) {
+            frameError_ = "Vulkan material buffer wait failed (VkResult " +
+                          std::to_string(int(idle)) + ")";
+            lastFrameVkResult_ = idle;
+            stats_.lastVkResult = int(idle);
+            frameFatal_ = true;
+            stats_.frameFatal = true;
+            return;
+        }
         if (materialUbo_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, materialUbo_, nullptr);
             vkFreeMemory(device_, materialUboMem_, nullptr);
@@ -2389,10 +2405,19 @@ void VulkanRenderer::rebuildMaterialBlocks() {
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &materialUbo_, &materialUboMem_, &materialUboMapped_)) {
             materialUboSize_ = 0;
+            frameError_ = "Vulkan material buffer allocation failed";
+            frameFatal_ = true;
+            stats_.frameFatal = true;
             return;
         }
         materialUboSize_ = capacity;
-        writeDescriptorSets(nullptr);
+        std::string descriptorError;
+        if (!writeDescriptorSets(&descriptorError)) {
+            frameError_ = "Vulkan material descriptor rebuild failed: " + descriptorError;
+            frameFatal_ = true;
+            stats_.frameFatal = true;
+            return;
+        }
     }
 
     char* base = static_cast<char*>(materialUboMapped_);
@@ -3077,6 +3102,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     const bool acquiredSuboptimal = acquired == VK_SUBOPTIMAL_KHR;
 
     updateScene(deltaSeconds);
+    if (frameFatal_) return; // material/descriptor failure; JNI must switch to safe GLES
     updateAnimation(deltaSeconds);
 
     const VkResult commandReset = vkResetCommandBuffer(cmd_[frameIndex_], 0);
@@ -3272,7 +3298,15 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
     }
     if (engine_ && device_) {
         std::string error;
-        uploadAtlas(&error);
+        if (!uploadAtlas(&error)) {
+            /* Missing texels must not be silently replaced with a white atlas: it looks like
+               blurry/missing material while the present counter still advances. */
+            frameError_ = "Vulkan atlas upload failed: " +
+                          (error.empty() ? std::string("unknown error") : error);
+            frameFatal_ = true;
+            stats_.frameFatal = true;
+            return;
+        }
         rebuildMaterialBlocks();
     }
 }

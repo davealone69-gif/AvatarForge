@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Regression tests for the narrowly pinned pre-removal Vulkan SPIR-V snapshot."""
+import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import embed_vulkan_shaders as vk
@@ -40,6 +42,19 @@ class VulkanShaderSnapshotTests(unittest.TestCase):
         with patch.dict("os.environ", {"AF_GLSLC": "/missing/glslc"}):
             with self.assertRaisesRegex(RuntimeError, "does not name a file"):
                 vk.compiler()
+
+    def test_historical_path_requires_a_real_validator(self):
+        with self.assertRaisesRegex(RuntimeError, "requires spirv-val"):
+            vk.validate_historical_table(self.stages, self.header, Path("/missing/spirv-val"))
+
+    def test_historical_path_validates_all_thirteen_modules(self):
+        # Mock the process boundary only; CI uses NDK's actual spirv-val on real SPIR-V.
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with patch.object(vk.subprocess, "run", return_value=ok) as run:
+            self.assertTrue(vk.validate_historical_table(self.stages, self.header, Path("/bin/true")))
+            self.assertEqual(13, run.call_count)
+            self.assertTrue(all(call.args[0][1:3] == ["--target-env", "vulkan1.0"]
+                                for call in run.call_args_list))
 
 
 if __name__ == "__main__":

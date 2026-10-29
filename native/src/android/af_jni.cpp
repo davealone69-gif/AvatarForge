@@ -913,6 +913,11 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererAt
         return AF_ERR_INVALID_ARG;
     }
     renderer->attachEngine(handle->engine);
+    const std::string frameError = renderer->frameError();
+    if (!frameError.empty()) {
+        throwIllegalState(env, "rendererAttachEngine", AF_ERR_INTERNAL, frameError);
+        return AF_ERR_INTERNAL;
+    }
     return AF_OK;
 }
 

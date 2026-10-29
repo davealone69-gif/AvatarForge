@@ -118,8 +118,11 @@ no NDK - see the RAM note in §4).
 Old Vulkan-era binaries were removed from tracking. Despite its legacy filename,
 `tools/verify_gles_artifacts.py` now requires `libafrender.so` to link system `libvulkan.so` and
 EGL/GLESv3, and rejects bundling a Vulkan loader inside any APK/AAB/AAR. The checked-in Vulkan
-SPIR-V table is compiled from `native/src/render/shaders_vk/`; editing those sources requires NDK
-`glslc` and `python3 tools/embed_vulkan_shaders.py`. The GLES table remains independent.
+SPIR-V table is compiled from `native/src/render/shaders_vk/`. The original pre-removal table is
+SHA-pinned to its byte-identical source inputs because this NDK's `glslc -O` emits different
+optimized bytes; CI compiles the sources and validates every pinned module with `spirv-val`.
+Editing those sources requires NDK `glslc` and `python3 tools/embed_vulkan_shaders.py` to update
+the table, followed by review of the historical-snapshot regression. GLES remains independent.
 `tools/build-android.ps1` has **not** been executed here; use `-DryRun` to inspect its commands.
 
 ---
