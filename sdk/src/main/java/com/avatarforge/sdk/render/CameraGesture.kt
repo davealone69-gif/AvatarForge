@@ -19,7 +19,11 @@ object CameraGesture {
     fun clamped(camera: CameraSettings): CameraSettings {
         val yaw = if (camera.yawDeg.isFinite()) normalizeYaw(camera.yawDeg) else 180f
         val pitch = if (camera.pitchDeg.isFinite()) camera.pitchDeg.coerceIn(MIN_PITCH, MAX_PITCH) else 4f
-        val distance = if (camera.distance.isFinite()) camera.distance.coerceIn(MIN_DISTANCE, MAX_DISTANCE) else 3.5f
+        val distance = if (camera.distance.isFinite() && camera.distance > 0f) {
+            camera.distance.coerceIn(MIN_DISTANCE, MAX_DISTANCE)
+        } else {
+            3.5f
+        }
         val targetY = if (camera.targetY.isFinite()) camera.targetY.coerceIn(0f, 2.5f) else 0.95f
         val fov = if (camera.fovDeg.isFinite()) camera.fovDeg.coerceIn(20f, 60f) else 32f
         return camera.copy(yawDeg = yaw, pitchDeg = pitch, distance = distance, targetY = targetY, fovDeg = fov)
