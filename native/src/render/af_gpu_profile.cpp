@@ -65,7 +65,6 @@ GpuProfile makeGpuProfile(const GpuDeviceCaps& caps) {
 
     if (caps.softwareRenderer || combined.find("swiftshader") != std::string::npos ||
         combined.find("llvmpipe") != std::string::npos ||
-        combined.find("lavapipe") != std::string::npos ||
         combined.find("software raster") != std::string::npos) {
         family = "software";
         tier = GpuTier::LOW;
