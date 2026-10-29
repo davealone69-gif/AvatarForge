@@ -14,7 +14,7 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              Vulkan / GLES 3.1 renderer ◀────────────┤
+                              OpenGL ES 3.1 renderer ◀────────────┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
@@ -25,11 +25,9 @@ ABI symbols, while the Rust alternative implements **15/47** and matches the C++
 functions it covers. Host coverage includes culling, index-only renderer LOD data, adaptive atlas
 budget selection, GPU-profile policy, ASTC/ETC2 encoding and mip generation, an ASTC decode round-trip,
 asynchronous compression polling, a staged native pipeline, and image-role mapping after a rejected
-image. GL/Vulkan sources pass host syntax-only compilation with downloaded Khronos headers and an
-Android-window stub; CMake host configuration and the scalar ASTC/ETC2 static codec targets also build.
+image. The GLES renderer has a headless Mesa pixel-regression test path. Current GLES-only branch changes still require exact-head CI and Android NDK build verification.
 This is **not** an Android NDK build or a GPU upload/runtime test. Kotlin lifecycle, dependency-graph,
-thermal and resource changes remain **uncompiled**. The compressed GL/Vulkan upload paths are integrated
-but have not been exercised on hardware. The checked-in 0.10.1 APK/AAR predate this follow-up.
+thermal and resource changes remain **uncompiled**. The GLES texture upload path has not yet been exercised on the target Samsung hardware for this branch. The checked-in 0.10.1 APK/AAR predate this follow-up.
 **Nothing has been run on a physical Android device**; `DEVICE.md` is the hardware checklist and
 `tools/device_check.sh` collects evidence when a device is available.
 
@@ -39,7 +37,7 @@ but have not been exercised on hardware. The checked-in 0.10.1 APK/AAR predate t
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, GPU profiles and compressed atlas uploads |
+| `native/src/render/` | Custom OpenGL ES 3.1 renderer, GPU profiles and compressed atlas uploads |
 | `native/third_party/` | Vendored Apache-2.0 ASTC Encoder and Etc2Comp codecs |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
@@ -101,8 +99,7 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** Vulkan is the primary backend and OpenGL ES 3.1 the
-  fallback; no third-party engine is linked.
+* **The custom renderer stays custom.** OpenGL ES 3.1 is the only shipped graphics backend; no Vulkan renderer or third-party engine is linked.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
 
 ## Licence
@@ -112,7 +109,7 @@ Not yet chosen. Add a `LICENSE` before publishing this repository.
 
 ## Download and install the Android APK
 
-**Quick links:** [Download builds from GitHub Actions](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) · [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases) · [Current Vulkan recovery PR #14](https://github.com/davealone69-gif/AvatarForge/pull/14)
+**Quick links:** [Download builds from GitHub Actions](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) · [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases) · [GLES-only backend removal PR #21](https://github.com/davealone69-gif/AvatarForge/pull/21)
 
 **Fastest route:** open the [Android APK workflow](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) and open the latest successful run. Under **Artifacts**, download `AvatarForge-Android-<commit>` and extract the ZIP. Install `AvatarForge-debug-arm64.apk` for testing on a modern ARM64 Android phone.
 
