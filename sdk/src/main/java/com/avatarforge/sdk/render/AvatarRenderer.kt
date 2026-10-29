@@ -6,7 +6,7 @@
  * engine - see native/src/render/af_render.h for the architecture.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
- * that with RenderSurfaceView, which owns a dedicated GL/Vulkan thread. Calling any method here
+ * that with RenderSurfaceView, which owns a dedicated GLES render thread. Calling any method here
  * from another thread is a bug and the kernel will notice (the backends assert the thread).
  */
 package com.avatarforge.sdk.render
@@ -36,7 +36,6 @@ data class RendererInfo(
     val supportsFloatHdr: Boolean,
     val supportsAnisotropy: Boolean,
 ) {
-    val isVulkan: Boolean get() = backend.equals("vulkan", ignoreCase = true)
 }
 
 /** Live frame statistics. */
@@ -52,9 +51,9 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
-    /** Last Vulkan result code; zero is VK_SUCCESS. GLES reports zero. */
-    val lastVkResult: Int = 0,
-    /** True only when the Vulkan backend stopped after an unrecoverable failure. */
+    /** Reserved backend error code; zero means no reported graphics-backend error. */
+    val lastBackendError: Int = 0,
+    /** True when the renderer stopped after an unrecoverable graphics/surface failure. */
     val frameFatal: Boolean = false,
     /** Wrapping native accepted-frame sequence; not evidence of physical display/GPU completion. */
     val frameSequence: Int = 0,
@@ -65,7 +64,6 @@ data class RendererStats(
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
-    val preferVulkan: Boolean = true,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -95,7 +93,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     companion object {
         /**
-         * Creates a renderer for a live Surface. Throws when neither Vulkan nor GLES 3.1 can be
+         * Creates a renderer for a live Surface. Throws when OpenGL ES 3.1 cannot be
          * initialised - there is no software fallback and no "maybe it will work" path, because the
          * app's contract is that a button either does the real thing or is not there.
          */
@@ -106,12 +104,11 @@ class AvatarRenderer private constructor(private var handle: Long) {
             val handle = NativeBridge.rendererCreate(
                 surface,
                 settings.quality.value,
-                settings.preferVulkan,
                 settings.msaa,
                 settings.shadowMapSize,
                 settings.bloomLevels,
             )
-            check(handle != 0L) { "no GPU backend could be initialised (Vulkan and GLES 3.1 both refused)" }
+            check(handle != 0L) { "OpenGL ES 3.1 renderer could not be initialised" }
             val renderer = AvatarRenderer(handle)
             renderer.settings = settings
             renderer.applyOptions(settings)
@@ -147,7 +144,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
             msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
-            lastVkResult = ints[7], frameFatal = ints[8] != 0, frameSequence = ints[9],
+            lastBackendError = ints[7], frameFatal = ints[8] != 0, frameSequence = ints[9],
         )
     }
 
@@ -187,7 +184,6 @@ class AvatarRenderer private constructor(private var handle: Long) {
             newSettings.turbidity,
             newSettings.environmentIntensity,
             newSettings.groundPlane,
-            newSettings.preferVulkan,
             newSettings.msaa,
             newSettings.shadowMapSize,
             newSettings.bloomLevels,
