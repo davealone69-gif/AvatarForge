@@ -1017,6 +1017,18 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
             const jint sequence = stats.frames;
             env->SetIntArrayRegion(outInts, 9, 1, &sequence);
         }
+        if (env->GetArrayLength(outInts) >= 11) {
+            const jint value = stats.activeLod;
+            env->SetIntArrayRegion(outInts, 10, 1, &value);
+        }
+        if (env->GetArrayLength(outInts) >= 12) {
+            const jint value = stats.availableLods;
+            env->SetIntArrayRegion(outInts, 11, 1, &value);
+        }
+        if (env->GetArrayLength(outInts) >= 13) {
+            const jint value = stats.triangleBudgetExceeded ? 1 : 0;
+            env->SetIntArrayRegion(outInts, 12, 1, &value);
+        }
     }
     return AF_OK;
 }
