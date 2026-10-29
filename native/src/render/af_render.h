@@ -110,6 +110,9 @@ struct RendererStats {
     uint64_t presentRequestsAccepted = 0;
     int   lastBackendError = 0; /* reserved graphics error code; zero means no reported error */
     bool  frameFatal = false;   /* renderer stopped after unrecoverable graphics/surface failure */
+    int   activeLod = 0;        /* actual selected avatar LOD; zero is full detail */
+    int   availableLods = 0;    /* number of valid generated LOD levels, including full detail */
+    bool  triangleBudgetExceeded = false; /* true if even the coarsest generated LOD exceeds the mobile target */
 };
 
 struct RendererInfo {
