@@ -1,12 +1,67 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft. `main` is untouched at `40ef65b`.
+Updated: 2026-10-30. Branch: `arena/aaf85469-avatarforge`. PR #20 remains draft. `main` is untouched at `40ef65b`.
 
-## Active checkpoint — zero-trust audit and repair pass (2026-10-29)
+## Active checkpoint — field-evidence triage and renderer repair (2026-10-30)
 
-Full report: `docs/audit/AUDIT_2026-10-29_ZERO_TRUST.md`; new findings AF-020 … AF-033 in
-`docs/audit/FINDINGS.md`. The previous checkpoint (Vulkan removal + model details) is below and is
-unchanged by this pass.
+Full report: `docs/audit/AUDIT_2026-10-30_FIELD_EVIDENCE.md`; new findings AF-034 … AF-040 in
+`docs/audit/FINDINGS.md`; art-direction criteria in `docs/audit/ART_DIRECTION_TARGETS.md`.
+
+This pass started from the user's own device captures ("This is current shit!!") and their
+reference set ("Use these as guides"), and it reproduced the defect instead of reading the code and
+guessing. A reference rasteriser (`/home/user/fault-review/probe/preview.cpp`) draws the engine's
+own vertex buffer with its own baked atlas, so the model can be looked at without a phone; that is
+what turned "the screenshots look wrong" into a before/after pair.
+
+Repaired in this pass:
+
+- **AF-034 (Critical) — the atlas overflow that corrupted every baked texture.** Rotated shelf
+  placements scaled rotated local coordinates by the un-rotated chart extents, so tall thin charts
+  (legs, arms, fingers, cuffs) wrote UVs outside their own cell and `clampf()` folded them onto the
+  atlas border. Measured on the shipped kernel: **10 793 of 266 212 vertices pinned to u = 1**,
+  9 996 of them below 100 cm. After the fix: **0 pinned, 30 zero-area triangles** (from 17 271).
+- **AF-035 (High) — frame cost.** `Rig::skin()` built a 4×4 skinning matrix per vertex per
+  influence (~1.06 M per frame where 75 are needed), and `applyCurrentPose()` ran a full triangle
+  normal pass plus two 23 MB vertex-buffer streams. Measured **10.14 ms → 4.65 ms per frame**.
+- **AF-036 (High) — a test that could not fail.** The UV assertion ran after the clamp, so a
+  packing overflow was invisible. The clamp is gone and the test now checks texel-density
+  percentiles and zero-texel footprint.
+- **Harness crash** — `testTexturing` segfaulted instead of reporting when the unwrap failed.
+
+Recorded and deliberately **not** shipped, with numbers: AF-037 (chart merging — 5× density loss)
+and AF-038 (6-texel chart floor — needs 136 % of a 1024 atlas at this chart count). The remaining
+texture softness is chart fragmentation (14 460 charts for 367 698 faces), and the fix belongs in
+the charter and packer.
+
+Newly found, open: **AF-040 — proportions.** Shoulder : hip measures **0.65** here against
+**1.05-1.10** in both supplied references; shoulder : waist 0.64 against 0.74-0.76. Acceptance
+criteria are written; not changed in this pass.
+
+### Verified now (local, 2026-10-30)
+
+- Exact-head CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40919320455 **succeeded** on
+  `af8d14e` — shader compile, model + kernel + renderer host tests, ARM64 NDK build, SDK JVM tests, debug
+  APK, explicitly UNSIGNED release AAB, SDK AAR, GLES artifact guard. Artifact `12918316597`
+  (17,672,820 bytes): `AvatarForge-Android-af8d14ee…`. The signed-release job was skipped (no credentials).
+  The earlier run 40915039614 also passed, on `eb1bb60`.
+- Kernel host harness: **411 checks, 0 failures** (was 406; five are new AF-034 assertions).
+- Renderer host fault injection: **64 checks, 0 failures**. Model detail: **33 checks, 0 failures**.
+- `git diff --check`: clean. `tools/embed_shaders.py --check`: exit 1 locally (`requires glslc`);
+  CI compiles the shaders.
+- Reference render before/after: `/home/user/fault-review/probe/before.png`, `after.png`.
+
+### Not verified
+
+- **No device ran this build.** The user's four recovery reports and the shipped APK both print
+  `Kernel 0.10.1 (ABI 1)`, so the captures cannot be attributed to a commit (AF-039). Nothing in
+  this pass is a device-confirmed rendering claim.
+- Thermal: every report is `severe` and MEDIUM is capped to LOW. Whether that is honest sensor
+  data or a sticky listener is unresolved.
+- Signed release: BLOCKED (no keystore). Rust crates: uncompiled, UNVERIFIED.
+
+## Previous checkpoint — zero-trust audit and repair pass (2026-10-29)
+
+Full report: `docs/audit/AUDIT_2026-10-29_ZERO_TRUST.md`; findings AF-020 … AF-033.
 
 Repaired in this pass (source-level evidence only where noted):
 
