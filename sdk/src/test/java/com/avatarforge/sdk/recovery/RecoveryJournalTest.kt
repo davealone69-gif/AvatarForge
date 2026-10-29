@@ -35,6 +35,21 @@ class RecoveryJournalTest {
     }
 
     @Test
+    fun `backend fallback is journaled as evidence, not hidden`() {
+        val journal = RecoveryJournal(temp.root)
+        assertTrue(journal.record(
+            RecoveryRecordKind.BACKEND_FALLBACK,
+            backend = "gles31",
+            candidate = "vulkan->gles",
+        ))
+        val record = journal.recent(1).single()
+        assertEquals(RecoveryRecordKind.BACKEND_FALLBACK, record.kind)
+        assertEquals("gles31", record.backend)
+        assertEquals("vulkan->gles", record.candidate)
+        assertTrue(record.toReportLine().contains("BACKEND_FALLBACK"))
+    }
+
+    @Test
     fun `journal enforces record and byte caps`() {
         val journal = RecoveryJournal(temp.root, maxRecords = 5, maxBytes = 512)
         repeat(20) { i ->

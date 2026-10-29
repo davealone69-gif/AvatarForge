@@ -59,6 +59,7 @@ void successAndOwnership() {
         r->renderFrame(1.0f / 60.0f);
         r->renderFrame(1.0f / 60.0f);
         check(r->stats().triangles == 1, "attached fixture reaches the real draw path");
+        check(r->stats().textureBytes > 0, "uploaded atlas texture memory is reported, not zero");
         check(af_test::state.glErrors.empty(), "camera UBO slices stay in bounds across alternating frames");
         check(af_test::state.cameraBuffer != 0 &&
               af_test::state.bufferSizes[af_test::state.cameraBuffer] >= 1024,

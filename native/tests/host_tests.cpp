@@ -997,6 +997,16 @@ static void testTexturing() {
     }
     CHECK(metalTexels < texels / 20, "most of the atlas is dielectric (%zu metallic texels)", metalTexels);
     CHECK(normalInward < texels / 20, "normals in the atlas point outward (%zu inward)", normalInward);
+    /* Regression for the single-texel normal confetti / moire seen on cloth and gear: procedural
+       micro-relief below the atlas Nyquist limit must be faded, not point-sampled into noise. */
+    size_t normalSteep = 0;
+    for (size_t i = 0; i < texels; ++i) {
+        const uint8_t* nrm = &ts.normal[i * 4];
+        const double nx = nrm[0] / 255.0 * 2.0 - 1.0;
+        const double ny = nrm[1] / 255.0 * 2.0 - 1.0;
+        if (nx * nx + ny * ny > 0.25) ++normalSteep;
+    }
+    CHECK(normalSteep < texels / 10, "baked normals are band-limited, not single-texel confetti (%zu steep)", normalSteep);
     CHECK(skinTexels > texels / 20, "skin covers a sensible share of the atlas (%zu texels)", skinTexels);
     const double meanRough = skinTexels ? roughSum / static_cast<double>(skinTexels) : 0.0;
     CHECK(meanRough > 0.25 && meanRough < 0.85, "skin roughness in a plausible band (%.2f)", meanRough);

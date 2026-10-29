@@ -79,3 +79,35 @@ journaled privately, a bounded policy tries safe settings and the alternate back
 checks sustained non-empty submission. `MENU -> Self diagnostics` can copy/export the report, run Safe
 recovery, or clear the journal. This is a regression-evidence loop, not proof of visible pixels. See
 [SELF_IMPROVEMENT_PATH.md](SELF_IMPROVEMENT_PATH.md).
+
+
+## Visual-quality follow-up (exported `avatar-1337.glb`, 14:44)
+
+The phone now renders visibly at ~58 FPS on `gles31` (ANGLE / Xclipse 940), with 417,150 submitted
+triangles and no renderer fault. The exported GLB passes `tools/validate_glb.py`, but its atlas shows
+the remaining visual defect class:
+
+- 17,520 UV charts at 2048², coverage 0.65, ~445 texels/m;
+- many cloth/gear/skin triangles cover less than one atlas texel;
+- the baked normal/base-colour maps contain single-texel confetti, consistent with the on-screen
+  moiré/striping on cloth and gear;
+- `textureMiB` was always zero because the native backends never wrote `RendererStats::textureBytes`;
+- `preferVulkan=true` could silently fall back to GLES without a journal event.
+
+Changes made for this evidence:
+
+1. The texture bake now measures each triangle's local atlas footprint (metres/texel) and fades
+   procedural micro-detail whose wavelength is below the atlas Nyquist limit. This targets the
+   confetti/moiré without raising atlas memory or changing the mesh.
+2. GLES and Vulkan now report uploaded atlas texture memory (including the GLES mip chain / Vulkan
+   image allocation), and diagnostics includes a `Textures` line.
+3. A Vulkan-preferred startup that lands on GLES records `BACKEND_FALLBACK` in the local journal.
+4. The default orbit distance moved from 3.0 m to 3.5 m so a ~1.85 m avatar is less likely to be
+   cropped head/feet at the default 32° vertical FOV.
+5. Host regressions: the GLES mock now uploads a fixture atlas and asserts non-zero texture memory;
+   the kernel bake harness asserts the normal atlas is band-limited rather than single-texel noise;
+   the SDK journal tests round-trip `BACKEND_FALLBACK`.
+
+Still not claimed fixed: blocky hands, eye-shell asymmetry, garment/skin interpenetration, and any
+remaining framing overlap with the info card. Those need separate geometry/layout evidence. The
+moire fix is a bake-time band-limit; it still needs a device screenshot/export comparison.

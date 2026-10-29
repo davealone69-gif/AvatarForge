@@ -111,5 +111,7 @@ class RendererRecoveryTest {
         assertTrue(RecoveryAdvisor.recommendation(listOf(failure)).contains("alternate backend"))
         val stable = RecoveryRecord(2L, RecoveryRecordKind.FRAME_SUBMISSION_STABLE, backend = "GLES")
         assertTrue(RecoveryAdvisor.recommendation(listOf(failure, stable)).contains("Visible output still needs human confirmation"))
+        val fallback = RecoveryRecord(3L, RecoveryRecordKind.BACKEND_FALLBACK, backend = "gles31", candidate = "vulkan->gles")
+        assertTrue(RecoveryAdvisor.recommendation(listOf(fallback)).contains("fell back to gles31"))
     }
 }

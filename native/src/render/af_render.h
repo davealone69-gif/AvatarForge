@@ -86,7 +86,7 @@ struct RendererOptions {
 struct CameraState {
     float yawDeg    = 180.0f;   /* orbit around +Y; 180 looks at the model's front (-Z)       */
     float pitchDeg  = 4.0f;     /* + looks down                                               */
-    float distance  = 3.0f;     /* metres from the orbit target                               */
+    float distance  = 3.5f;     /* metres from the orbit target; frames a ~1.85 m avatar      */
     float targetY   = 0.95f;    /* orbit target height (mid-torso for a 1.75 m avatar)        */
     float fovDeg    = 32.0f;    /* vertical field of view; 32 mm-ish is flattering on faces   */
     float rollDeg   = 0.0f;

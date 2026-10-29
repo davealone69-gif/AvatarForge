@@ -390,7 +390,15 @@ class RenderSurfaceView @JvmOverloads constructor(
             renderer = created
             activePreferVulkan = requested.preferVulkan
             rendererSurfaceGeneration = generation
-            _rendererInfo.value = created.info()
+            val info = created.info()
+            _rendererInfo.value = info
+            if (requested.preferVulkan && info.backend.startsWith("gles", ignoreCase = true)) {
+                recoveryJournal.record(
+                    RecoveryRecordKind.BACKEND_FALLBACK,
+                    backend = info.backend,
+                    candidate = "vulkan->gles",
+                )
+            }
             created.setCamera(camera)
             created.applyOptions(settings)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)

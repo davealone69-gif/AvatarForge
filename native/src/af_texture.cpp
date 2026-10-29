@@ -136,6 +136,7 @@ struct SurfaceSample {
     float curvature = 1.0f;
     float thickness = 0.3f;
     int   region = REGION_SKIN;
+    float texelSize = 0.0f;       /* metres per atlas texel at this surface (0 = unknown) */
 };
 
 struct SurfaceOut {
@@ -164,6 +165,16 @@ struct MaterialContext {
     float eyeRadius = 0.008f;
     float ageFactor = 0.0f;
 };
+
+/* Nyquist guard for procedural micro-detail. A feature whose wavelength is shorter than two
+ * atlas texels cannot be represented by the bake; point-sampling it produces the single-texel
+ * confetti / moire seen on cloth and gear. Fade such detail out instead of aliasing it. */
+float microDetailGain(float texelSize, float wavelength) {
+    if (texelSize <= 0.0f || wavelength <= 0.0f) return 1.0f;
+    const float ratio = wavelength / (2.0f * texelSize);
+    const float t = saturate((ratio - 0.70f) / 0.60f);
+    return t * t * (3.0f - 2.0f * t);
+}
 
 void evaluateSkin(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut* out) {
     const BodyMetrics& m = *ctx.m;
@@ -239,7 +250,7 @@ void evaluateSkin(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut
         const float distToHead = (p - Vec3(0, m.y.chinY + (m.y.crownY - m.y.chinY) * 0.45f, 0)).length();
         const bool face = distToHead < (m.y.crownY - m.y.chinY) * 0.95f && p.z < -m.head.rz * 0.35f;
         const float poreCell = face ? 0.00055f : 0.0011f;
-        const float poreDepth = face ? 0.00022f : 0.00016f;
+        const float poreDepth = (face ? 0.00022f : 0.00016f) * microDetailGain(s.texelSize, poreCell);
         const float pores = poreNoise(n, p, poreCell);
         const float crease = fbm(n, p * 130.0f, 3);
         /* Joint creases: grooves perpendicular to the limb axis near elbows/knees. */
@@ -255,6 +266,7 @@ void evaluateSkin(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut
                            Vec3(m.faceWidth * 0.55f, m.head.rz * 0.13f, m.head.rz * 0.5f)) * 0.35f;  /* nasolabial */
         creaseAmp += (age * 0.7f) * mask3(p, Vec3(0, m.y.crownY - (m.y.crownY - m.y.chinY) * 0.13f, -m.head.rz * 0.85f),
                                           Vec3(m.head.rx * 1.0f, m.head.rz * 0.25f, m.head.rz * 0.6f));  /* forehead lines */
+        creaseAmp *= microDetailGain(s.texelSize, 1.0f / 130.0f);
         const float height = -poreDepth * (1.0f - saturate(pores * 2.2f)) - creaseAmp * (0.00035f + age * 0.0005f) *
                                                                               (0.4f + 0.6f * saturate(crease));
         /* Analytic gradient of the relief times the surface frame, so the normal map is
@@ -397,8 +409,12 @@ void evaluateCloth(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOu
     const Vec3 q = s.position / yarn;
     const float warp = std::sin(q.x * 6.2831853f) * 0.5f + 0.5f;
     const float weft = std::sin(q.z * 6.2831853f) * 0.5f + 0.5f;
-    const float twill = (warp + weft) * 0.5f;
-    const float fuzz = fbm(ctx.noise, s.position * 900.0f, 2, 2.1f, 0.5f);
+    const float twillRaw = (warp + weft) * 0.5f;
+    const float fuzzRaw = fbm(ctx.noise, s.position * 900.0f, 2, 2.1f, 0.5f);
+    const float weaveGain = microDetailGain(s.texelSize, yarn);
+    const float fuzzGain = microDetailGain(s.texelSize, 1.0f / 900.0f);
+    const float twill = 0.5f + (twillRaw - 0.5f) * weaveGain;
+    const float fuzz = 0.5f + (fuzzRaw - 0.5f) * fuzzGain;
     Vec3 albedo = mat.baseColor * (0.82f + 0.30f * twill) * (0.94f + 0.12f * fuzz);
     /* Dye variation and worn edges. */
     albedo *= 1.0f + 0.06f * fbm(ctx.noise, s.position * 8.0f, 3);
@@ -411,8 +427,8 @@ void evaluateCloth(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOu
     out->occlusion = saturate(0.5f + 0.6f * s.curvature);
     /* Weave relief: a sinusoidal height field, gradient computed analytically. */
     const float amp = 0.00035f;
-    out->reliefGradient = Vec3(std::cos(q.x * 6.2831853f) * amp * 6.2831853f / yarn,
-                               std::cos(q.z * 6.2831853f) * amp * 6.2831853f / yarn * 0.5f, 0.0f);
+    out->reliefGradient = Vec3(std::cos(q.x * 6.2831853f) * amp * 6.2831853f / yarn * weaveGain,
+                               std::cos(q.z * 6.2831853f) * amp * 6.2831853f / yarn * 0.5f * weaveGain, 0.0f);
     (void)upper;
 }
 
@@ -425,11 +441,14 @@ void evaluateShoe(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut
         out->roughness = 0.72f;
         out->reliefGradient = Vec3(0, 0, 0);
     } else {
-        const float grain = 1.0f - saturate(poreNoise(ctx.noise, s.position, 0.0016f) * 3.0f);
+        const float grainRaw = 1.0f - saturate(poreNoise(ctx.noise, s.position, 0.0016f) * 3.0f);
         const float creases = saturate((fbm(ctx.noise, s.position * 45.0f, 3, 2.3f, 0.55f) - 0.5f) * 4.0f);
+        const float grainGain = microDetailGain(s.texelSize, 0.0016f);
+        const float grain = 0.5f + (grainRaw - 0.5f) * grainGain;
         out->albedo = Vec3(0.11f, 0.10f, 0.10f) * (0.82f + 0.35f * grain) * (1.0f - 0.25f * creases);
         out->roughness = saturate(0.42f + 0.22f * creases - 0.08f * grain);
-        out->reliefGradient = Vec3(grain * 0.9f, creases * 1.2f, 0.0f);
+        out->reliefGradient = Vec3(grainRaw * 0.9f * grainGain,
+                                   creases * 1.2f * microDetailGain(s.texelSize, 1.0f / 45.0f), 0.0f);
     }
     out->metallic = 0.0f;
     out->thickness = 0.006f;
@@ -441,7 +460,8 @@ void evaluateGear(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut
     /* Cast steel: work-hardened plates with a hammered surface and wear along the edges where
        curvature is high. */
     const float hammer = fbm(ctx.noise, s.position * 55.0f, 4, 2.1f, 0.5f);
-    const float scratches = saturate((fbm(ctx.noise, Vec3(s.position.x * 350.0f, s.position.y * 12.0f, s.position.z * 350.0f), 2) - 0.5f) * 6.0f);
+    const float scratches = saturate((fbm(ctx.noise, Vec3(s.position.x * 350.0f, s.position.y * 12.0f, s.position.z * 350.0f), 2) - 0.5f) * 6.0f) *
+                            microDetailGain(s.texelSize, 1.0f / 350.0f);
     const float edgeWear = 1.0f - s.curvature;
     Vec3 albedo = Vec3(0.60f, 0.58f, 0.54f) * (0.86f + 0.22f * hammer);
     albedo = albedo.lerp(Vec3(0.78f, 0.76f, 0.72f), scratches * 0.35f);
@@ -451,7 +471,7 @@ void evaluateGear(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut
     out->thickness = 0.004f;
     out->scatterRadius = 0.0f;
     out->occlusion = saturate(0.5f + 0.55f * s.curvature);
-    out->reliefGradient = Vec3(hammer * 1.5f, hammer * -1.1f, 0.0f);
+    out->reliefGradient = Vec3(hammer * 1.5f, hammer * -1.1f, 0.0f) * microDetailGain(s.texelSize, 1.0f / 55.0f);
 }
 
 void evaluateSurface(const MaterialContext& ctx, const SurfaceSample& s, SurfaceOut* out) {
@@ -571,6 +591,13 @@ bool bakeTextures(const Mesh& mesh, const UVLayout& layout, const BodyMetrics& m
                 const float d = (uv[1].x - uv[0].x) * (uv[2].y - uv[0].y) - (uv[2].x - uv[0].x) * (uv[1].y - uv[0].y);
                 if (std::fabs(d) < 1e-12f) continue;
                 const float invD = 1.0f / d;
+                /* Local atlas footprint: metres of surface per texel, from the triangle's 3D area
+                   and its UV area in texels. Used to band-limit procedural micro-detail. */
+                const Vec3 e1 = pos[1] - pos[0], e2 = pos[2] - pos[0];
+                const float area3D = e1.cross(e2).length() * 0.5f;
+                const float areaTexels = std::fabs(d) * 0.5f * static_cast<float>(w) * static_cast<float>(h);
+                const float texelSize = areaTexels > 1e-6f ? std::sqrt(area3D / areaTexels)
+                                     : (layout.texelsPerMeter > 1.0f ? 1.0f / layout.texelsPerMeter : 0.0f);
 
                 for (int py = y0; py <= y1; ++py) {
                     for (int px = x0; px <= x1; ++px) {
@@ -592,6 +619,7 @@ bool bakeTextures(const Mesh& mesh, const UVLayout& layout, const BodyMetrics& m
                         /* Region: majority of the three vertices, so charts stay single-material. */
                         s.region = (l0 > l1) ? ((l0 > l2) ? region[0] : region[2]) : ((l1 > l2) ? region[1] : region[2]);
                         s.thickness = ctx.axis.distance(s.position);
+                        s.texelSize = texelSize;
 
                         SurfaceOut so;
                         evaluateSurface(ctx, s, &so);

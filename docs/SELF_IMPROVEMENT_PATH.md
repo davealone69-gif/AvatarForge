@@ -47,7 +47,8 @@ filesDir/avatarforge/recovery/journal.tsv
 
 It is a bounded, tab-separated, URL-encoded log (version `AFRJ1`), capped at 100 records and 64 KiB.
 Records contain timestamp, event kind, stage, fault category, a 16-hex SHA-256 fingerprint, backend,
-attempt number, and candidate id. They do **not** contain prompts, photos, mesh data, or raw driver
+attempt number, and candidate id. A Vulkan-preferred startup that lands on GLES also records
+`BACKEND_FALLBACK`, so the fallback is visible in the report instead of silent. They do **not** contain prompts, photos, mesh data, or raw driver
 messages. IO failures are reported in diagnostics but never crash recovery. `Clear journal` deletes it.
 
 ### 4. Regression check

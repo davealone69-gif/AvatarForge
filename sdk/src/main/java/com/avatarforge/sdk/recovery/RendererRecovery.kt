@@ -171,7 +171,14 @@ class RecoveryFrameProbe(
 object RecoveryAdvisor {
     fun recommendation(records: List<RecoveryRecord>): String {
         val lastFailure = records.lastOrNull { it.kind == RecoveryRecordKind.FAILURE }
-            ?: return "No renderer fault is recorded. Run the viewer normally; use Safe recovery only after a fault."
+        if (lastFailure == null) {
+            val fallback = records.lastOrNull { it.kind == RecoveryRecordKind.BACKEND_FALLBACK }
+            return if (fallback != null) {
+                "Vulkan was requested but the renderer fell back to ${fallback.backend}. This is recorded, not a fault. Export the report if you need the driver pair investigated."
+            } else {
+                "No renderer fault is recorded. Run the viewer normally; use Safe recovery only after a fault."
+            }
+        }
         val lastStable = records.lastOrNull { it.kind == RecoveryRecordKind.FRAME_SUBMISSION_STABLE }
         if (lastStable != null && lastStable.timestampMs >= lastFailure.timestampMs) {
             return "Frame submission recovered with safe settings. Visible output still needs human confirmation; export this report before changing quality."

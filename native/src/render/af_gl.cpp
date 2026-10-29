@@ -681,6 +681,7 @@ bool GlRenderer::createUniformBuffers(std::string* error) {
 bool GlRenderer::createPlaceholderAtlas(std::string* error) {
     /* 1x1 white, so sampler bindings are valid before an engine is attached. */
     const GLubyte white[4] = {255, 255, 255, 255};
+    stats_.textureBytes = AF_TEX_COUNT * 4ull;
     for (int i = 0; i < AF_TEX_COUNT; ++i) {
         glGenTextures(1, &atlasTexture_[i]);
         glBindTexture(GL_TEXTURE_2D, atlasTexture_[i]);
@@ -781,6 +782,8 @@ void GlRenderer::ensureGeometryBuffers() {
 
 void GlRenderer::uploadAtlas(std::string* error) {
     if (!engine_) return;
+    uint64_t atlasBytes = 0;
+    bool anyAtlas = false;
     for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
         af_texture tex{};
         if (af_engine_texture(engine_, slot, &tex) != AF_OK) continue;
@@ -793,6 +796,18 @@ void GlRenderer::uploadAtlas(std::string* error) {
         glTexImage2D(GL_TEXTURE_2D, 0, GLint(internal), tex.width, tex.height, 0, format,
                      GL_UNSIGNED_BYTE, tex.data);
         glGenerateMipmap(GL_TEXTURE_2D);   /* GLES has this built in; the Vulkan path blits */
+        /* Account for the mip chain the driver just allocated, not only level 0. */
+        {
+            uint32_t mw = uint32_t(tex.width), mh = uint32_t(tex.height);
+            const uint32_t bpp = tex.channels == 1 ? 1u : 4u;
+            for (uint32_t level = 0; level < 13; ++level) {
+                atlasBytes += uint64_t(mw) * mh * bpp;
+                if (mw == 1 && mh == 1) break;
+                mw = mw > 1 ? mw / 2 : 1;
+                mh = mh > 1 ? mh / 2 : 1;
+            }
+        }
+        anyAtlas = true;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -809,6 +824,7 @@ void GlRenderer::uploadAtlas(std::string* error) {
         }
     }
     atlasUploaded_ = true;
+    stats_.textureBytes = anyAtlas ? atlasBytes : AF_TEX_COUNT * 4ull;
     (void)error;
 }
 

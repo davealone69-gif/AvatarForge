@@ -449,6 +449,7 @@ class MainActivity : ComponentActivity() {
                 if (frameStats != null) {
                     appendLine("FPS         : %.1f (%.2f ms)".format(frameStats.fps, frameStats.frameMs))
                     appendLine("Submitted   : %d tris, %d draw calls".format(frameStats.triangles, frameStats.drawCalls))
+                    appendLine("Textures    : %.1f MiB".format(frameStats.textureMiB))
                     appendLine("Quality     : level %d, MSAA %dx, shadow %d, bloom %d".format(
                         frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
                 }

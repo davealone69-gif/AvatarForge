@@ -1941,11 +1941,14 @@ bool VulkanRenderer::createFallbackAtlas(std::string* error) {
     if (tmpPool) vkDestroyCommandPool(device_, tmpPool, nullptr);
     atlasWidth_ = 0;
     atlasHeight_ = 0;
+    stats_.textureBytes = AF_TEX_COUNT * 4ull;
     return true;
 }
 
 bool VulkanRenderer::uploadAtlas(std::string* error) {
     if (!engine_) return true;
+    uint64_t atlasBytes = 0;
+    bool anyAtlas = false;
 
     const int levels[AF_TEX_COUNT] = {AF_TEX_BASE_COLOR, AF_TEX_NORMAL, AF_TEX_METALLIC_ROUGHNESS,
                                       AF_TEX_OCCLUSION, AF_TEX_SUBSURFACE};
@@ -2000,6 +2003,10 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
             *error = "atlas image creation failed";
             return false;
         }
+        VkMemoryRequirements atlasReq{};
+        vkGetImageMemoryRequirements(device_, atlasImages_[slot], &atlasReq);
+        atlasBytes += atlasReq.size;
+        anyAtlas = true;
 
         /* One-time upload: transition, copy, build mips, hand over to the fragment shader. */
         VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -2044,6 +2051,7 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
         atlasHeight_ = tex.height;
     }
     atlasUploaded_ = true;
+    stats_.textureBytes = anyAtlas ? atlasBytes : AF_TEX_COUNT * 4ull;
     /* The descriptor sets hold the image views, so they must be rewritten after an upload. */
     if (!writeDescriptorSets(error)) return false;
     return true;

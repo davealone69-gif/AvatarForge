@@ -80,7 +80,7 @@ data class RenderSettings(
 data class CameraSettings(
     val yawDeg: Float = 180f,
     val pitchDeg: Float = 4f,
-    val distance: Float = 3.0f,
+    val distance: Float = 3.5f,
     val targetY: Float = 0.95f,
     val fovDeg: Float = 32f,
 )

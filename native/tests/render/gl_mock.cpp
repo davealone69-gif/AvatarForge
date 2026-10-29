@@ -200,7 +200,14 @@ int32_t af_engine_submesh_count(const af_engine*) { return 1; }
 const af_submesh* af_engine_submeshes(const af_engine*) { static af_submesh s{}; s.vertex_count = 3; s.index_count = 3; return &s; }
 int32_t af_engine_material_count(const af_engine*) { return 1; }
 const af_material* af_engine_materials(const af_engine*) { static const af_material m{}; return &m; }
-int32_t af_engine_texture(const af_engine*, int32_t, af_texture*) { return AF_ERR_UNSUPPORTED; }
+int32_t af_engine_texture(const af_engine*, int32_t slot, af_texture* out) {
+    if (!out || slot < 0 || slot >= AF_TEX_COUNT) return AF_ERR_INVALID_ARG;
+    static const uint8_t pixels[16] = {255, 255, 255, 255, 255, 255, 255, 255,
+                                       255, 255, 255, 255, 255, 255, 255, 255};
+    out->width = 2; out->height = 2; out->channels = 4; out->mip_levels = 1;
+    out->byte_size = sizeof(pixels); out->data = pixels;
+    return AF_OK;
+}
 int32_t af_engine_joint_count(const af_engine*) { return 0; }
 int32_t af_engine_joint_info(const af_engine*, int32_t, af_joint_info*) { return AF_ERR_INVALID_ARG; }
 int32_t af_engine_joint_matrices(const af_engine*, float*, int32_t) { return AF_ERR_INVALID_ARG; }
