@@ -8,7 +8,7 @@ The project has four layers, and each can be built and tested on its own:
 | Layer | Sources | What it is | How it is built |
 |---|---|---|---|
 | Kernel | `native/src/*.cpp`, `native/include/afcore.h` | anatomy → SDF field → isosurface → UV → PBR bake → rig → blendshapes → clips → GLB, behind a stable C ABI | `tools/build_host.sh` (host) / CMake+NDK (Android) |
-| Renderer | `native/src/render/` | Vulkan primary, OpenGL ES 3.1 fallback, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); shaders baked on any host |
+| Renderer | `native/src/render/` | OpenGL ES 3.1 only, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); shaders baked on any host |
 | Rust | `rust/af-sys`, `rust/af` | safe Rust wrapper over the *same* C ABI as the Kotlin path | `cargo test --offline` against `build-host/libafcore.so` |
 | App + SDK | `sdk/`, `app/` | Kotlin SDK façade, Compose UI, one Activity | Gradle + AGP 8.5 |
 
@@ -33,7 +33,7 @@ export PATH=$JAVA_HOME/bin:/usr/local/tc/gradle-8.9/bin:$ANDROID_HOME/cmdline-to
 ```
 
 Which packages are needed and why is documented at the top of the script; the short version is that
-AGP 8.x needs JDK 17, the renderer links `vulkan`/`EGL`/`GLESv3`/`android`/`log` from the NDK
+AGP 8.x needs JDK 17, the renderer links `EGL`/`GLESv3`/`android`/`log` from the NDK
 sysroot, and the kernel needs only zlib (provided by the Android platform, `-lz` on a host).
 
 Hardware: this project is developed and verified on a 2 vCPU / 2 GB container. Configure Gradle
@@ -101,7 +101,6 @@ g++ -std=c++17 -O2 -o /tmp/shape_probe tools/shape_probe.cpp -Inative/include -I
 
 Checked in, so a normal build needs nothing extra:
 
-* `native/src/render/af_shaders_vk.h` — 18 kB of SPIR-V words (Vulkan)
 * `native/src/render/af_shaders_gl.h` — GLSL ES 3.10 source text (GLES 3.1)
 
 Regenerate after editing anything in `native/src/render/shaders/`:
@@ -111,18 +110,14 @@ python3 tools/embed_shaders.py           # needs glslc (ships in the NDK's shade
 python3 tools/embed_shaders.py --check   # compile + validate, write nothing
 ```
 
-The script compiles every stage twice from one source — SPIR-V for Vulkan, `#version 310 es` for
-GLES — validates the SPIR-V with `spirv-val`, type-checks the GLES dialect with `glslc --target-env=opengl`,
-and fails loudly if a stage is missing or the two dialects disagree. The kernel harness ([10]) then
-verifies the baked tables at runtime cost zero: every pipeline stage present, valid SPIR-V magic,
-GLES text well-formed, unknown names returning null (no silent unlit fallback).
+The script generates the `#version 310 es` table and, when `glslc` is available, type-checks each stage with `glslc --target-env=opengl`. It fails if a required GLES stage is missing. The renderer treats missing shader names as a hard initialization failure rather than silently falling back to unlit rendering.
 
 ### Renderer texture codecs and profiles
 
 The renderer vendors Apache-2.0 ASTC Encoder 5.4.0 and Google Etc2Comp under `native/third_party/`.
 CMake selects ASTC NEON for `arm64-v8a`, SSE2 for `x86_64`, and the portable scalar implementation
 for other ABIs; Etc2Comp supplies the ETC2/EAC fallback. The host harness exercises ASTC/ETC2 encoding,
-semantic mip generation and asynchronous job polling. The GL/Vulkan source uploads these formats only
+semantic mip generation and asynchronous job polling. The GLES renderer uploads these formats only
 after checking the device's advertised format support, and retains a raw RGBA8/R8 upload fallback.
 Host tests do not exercise actual GPU uploads; an NDK build and physical-device render check are still
 required.
@@ -141,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-android.ps1
 ```
 
 `native/CMakeLists.txt` builds three targets: the kernel (`afcore`), the renderer (`afrender`,
-links vulkan/EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The Gradle build runs
+links EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The Gradle build runs
 exactly this through `externalNativeBuild`; the manual invocation is there so the native side can be
 iterated without Gradle in the loop, and so the `.so` files can be built once and packaged many times
 (`-Paf.prebuiltJni=/path/to/prebuilt`, which is also the way to build the APK on a machine that has
