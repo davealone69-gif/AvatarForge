@@ -56,3 +56,7 @@ out/
 Thumbs.db
 *.swp
 *~
+
+# Python bytecode
+__pycache__/
+*.py[cod]
