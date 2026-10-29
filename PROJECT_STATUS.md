@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`; model-detail pass on top of `4b21633`. PR #20 remains draft.
+Updated: 2026-10-29. Branch: `arena/aaf85469-avatarforge`, head `39c8cf6`. PR #20 remains draft.
 
 ## Active checkpoint
 
@@ -8,7 +8,7 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## Verified now
 
-- Exact-head GLES-only + model-detail CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40867172914 succeeded on `1fcbe6c`. The newer model-detail pass has local evidence only until its CI run completes.
+- Exact-head GLES-only + eye/hair/chest model-detail CI: run https://github.com/davealone69-gif/AvatarForge/actions/runs/40895347516 succeeded on `39c8cf6` in 7m52s.
 - Renderer host fault injection: **57 checks, 0 failures**.
 - Focused model-detail regressions: **33 checks, 0 failures** (eyes, extracted eye symmetry, chest plate, hair eye-line, palms, garments).
 - Full kernel host harness: **406 checks, 0 failures**.
@@ -27,7 +27,7 @@ User direction implemented: **remove Vulkan**, preserve the now-working camera, 
 
 ## CI artifact
 
-Exact-head artifact: `AvatarForge-Android-1fcbe6cc73425ecd369f797b222eb2cc85315652` (id 12893609460, 17,608,790 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not an installable production release.
+Exact-head artifact: `AvatarForge-Android-39c8cf68663e6b22419d392780095c74fb08bd3f` (id 12905983840, 17,610,882 bytes): debug APK, explicitly UNSIGNED release AAB, SDK AAR, SHA256SUMS, PROVENANCE.json. The unsigned AAB is compile proof only, not an installable production release.
 
 ## Still not proven
 
