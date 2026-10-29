@@ -81,8 +81,8 @@ build_kernel() {
 
 build_tests() {
     echo "==> host_tests"
-    # af_shaders.cpp is part of the renderer library, but the harness checks the baked shader
-    # tables it defines (SPIR-V magic, stage coverage, GLSL ES text), so it is compiled in here.
+    # af_shaders.cpp is part of the renderer library; the harness checks the GLES shader
+    # table's required stage coverage and GLSL ES source, so it is compiled in here.
     "$CXX" "${KERNEL_FLAGS[@]}" "${CODEC_FLAGS[@]}" -o "$OUT/host_tests" \
         "$NATIVE/tests/host_tests.cpp" $(kernel_sources) \
         "$NATIVE/src/render/af_shaders.cpp" \
