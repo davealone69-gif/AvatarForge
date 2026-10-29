@@ -304,3 +304,17 @@ Next action: implement a separate consumer smoke-test app/module, build and insp
 - Latest relevant workflow run for the prior head: [40862690988](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862690988) was cancelled by a newer push. Run [40862621045](https://github.com/davealone69-gif/AvatarForge/actions/runs/40862621045) was still in progress when last checked and was for an older head. The latest code head's Actions run is pending; **no green claim** until checks complete for the exact current SHA.
 - Headless GLES/Vulkan and importer sanitizer jobs passed for earlier SHA `fd1e34d014e7c42a43190902f985d57052b8b97b`, but that run was cancelled before the Android package job completed. These are not current-head build verification.
 - Physical Samsung S24 runtime remains **UNVERIFIED**.
+
+## GLES-only backend decision — 2026-10-29 (supersedes earlier backend plan)
+
+- Native Vulkan renderer removed from this branch. The sole built renderer is OpenGL ES 3.1.
+- Deleted `native/src/render/af_vk.cpp`, `native/src/render/af_shaders_vk.h`, `native/tests/render_vk_tests.cpp`, and `tools/test_renderer_vk.sh`.
+- Removed Vulkan from native CMake sources/link libraries, native renderer selection, Kotlin settings/UI, JNI options, the C ABI mirror, Rust renderer options, shader generation, and Android CI packages/steps.
+- Simplified camera and shadow projections to the GLES/OpenGL depth convention. The renderer now fails with a specific GLES initialization reason instead of probing Vulkan.
+- Migration details and caveats: [docs/GLES_ONLY_MIGRATION_2026-10-29.md](docs/GLES_ONLY_MIGRATION_2026-10-29.md).
+- Latest source head before this status append: `2b7a56df58cb9e85ac48b063715b48a28c813a3a`; this append creates a new head and will restart/cancel prior CI runs. Wait for CI on the final head.
+- Exact-head Android build and GLES pixel test: **PENDING/UNVERIFIED**. No successful build is claimed.
+- APK/shared-library absence of `libvulkan`: **UNVERIFIED** until produced artifacts are inspected.
+- Device runtime, sustained FPS, RAM/thermal behavior, and the actual system driver path: **UNVERIFIED** until the exact APK is installed on the Samsung S24.
+- Important distinction: removing AvatarForge's native Vulkan backend does not force Android's system-selected ANGLE implementation to stop using Vulkan internally. Device driver identity must be checked after installation.
+- `main` remains untouched. PR #21 continues to target `work/android-engine-dev`; do not merge before exact-head CI and device verification.
