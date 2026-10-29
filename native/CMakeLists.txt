@@ -9,16 +9,16 @@
 #                        beyond zlib and the C++ runtime, which is why the identical sources build
 #                        and pass their test harness on a desktop.
 #
-#     libafrender.so     the GLES 3.1 renderer. Links libEGL/libGLESv3/libandroid/liblog;
-#                        no Vulkan loader or alternate rendering framework is used.
+#     libafrender.so     native GLES 3.1 and opt-in Vulkan 1.0 renderers. Links system
+#                        libEGL/libGLESv3/libvulkan (never bundles a Vulkan loader).
 #
 #     libavatarforge.so  the JNI bridge, which is the only place Kotlin meets C++.
 #
 #  The Gradle app module points at this file through externalNativeBuild, and the desktop test
 #  harness in native/tests/ compiles the same kernel sources with a host compiler (see BUILD.md).
 #
-#  The checked-in af_shaders_gl.h needs neither Python nor glslc for a normal build.
-#  regenerate_shaders re-embeds the text; AF_GLSLC enables offline compiler validation.
+#  Checked-in GLSL and SPIR-V tables need no shader compiler at APK build time.
+#  regenerate_shaders re-embeds GLES text; regenerate_vulkan_shaders requires glslc.
 # ==============================================================================================
 
 cmake_minimum_required(VERSION 3.22)
@@ -80,8 +80,11 @@ set_target_properties(afcore PROPERTIES VERSION "" SOVERSION "" PREFIX "lib")
 set(AF_RENDER_SOURCES
     src/render/af_render.cpp
     src/render/af_render_capi.cpp
-
     src/render/af_gl.cpp
+    src/render/af_vk.cpp
+    src/render/af_avatar_culler.cpp
+    src/render/af_avatar_lod.cpp
+    src/render/af_gpu_profile.cpp
     src/render/af_shaders.cpp)
 
 add_library(afrender SHARED ${AF_RENDER_SOURCES})
@@ -91,7 +94,7 @@ target_include_directories(afrender
 target_compile_options(afrender PRIVATE ${AF_OPT_FLAGS} -Wall -Wextra)
 target_link_libraries(afrender
     PUBLIC afcore
-    PRIVATE EGL GLESv3 android log)
+    PRIVATE vulkan EGL GLESv3 android log)
 
 # ----------------------------------------------------------------------------------------------
 #  JNI bridge
@@ -103,7 +106,7 @@ target_compile_options(avatarforge PRIVATE ${AF_OPT_FLAGS} -Wall -Wextra)
 target_link_libraries(avatarforge PRIVATE afcore afrender android log)
 
 # ----------------------------------------------------------------------------------------------
-#  Optional: re-embed GLSL ES (Python 3; AF_GLSLC enables compiler validation)
+#  Optional: independent shader tables (Vulkan regeneration requires NDK glslc)
 # ----------------------------------------------------------------------------------------------
 find_program(AF_PYTHON NAMES python3 python)
 if(AF_PYTHON)
@@ -111,4 +114,8 @@ if(AF_PYTHON)
         COMMAND ${AF_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_shaders.py
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
         COMMENT "Re-embedding GLSL ES -> af_shaders_gl.h")
+    add_custom_target(regenerate_vulkan_shaders
+        COMMAND ${AF_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/embed_vulkan_shaders.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+        COMMENT "Compiling native Vulkan GLSL -> af_shaders_vk.h (requires glslc)")
 endif()

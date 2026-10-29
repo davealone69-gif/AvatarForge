@@ -2,12 +2,13 @@
  * AvatarForge :: deterministic renderer recovery (no AI, no network).
  *
  * This is a bounded stability path, not autonomous code modification. It classifies a renderer
- * failure, tries a small ladder of known-safe GLES settings, and records enough evidence for a
- * human or CI regression test to act on. It never claims that pixels are visible: the on-device probe
+ * failure, retries with known-safe GLES settings (including after a Vulkan fault), and records
+ * enough evidence for a human or CI regression test. It never claims pixels are visible: the probe
  * only verifies sustained frame submission with non-zero submitted geometry.
  */
 package com.avatarforge.sdk.recovery
 
+import com.avatarforge.sdk.render.RenderBackend
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererStats
 import com.avatarforge.sdk.render.Quality
@@ -16,18 +17,22 @@ import java.util.Locale
 
 enum class RecoveryStage { STARTUP, FRAME, RESIZE }
 
-/** UNKNOWN means no renderer info yet, not permission to select another graphics API. */
+/** The backend actually active in this app, not the OS implementation underneath GLES. */
 enum class RecoveryBackend {
-    GLES, UNKNOWN;
+    GLES, VULKAN, UNKNOWN;
     companion object {
-        fun from(infoBackend: String?): RecoveryBackend =
-            if (infoBackend != null && infoBackend.startsWith("gles", ignoreCase = true)) GLES else UNKNOWN
+        fun from(infoBackend: String?): RecoveryBackend = when {
+            infoBackend?.startsWith("gles", ignoreCase = true) == true -> GLES
+            infoBackend.equals("vulkan", ignoreCase = true) -> VULKAN
+            else -> UNKNOWN
+        }
     }
 }
 
 enum class RecoveryFaultCategory {
     CONTEXT_LOST, OUT_OF_MEMORY, SHADER_COMPILE, SHADER_LINK, EGL_CONTEXT, EGL_SURFACE,
-    FRAMEBUFFER, GL_INVALID_OPERATION, RESIZE, UNKNOWN
+    FRAMEBUFFER, GL_INVALID_OPERATION, VULKAN_DEVICE_LOST, VULKAN_SURFACE_LOST,
+    VULKAN_FAILURE, RESIZE, UNKNOWN
 }
 
 data class RecoveryFailure(
@@ -49,6 +54,9 @@ object RecoveryFailureClassifier {
             "EGLCREATEWINDOWSURFACE" in text || "EGL_BAD_SURFACE" in text || "NATIVE WINDOW" in text -> RecoveryFaultCategory.EGL_SURFACE
             "FRAMEBUFFER" in text -> RecoveryFaultCategory.FRAMEBUFFER
             "GL_INVALID_OPERATION" in text -> RecoveryFaultCategory.GL_INVALID_OPERATION
+            "VK_ERROR_DEVICE_LOST" in text || "VKRESULT -4" in text -> RecoveryFaultCategory.VULKAN_DEVICE_LOST
+            "VK_ERROR_SURFACE_LOST_KHR" in text || "VKRESULT -1000000000" in text -> RecoveryFaultCategory.VULKAN_SURFACE_LOST
+            "VKRESULT" in text || "VKCREATE" in text || "VKQUEUE" in text -> RecoveryFaultCategory.VULKAN_FAILURE
             stage == RecoveryStage.RESIZE -> RecoveryFaultCategory.RESIZE
             else -> RecoveryFaultCategory.UNKNOWN
         }
@@ -80,14 +88,15 @@ data class RecoveryStatus(val phase: String, val message: String)
 object RendererRecoveryPolicy {
     const val MAX_AUTOMATIC_ATTEMPTS = 1
 
-    /** One conservative GLES retry; camera, exposure and generated geometry are preserved. */
+    /** One conservative GLES retry; never loop a fatal Vulkan frame on the same API. */
     fun safeSettings(current: RenderSettings): RenderSettings = current.copy(
-        quality = Quality.LOW, shadows = false, bloom = false, sss = false,
+        backend = RenderBackend.GLES, quality = Quality.LOW, shadows = false, bloom = false, sss = false,
         groundPlane = false, msaa = 1, shadowMapSize = 1024, bloomLevels = 0,
     )
 
     fun isSafe(settings: RenderSettings): Boolean =
-        settings.quality == Quality.LOW && !settings.shadows && !settings.bloom && !settings.sss &&
+        settings.backend == RenderBackend.GLES && settings.quality == Quality.LOW &&
+            !settings.shadows && !settings.bloom && !settings.sss &&
             !settings.groundPlane && settings.msaa <= 1 && settings.shadowMapSize <= 1024 && settings.bloomLevels <= 0
 
     fun configurationId(settings: RenderSettings, backend: RecoveryBackend): String =
@@ -143,9 +152,9 @@ object RecoveryAdvisor {
         if (lastFailure == null) {
             val fallback = records.lastOrNull { it.kind == RecoveryRecordKind.BACKEND_FALLBACK }
             return if (fallback != null) {
-                "Historical backend-fallback record found. Current builds support GLES only; old journal entries remain readable for diagnosis."
+                "Native Vulkan startup fell back to OpenGL ES. Check the actual backend and driver in Self diagnostics; frame submission does not prove visible pixels."
             } else {
-                "No renderer fault is recorded. Run the GLES viewer normally; use Safe recovery only after a fault."
+                "No renderer fault is recorded. GLES is the default; native Vulkan is an opt-in comparison. Check the actual backend and visible output."
             }
         }
         val lastStable = records.lastOrNull { it.kind == RecoveryRecordKind.FRAME_SUBMISSION_STABLE }
@@ -159,6 +168,8 @@ object RecoveryAdvisor {
             RecoveryFaultCategory.EGL_CONTEXT, RecoveryFaultCategory.EGL_SURFACE, RecoveryFaultCategory.CONTEXT_LOST -> "Reopen the viewer to recreate the Surface, then try Safe recovery. If repeated, export the lifecycle report."
             RecoveryFaultCategory.FRAMEBUFFER -> "Safe recovery disables MSAA/HDR-dependent extras. If repeated, export the report for a render-target regression."
             RecoveryFaultCategory.GL_INVALID_OPERATION -> "Try Safe recovery; export the report so the invalid GL call can be traced."
+            RecoveryFaultCategory.VULKAN_DEVICE_LOST, RecoveryFaultCategory.VULKAN_SURFACE_LOST,
+            RecoveryFaultCategory.VULKAN_FAILURE -> "Switch to safe OpenGL ES and export the report with the failing VkResult. Do not loop a broken Vulkan surface."
             RecoveryFaultCategory.RESIZE -> "Retry after rotation/resize completes. If repeated, export the report for a resize-target regression."
             RecoveryFaultCategory.UNKNOWN, null -> "Try Safe recovery once, then export the report. Do not keep retrying in a loop."
         }

@@ -3,7 +3,7 @@
  *
  * The result viewer/editor. This is where the app has to be honest about what it can do:
  *
- *   * the surface is the real GLES 3.1 renderer drawing the real mesh - the same mesh
+ *   * the surface uses the selected native renderer for the real mesh - the same mesh
  *     the .glb contains, deformed by the same rig;
  *   * pose and expression controls drive the kernel (applyPose / applyBlendshapes), which deforms
  *     the vertices the renderer then uploads. There is no separate "preview rig";
@@ -59,6 +59,7 @@ import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraGesture
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.RenderBackend
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
@@ -254,8 +255,13 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
                 TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
             }
             val performance = if (failed) "GPU unavailable" else "%.0f FPS (%.1f ms)".format(stats.fps, stats.frameMs)
+            val backendLabel = when (info?.backend) {
+                "vulkan" -> "Native Vulkan"
+                "gles31" -> "OpenGL ES 3.1"
+                else -> "GPU"
+            }
             Text(
-                "GLES 3.1 · $performance",
+                "$backendLabel · $performance",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (!failed && stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.error,
@@ -446,6 +452,11 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
             style = MaterialTheme.typography.bodySmall,
         )
     }
+    ToggleRow("Native Vulkan (experimental)", settings.backend == RenderBackend.VULKAN) { enabled ->
+        onSettings(settings.copy(backend = if (enabled) RenderBackend.VULKAN else RenderBackend.GLES))
+    }
+    Text("Changing backend recreates the viewer. If Vulkan cannot start, GLES is used; the line above shows the actual app backend. ANGLE-on-Vulkan still counts as GLES.",
+        style = MaterialTheme.typography.labelSmall)
     ToggleRow("Shadows", settings.shadows) { onSettings(settings.copy(shadows = it)) }
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }

@@ -6,7 +6,7 @@ import org.junit.Test
 class RenderSettingsCodecTest {
     @Test fun roundTripPreservesEveryField() {
         val settings = RenderSettings(
-            quality = Quality.HIGH, shadows = false, bloom = true,
+            quality = Quality.HIGH, backend = RenderBackend.VULKAN, shadows = false, bloom = true,
             sss = false, groundPlane = false, exposure = 0.7f, sunAzimuthDeg = 10f,
             sunElevationDeg = 20f, sunIntensity = 1.1f, turbidity = 2.2f,
             environmentIntensity = 0.3f, shadowSoftness = 0.4f, msaa = 2,
@@ -43,9 +43,13 @@ class RenderSettingsCodecTest {
         assertEquals(4f, decoded.environmentIntensity, 0f)
     }
 
-    @Test fun aStaleVulkanPreferenceIsIgnoredRatherThanReintroducingABackend() {
-        val decoded = RenderSettingsCodec.decode(mapOf("preferVulkan" to "true", "backend" to "vulkan"))
-        assertEquals(RenderSettings(), decoded)
+    @Test fun explicitVulkanSelectionRoundTripsButOldPreferenceAloneIsNotOptIn() {
+        assertEquals(RenderBackend.VULKAN,
+            RenderSettingsCodec.decode(mapOf("backend" to "vulkan")).backend)
+        assertEquals(RenderBackend.GLES,
+            RenderSettingsCodec.decode(mapOf("preferVulkan" to "true")).backend)
+        assertEquals(RenderBackend.GLES,
+            RenderSettingsCodec.decode(mapOf("backend" to "not-a-backend")).backend)
     }
 
     @Test fun missingKeysKeepDefaultsAndUnknownKeysAreIgnored() {

@@ -1,12 +1,11 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.h -- GLES 3.1 real-time renderer
+ *  AvatarForge :: af_render.h -- native GLES 3.1 and Vulkan renderers
  * ============================================================================================
  *
- * One supported backend: GlRenderer (af_gl.cpp), using EGL, VAOs, UBOs and FBOs.
- * Renderer::create reports GLES initialization failures directly. No alternate API is
- * attempted and no software renderer is substituted. Android's driver implementation is
- * reported verbatim; an OS-level GLES translation layer is not an app Vulkan backend.
+ * GLES is the default backend (af_gl.cpp). Explicitly requesting Vulkan selects the separate
+ * native af_vk.cpp path; initialization failures fall back to GLES. There is no software
+ * renderer. An OS GLES translation layer such as ANGLE-on-Vulkan is not an app Vulkan backend.
  *
  *  Lighting model
  *  ---------------------------------------------------
@@ -51,6 +50,8 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
+    bool  preferVulkan         = false;  /* explicit opt-in; GLES remains the tested default */
+    int   effectiveQualityLevel = 1;    /* budget tier for LOD/culling in the Vulkan backend */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
@@ -98,13 +99,17 @@ struct RendererStats {
     int   frameAttempts  = 0;
     int   frameSubmissions = 0;
     int   presentRequestsAccepted = 0;
+    int   lastVkResult   = 0;      /* exact VkResult for Vulkan only; VK_SUCCESS = 0        */
+    bool  frameFatal     = false;  /* Vulkan frame loop stopped after unrecoverable failure */
 };
 
 struct RendererInfo {
-    std::string backend;      /* "gles31"                                                */
+    std::string backend;      /* "gles31" | "vulkan"                                     */
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
     std::string apiVersion;   /* e.g. "OpenGL ES 3.2"                                    */
-    std::string driver;       /* driver version string, shown in the health screen       */
+    std::string driver;       /* actual app graphics API driver, not a capability probe  */
+    std::string gpuProfile;   /* Vulkan profile, empty for GLES                           */
+    std::string textureCompression; /* Vulkan upload format, if available             */
     bool supportsShadows = false;
     bool supportsMsaa    = false;
     bool supportsFloatHdr = false;

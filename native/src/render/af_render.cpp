@@ -1,12 +1,13 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.cpp -- GLES factory and the thermal/battery budget controller
+ *  AvatarForge :: af_render.cpp -- native backend selection and quality budget
  * ============================================================================================
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() initializes GLES 3.1 and reports its actual failure. Generation and
- *      export remain available when the GPU cannot initialize; no software success is invented.
+ *   1. Renderer::create() uses GLES by default; an explicit Vulkan request tries the native
+ *      Vulkan renderer first and falls back to GLES only if initialization fails. Generation and
+ *      export remain available when neither API initializes; no software success is invented.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range
  *      device with a 2 GB memory ceiling, on a phone that is also thermally throttling because
@@ -23,10 +24,12 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <android/log.h>
 
 namespace af {
 
 Renderer* createGlRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
+Renderer* createVulkanRenderer(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
 namespace {
 
@@ -107,6 +110,7 @@ private:
     /* Sends the current tier's three fields into the backend, leaving every other setting alone. */
     void applyTier() {
         RendererOptions effective = requested_;
+        effective.effectiveQualityLevel = tier_;
         effective.msaaSamples = kTiers[tier_].msaa;
         effective.shadowMapSize = kTiers[tier_].shadowSize;
         effective.bloomLevels = kTiers[tier_].bloomLevels;
@@ -161,13 +165,27 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
         if (error) *error = "no native window (the SurfaceView is not ready yet)";
         return nullptr;
     }
-    std::string glError;
-    Renderer* backend = createGlRenderer(window, options, &glError);
-    if (backend) {
-        if (error) error->clear();
-        return new BudgetRenderer(backend, options);
+    std::string vkError;
+    if (options.preferVulkan) {
+        Renderer* vk = createVulkanRenderer(window, options, &vkError);
+        if (vk) {
+            if (error) error->clear();
+            return new BudgetRenderer(vk, options);
+        }
+        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRenderer",
+                            "Native Vulkan initialization failed: %s; trying OpenGL ES 3.1",
+                            vkError.empty() ? "unknown failure" : vkError.c_str());
     }
-    if (error) *error = "OpenGL ES 3.1: " + (glError.empty() ? std::string("unknown initialization failure") : glError);
+    std::string glError;
+    Renderer* gl = createGlRenderer(window, options, &glError);
+    if (gl) {
+        if (error) error->clear();
+        return new BudgetRenderer(gl, options);
+    }
+    if (error) {
+        *error = (options.preferVulkan ? "Vulkan: " + vkError + "; " : "") +
+            "OpenGL ES 3.1: " + (glError.empty() ? std::string("unknown initialization failure") : glError);
+    }
     return nullptr;
 }
 

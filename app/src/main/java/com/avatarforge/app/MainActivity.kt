@@ -574,8 +574,8 @@ class MainActivity : ComponentActivity() {
                         frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
                 }
                 appendLine("Last error  : ${viewerError ?: "none"}")
-                appendLine("Settings    : requested backend=GLES, quality=${settings.quality}")
-                appendLine("Effective   : backend=GLES, quality=${effectiveSettings.quality}")
+                appendLine("Settings    : requested backend=${settings.backend}, quality=${settings.quality}")
+                appendLine("Effective   : requested backend=${effectiveSettings.backend}, actual=${info?.backend ?: "not initialised"}, quality=${effectiveSettings.quality}")
                 appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
                 appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
                     camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))

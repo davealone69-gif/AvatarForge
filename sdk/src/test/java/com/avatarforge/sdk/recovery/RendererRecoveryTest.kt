@@ -1,6 +1,7 @@
 package com.avatarforge.sdk.recovery
 
 import com.avatarforge.sdk.render.Quality
+import com.avatarforge.sdk.render.RenderBackend
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererStats
 import org.junit.Assert.assertEquals
@@ -27,8 +28,10 @@ class RendererRecoveryTest {
 
     @Test
     fun `safe settings disable optional GPU cost and preserve exposure`() {
-        val current = RenderSettings(quality = Quality.HIGH, exposure = 1.25f, shadows = true, bloom = true)
+        val current = RenderSettings(quality = Quality.HIGH, backend = RenderBackend.VULKAN,
+            exposure = 1.25f, shadows = true, bloom = true)
         val safe = RendererRecoveryPolicy.safeSettings(current)
+        assertEquals(RenderBackend.GLES, safe.backend)
         assertEquals(Quality.LOW, safe.quality)
         assertFalse(safe.shadows)
         assertFalse(safe.bloom)
@@ -42,14 +45,17 @@ class RendererRecoveryTest {
     }
 
     @Test
-    fun `policy tries safe GLES once and never switches API`() {
-        val current = RenderSettings()
-        val first = RendererRecoveryPolicy.next(current, RecoveryBackend.GLES, 0, emptySet())
+    fun `policy switches a fatal Vulkan attempt to safe GLES only once`() {
+        val current = RenderSettings(backend = RenderBackend.VULKAN)
+        val first = RendererRecoveryPolicy.next(current, RecoveryBackend.VULKAN, 0, emptySet())
         assertNotNull(first)
         assertEquals(RecoveryBackend.GLES, first!!.backend)
+        assertEquals(RenderBackend.GLES, first.settings.backend)
         assertEquals("safe-gles", first.id)
-        assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.GLES, 1, setOf(first.id)))
+        assertNull(RendererRecoveryPolicy.next(first.settings, RecoveryBackend.GLES, 1, setOf(first.id)))
         assertNull(RendererRecoveryPolicy.next(current, RecoveryBackend.UNKNOWN, 0, setOf(first.id)))
+        assertEquals(RecoveryBackend.GLES, RecoveryBackend.from("gles31 · ANGLE on Vulkan"))
+        assertEquals(RecoveryBackend.VULKAN, RecoveryBackend.from("vulkan"))
     }
 
     @Test
@@ -70,6 +76,12 @@ class RendererRecoveryTest {
         assertEquals(a, b)
         assertEquals(16, a.length)
         assertFalse(a.contains("0x"))
+        assertEquals(RecoveryFaultCategory.VULKAN_DEVICE_LOST,
+            RecoveryFailureClassifier.classify(RecoveryStage.FRAME,
+                "vkQueueSubmit failed (VkResult -4)").category)
+        assertEquals(RecoveryFaultCategory.VULKAN_SURFACE_LOST,
+            RecoveryFailureClassifier.classify(RecoveryStage.FRAME,
+                "vkQueuePresentKHR failed (VkResult -1000000000)").category)
     }
 
     @Test
@@ -103,6 +115,6 @@ class RendererRecoveryTest {
         val stable = RecoveryRecord(2L, RecoveryRecordKind.FRAME_SUBMISSION_STABLE, backend = "GLES")
         assertTrue(RecoveryAdvisor.recommendation(listOf(failure, stable)).contains("Visible output still needs human confirmation"))
         val fallback = RecoveryRecord(3L, RecoveryRecordKind.BACKEND_FALLBACK, backend = "gles31", candidate = "legacy-fallback")
-        assertTrue(RecoveryAdvisor.recommendation(listOf(fallback)).contains("Historical backend-fallback"))
+        assertTrue(RecoveryAdvisor.recommendation(listOf(fallback)).contains("Native Vulkan startup fell back"))
     }
 }

@@ -1,0 +1,83 @@
+#ifdef AF_VULKAN
+#define AF_UBO(s, bn) layout(std140, set = s, binding = bn)
+#define AF_SSBO(s, bn) layout(std430, set = s, binding = bn)
+#else
+#define AF_UBO(s, bn) layout(std140, binding = bn)
+#define AF_SSBO(s, bn) layout(std430, binding = bn)
+#endif
+
+#define AF_FORWARD_TILES_X 16u
+#define AF_FORWARD_TILES_Y 9u
+#define AF_FORWARD_MAX_LIGHTS_PER_TILE 3u
+
+AF_UBO(0, 0) uniform CameraBlock {
+    mat4 uViewProj;
+    mat4 uView;
+    mat4 uLightViewProj;
+    vec4 uCameraPos;
+    vec4 uSunDir;
+    vec4 uSunColor;
+    vec4 uSkyProps;
+    vec4 uEnvFlags;
+    vec4 uUiParams;
+    vec4 uGround;
+    vec4 uSh[9];
+} cam;
+
+struct AfForwardLight {
+    vec4 positionRange;
+    vec4 colorIntensity;
+    vec4 reserved;
+};
+
+AF_SSBO(2, 0) readonly buffer ForwardLightBuffer {
+    vec4 header;
+    AfForwardLight lights[16];
+} fpLights;
+
+AF_SSBO(2, 1) writeonly buffer ForwardTileBuffer {
+    uvec4 tileLists[AF_FORWARD_TILES_X * AF_FORWARD_TILES_Y];
+} fpTiles;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+vec2 projectUv(vec3 world, out bool behind) {
+    vec4 clip = cam.uViewProj * vec4(world, 1.0);
+    behind = clip.w <= 0.01;
+    vec2 ndc = clip.xy / max(abs(clip.w), 0.01);
+    return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+void main() {
+    uvec2 tile = gl_GlobalInvocationID.xy;
+    if (tile.x >= AF_FORWARD_TILES_X || tile.y >= AF_FORWARD_TILES_Y) return;
+    vec2 tileMin = vec2(tile) / vec2(AF_FORWARD_TILES_X, AF_FORWARD_TILES_Y);
+    vec2 tileMax = vec2(tile + uvec2(1u)) / vec2(AF_FORWARD_TILES_X, AF_FORWARD_TILES_Y);
+    uvec4 result = uvec4(0u);
+    uint lightCount = min(uint(max(fpLights.header.x, 0.0)), 16u);
+    for (uint i = 0u; i < lightCount && result.x < AF_FORWARD_MAX_LIGHTS_PER_TILE; ++i) {
+        vec3 centre = fpLights.lights[i].positionRange.xyz;
+        float radius = max(fpLights.lights[i].positionRange.w, 0.01);
+        vec2 boundsMin = vec2(1e20);
+        vec2 boundsMax = vec2(-1e20);
+        bool conservativeFullScreen = false;
+        for (int axis = 0; axis < 3; ++axis) {
+            vec3 delta = vec3(0.0);
+            delta[axis] = radius;
+            bool behindA = false;
+            bool behindB = false;
+            vec2 a = projectUv(centre - delta, behindA);
+            vec2 b = projectUv(centre + delta, behindB);
+            boundsMin = min(boundsMin, min(a, b));
+            boundsMax = max(boundsMax, max(a, b));
+            conservativeFullScreen = conservativeFullScreen || behindA || behindB;
+        }
+        if (conservativeFullScreen) { boundsMin = vec2(0.0); boundsMax = vec2(1.0); }
+        if (boundsMax.x >= tileMin.x && boundsMin.x <= tileMax.x &&
+            boundsMax.y >= tileMin.y && boundsMin.y <= tileMax.y) {
+            result[result.x + 1u] = i;
+            result.x++;
+        }
+    }
+    fpTiles.tileLists[tile.y * AF_FORWARD_TILES_X + tile.x] = result;
+}

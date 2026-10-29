@@ -155,6 +155,7 @@ internal object NativeBridge {
         msaa: Int,
         shadowSize: Int,
         bloomLevels: Int,
+        preferVulkan: Boolean,
     ): Long
 
     external fun rendererDestroy(renderer: Long)

@@ -13,8 +13,8 @@
  * StateFlows that the Compose layer collects.
  *
  * Stability path: startup/frame/resize failures are classified and journaled locally, then a bounded
- * deterministic policy retries safe settings on the same GLES backend. This is not AI and does not
- * modify code. A post-recovery probe checks sustained non-empty frame submission only; visible output
+ * deterministic policy retries safe GLES settings (including after a Vulkan failure). This is not AI
+ * and does not modify code. A probe checks sustained non-empty frame submission only; visible output
  * still requires human/device confirmation.
  */
 package com.avatarforge.sdk.render
@@ -77,8 +77,12 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var settings: RenderSettings = RenderSettings()
     @Volatile private var camera: CameraSettings = CameraSettings()
 
-    /** Geometry the renderer should adopt once a surface exists. */
+    /** Geometry and playback/inspection state restored on a backend or surface restart. */
     @Volatile private var pendingEngineHandle: Long = 0L
+    private data class RequestedClip(val clip: Int, val speed: Float, val loop: Boolean)
+    private data class RequestedOverlays(val skeleton: Boolean, val flat: Boolean, val region: Int)
+    @Volatile private var requestedClip: RequestedClip? = null
+    @Volatile private var requestedOverlays = RequestedOverlays(false, false, -1)
 
     /** Native handle of the engine currently attached (0 = none). */
     @Volatile var attachedEngineHandle: Long = 0L
@@ -121,18 +125,21 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /* ------------------------------------------------------------------ public API ------------ */
 
-    /** Applies render settings (quality, environment, overlays). Safe from the UI thread. */
+    /** Applies settings on the render thread. Changing graphics API requires a new native
+     * renderer/surface; setOptions() cannot switch a live EGL context into Vulkan. */
     fun applySettings(newSettings: RenderSettings) {
         val changed = newSettings != settings
+        val backendChanged = newSettings.backend != settings.backend
         publishSettings(newSettings)
         onRenderThread {
             if (released) return@onRenderThread
             if (changed) resetRecoverySession()
-            renderer?.applyOptions(RenderThermalPolicy.cap(newSettings, thermalStatus))
+            if (backendChanged && surfaceReady) restartRenderer(holder.surface, surfaceGeneration)
+            else renderer?.applyOptions(RenderThermalPolicy.cap(newSettings, thermalStatus))
         }
     }
 
-    /** Recreate the GLES renderer after a startup/frame failure. */
+    /** Recreate the selected native renderer after a startup/frame failure. */
     fun retryRenderer(newSettings: RenderSettings = settings) {
         publishSettings(newSettings)
         handler.post {
@@ -159,13 +166,12 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun runSafeRecovery() {
         handler.post {
             if (released) return@post
-            val backend = currentBackend().let {
-                if (it == RecoveryBackend.UNKNOWN) RecoveryBackend.GLES else it
-            }
+            val failedBackend = currentBackend()
             resetRecoverySession()
-            triedConfigurations.add(RendererRecoveryPolicy.configurationId(settings, backend))
+            triedConfigurations.add(RendererRecoveryPolicy.configurationId(settings, failedBackend))
             val safe = RendererRecoveryPolicy.safeSettings(settings)
-            val candidateId = "safe-${backend.name.lowercase()}"
+            val backend = RecoveryBackend.GLES
+            val candidateId = "safe-gles"
             triedConfigurations.add(candidateId)
             recoveryCandidateId = candidateId
             recoveryProbe = RecoveryFrameProbe()
@@ -206,11 +212,15 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Tells the renderer the engine's geometry changed (new pose, blendshapes, clip frame). */
     fun invalidateMesh() = onRenderThread { it.renderer?.invalidateMesh() }
 
-    fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =
+    fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) {
+        requestedClip = RequestedClip(clip, speed, loop)
         onRenderThread { it.renderer?.setClip(clip, speed, loop) }
+    }
 
-    fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) =
+    fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) {
+        requestedOverlays = RequestedOverlays(skeleton, flatShading, highlightRegion)
         onRenderThread { it.renderer?.setOverlays(skeleton, flatShading, highlightRegion) }
+    }
 
     /**
      * Applies ARKit channel weights to the attached avatar and re-uploads the mesh.
@@ -413,15 +423,28 @@ class RenderSurfaceView @JvmOverloads constructor(
         destroyRenderer()
         _error.value = null
         val requested = settings
-        val requestedBackend = RecoveryBackend.GLES
+        val requestedBackend = if (requested.backend == RenderBackend.VULKAN)
+            RecoveryBackend.VULKAN else RecoveryBackend.GLES
         try {
             val created = AvatarRenderer.create(surface, requested)
             renderer = created
             rendererSurfaceGeneration = generation
             val info = created.info()
             _rendererInfo.value = info
+            if (requestedBackend == RecoveryBackend.VULKAN && RecoveryBackend.from(info.backend) == RecoveryBackend.GLES) {
+                recoveryJournal.record(
+                    RecoveryRecordKind.BACKEND_FALLBACK,
+                    backend = RecoveryBackend.GLES.name,
+                    candidate = "vulkan-init-to-gles",
+                )
+                _recoveryStatus.value = RecoveryStatus(
+                    "FALLBACK", "Native Vulkan did not initialize. OpenGL ES is active; check logs for the Vulkan error.",
+                )
+            }
             created.setCamera(camera)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            requestedOverlays.let { created.setOverlays(it.skeleton, it.flat, it.region) }
+            requestedClip?.let { created.setClip(it.clip, it.speed, it.loop) }
             if (recoveryProbe != null) {
                 _recoveryStatus.value = if (pendingEngineHandle != 0L) {
                     RecoveryStatus("VERIFYING", "Checking sustained non-empty frame submission. This does not prove visible pixels.")
@@ -431,7 +454,7 @@ class RenderSurfaceView @JvmOverloads constructor(
             }
             if (visible) handler.post(frameLoop)
         } catch (t: Throwable) {
-            Log.e(RENDER_LOG_TAG, "GLES renderer initialization failed", t)
+            Log.e(RENDER_LOG_TAG, "${requested.backend} renderer initialization failed", t)
             handleRendererFailure(
                 RecoveryStage.STARTUP,
                 t.message ?: t.javaClass.simpleName,

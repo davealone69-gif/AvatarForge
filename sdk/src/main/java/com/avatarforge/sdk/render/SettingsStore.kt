@@ -11,6 +11,7 @@ object RenderSettingsCodec {
     fun encode(settings: RenderSettings): Map<String, String> = buildMap {
         put(KEY_VERSION, FORMAT_VERSION.toString())
         put("quality", settings.quality.value.toString())
+        put("backend", settings.backend.name.lowercase())
         put("shadows", settings.shadows.toString())
         put("bloom", settings.bloom.toString())
         put("sss", settings.sss.toString())
@@ -44,8 +45,14 @@ object RenderSettingsCodec {
            back to the caller's default rather than clamp onto the highest preset. */
         val quality = Quality.entries.firstOrNull { it.value == values["quality"]?.toIntOrNull() }
             ?: defaults.quality
+        val backend = when (values["backend"]?.lowercase()) {
+            "gles" -> RenderBackend.GLES
+            "vulkan" -> RenderBackend.VULKAN
+            else -> defaults.backend // old preferVulkan flag is deliberately not a new opt-in
+        }
         return RenderSettings(
             quality = quality,
+            backend = backend,
             shadows = bool("shadows", defaults.shadows),
             bloom = bool("bloom", defaults.bloom),
             sss = bool("sss", defaults.sss),

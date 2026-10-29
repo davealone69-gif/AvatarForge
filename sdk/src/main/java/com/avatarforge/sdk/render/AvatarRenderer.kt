@@ -1,12 +1,11 @@
 /*
  * AvatarForge :: AvatarRenderer.kt
  *
- * Kotlin wrapper over the custom renderer's C ABI (native/src/render/af_render_capi.cpp). The
- * renderer itself is C++ (OpenGL ES 3.1) and shares nothing with any game
- * engine - see native/src/render/af_render.h for the architecture.
+ * Kotlin wrapper over the JNI renderer bridge. Native C++ implements GLES 3.1 and opt-in Vulkan,
+ * without a game engine; see native/src/render/af_render.h for backend selection.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
- * that with RenderSurfaceView, which owns a dedicated GLES thread. Calling any method here
+ * that with RenderSurfaceView's dedicated render thread. Calling any method here
  * from another thread is a bug and the kernel will notice (the backends assert the thread).
  */
 package com.avatarforge.sdk.render
@@ -62,9 +61,13 @@ data class RendererStats(
     val meetsTarget: Boolean get() = fps >= 30f
 }
 
+/** App-level graphics API; GLES through ANGLE still counts as GLES, not native Vulkan. */
+enum class RenderBackend { GLES, VULKAN }
+
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
+    val backend: RenderBackend = RenderBackend.GLES,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -94,9 +97,9 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     companion object {
         /**
-         * Creates a renderer for a live Surface. Throws when GLES 3.1 cannot be
-         * initialised - there is no software fallback and no "maybe it will work" path, because the
-         * app's contract is that a button either does the real thing or is not there.
+         * Creates the selected native renderer for a live Surface. Vulkan is opt-in; if its
+         * initialization fails, the native factory tries GLES 3.1 and exposes the actual backend
+         * in info(). Neither API ever falls back to a software success.
          */
         fun create(surface: Surface, settings: RenderSettings = RenderSettings()): AvatarRenderer {
             check(NativeBridge.available) { "the native library is not loaded" }
@@ -108,8 +111,9 @@ class AvatarRenderer private constructor(private var handle: Long) {
                 settings.msaa,
                 settings.shadowMapSize,
                 settings.bloomLevels,
+                settings.backend == RenderBackend.VULKAN,
             )
-            check(handle != 0L) { "OpenGL ES 3.1 renderer could not be initialised" }
+            check(handle != 0L) { "Neither selected GPU renderer could be initialised" }
             val renderer = AvatarRenderer(handle)
             renderer.settings = settings
             renderer.applyOptions(settings)

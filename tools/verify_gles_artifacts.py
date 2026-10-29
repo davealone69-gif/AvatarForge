@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fail closed if an Android library/APK/AAB bundles or links a Vulkan loader.
+"""Verify both native render APIs and reject a bundled Vulkan loader.
 
-Reads ELF64 little-endian DT_NEEDED entries (Android arm64/x86_64), not grep over
-strings: a comment mentioning another API is not a runtime dependency.
+Legacy filename retained for existing build callers. Reads ELF64 little-endian
+DT_NEEDED entries: libafrender.so must link Android's system libvulkan.so and
+GLES/EGL, while APK/AAB/AAR must never bundle a copy of the Vulkan loader.
 """
 import argparse
 from pathlib import Path
@@ -56,11 +57,13 @@ def check_library(name, data):
     if Path(name).name == "libvulkan.so":
         raise ValueError(f"{name}: bundled Vulkan loader")
     needed = needed_libraries(data)
-    if any("vulkan" in item.lower() for item in needed):
-        raise ValueError(f"{name}: Vulkan DT_NEEDED dependency {needed}")
+    if any("vulkan" in item.lower() and item != "libvulkan.so" for item in needed):
+        raise ValueError(f"{name}: unexpected Vulkan loader dependency {needed}")
     if Path(name).name == "libafrender.so":
-        if not {"libEGL.so", "libGLESv3.so"}.issubset(needed):
-            raise ValueError(f"{name}: missing GLES/EGL dependencies {needed}")
+        if not {"libEGL.so", "libGLESv3.so", "libvulkan.so"}.issubset(needed):
+            raise ValueError(f"{name}: missing GLES/EGL/system Vulkan dependencies {needed}")
+    elif "libvulkan.so" in needed:
+        raise ValueError(f"{name}: only libafrender.so may link directly to system Vulkan")
     return needed
 
 
@@ -94,9 +97,9 @@ def main():
     count = 0
     for path in files:
         for name, needed in check_file(path):
-            print(f"PASS GLES-only linkage: {name} -> {', '.join(needed)}")
+            print(f"PASS native renderer linkage: {name} -> {', '.join(needed)}")
             count += 1
-    print(f"PASS: {count} native libraries checked; no Vulkan loader or link dependency")
+    print(f"PASS: {count} native libraries checked; system Vulkan linked, no loader bundled")
 
 
 if __name__ == "__main__":

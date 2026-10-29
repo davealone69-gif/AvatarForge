@@ -5,7 +5,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, "arena/**"]
     tags: ["v*"]
 
 permissions:
@@ -45,15 +45,17 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
           echo "$ANDROID_SDK_ROOT/ndk/26.1.10909125/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
 
-      - name: Shader source / embedded table check
+      - name: Both shader dialects and embedded tables
         run: |
           set -euo pipefail
           command -v glslc
           python3 tools/embed_shaders.py --check
+          python3 tools/embed_vulkan_shaders.py --check
           python3 tools/embed_shaders.py
-          # GLSL embedding is deterministic; a diff means the checked-in GLES table is stale.
-          git diff --exit-code -- native/src/render/af_shaders_gl.h
-          sha256sum native/src/render/af_shaders_gl.h
+          python3 tools/embed_vulkan_shaders.py
+          # Both dialects are checked independently; no empty SPIR-V on missing glslc.
+          git diff --exit-code -- native/src/render/af_shaders_gl.h native/src/render/af_shaders_vk.h
+          sha256sum native/src/render/af_shaders_gl.h native/src/render/af_shaders_vk.h
 
       - name: Install host kernel test dependency
         run: |
@@ -71,6 +73,9 @@ jobs:
 
       - name: Device report parser regressions (mock adb, no device)
         run: bash tools/test_device_check_host.sh
+
+      - name: Renderer library/package linkage guard regressions
+        run: python3 tools/test_renderer_artifacts.py
 
       - name: Build ARM64 native libraries from this checkout
         run: |

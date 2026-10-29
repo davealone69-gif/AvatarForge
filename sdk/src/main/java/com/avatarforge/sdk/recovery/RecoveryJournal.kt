@@ -14,7 +14,7 @@ import java.net.URLEncoder
 
 enum class RecoveryRecordKind {
     FAILURE, AUTOMATIC_ATTEMPT, MANUAL_RETRY, MANUAL_SAFE_RECOVERY,
-    // BACKEND_FALLBACK is decode-only history; GLES-only builds never emit it.
+    // Records an explicit native Vulkan request that initialized using GLES instead.
     FRAME_SUBMISSION_STABLE, PROBE_TIMEOUT, BACKEND_FALLBACK
 }
 

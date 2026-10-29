@@ -13,6 +13,8 @@
 namespace af {
 Renderer* createGlRenderer(ANativeWindow*, const RendererOptions&, std::string*);
 }
+/* Selector-only test double; the Vulkan command path is NOT mocked by this suite. */
+namespace af_test_vk { extern int attempts, destroys; extern bool initSucceeds; void reset(); }
 namespace {
 int checks = 0, failures = 0;
 void check(bool condition, const char* label) {
@@ -153,7 +155,8 @@ void angleDriverIsStillGles() {
     af_test::state.version = "OpenGL ES 3.2 Driver version: 25.6.4";
     std::string error;
     std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
-    check(r && r->info().backend == "gles31" && af_test::state.contextsCreated == 1,
+    check(r && r->info().backend == "gles31" && af_test::state.contextsCreated == 1 &&
+          af_test_vk::attempts == 0,
           "ANGLE-on-Vulkan system driver does not select or initialize an app Vulkan backend");
     check(r && r->info().deviceName == af_test::state.rendererName &&
           r->info().apiVersion == af_test::state.version && r->info().driver == af_test::state.vendorName,
@@ -172,6 +175,36 @@ void angleDriverIsStillGles() {
 /* A settings value is not a GPU allocation licence. These two cases used to reach glTexImage2D and
    glRenderbufferStorageMultisample unchanged, so a stale/corrupt preference could ask for a 16 GB
    shadow map and lose the context on a device that was rendering fine a frame earlier. */
+void vulkanSelection() {
+    af_test::reset(); af_test_vk::reset();
+    af::RendererOptions request = options();
+    request.preferVulkan = true;
+    af_test_vk::initSucceeds = true;
+    std::string error = "stale";
+    std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), request, &error));
+    check(r && r->info().backend == "vulkan" && error.empty(),
+          "explicit Vulkan choice reaches the separate native Vulkan factory");
+    check(af_test_vk::attempts == 1 && af_test::state.contextsCreated == 0,
+          "successful native Vulkan selection does not create an EGL/GLES context");
+    r.reset();
+    check(af_test_vk::destroys == 1, "native Vulkan backend is owned and destroyed with the wrapper");
+
+    af_test::reset(); af_test_vk::reset(); error = "stale";
+    r.reset(af::Renderer::create(window(), request, &error));
+    check(af_test_vk::attempts == 1 && r && r->info().backend == "gles31" && error.empty() &&
+          af_test::state.contextsCreated == 1,
+          "failed Vulkan initialization falls back to a real GLES renderer with actual backend info");
+    r.reset(); check(resourcesReleased(), "GLES fallback resources are released");
+
+    af_test::reset(); af_test_vk::reset();
+    af_test::state.fault = af_test::Fault::EglContext;
+    r.reset(af::Renderer::create(window(), request, &error));
+    check(!r && af_test_vk::attempts == 1 && contains(error, "Vulkan: vkCreateInstance") &&
+          contains(error, "OpenGL ES 3.1") && contains(error, "EGL_BAD_CONFIG"),
+          "failure of both APIs reports both exact initialization reasons");
+    af_test::reset(); af_test_vk::reset();
+}
+
 void optionSanitisation() {
     af_test::reset();
     af::RendererOptions hostile = options();
@@ -245,7 +278,7 @@ int main() {
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
-    selector(); optionSanitisation(); renderAbi();
+    selector(); vulkanSelection(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

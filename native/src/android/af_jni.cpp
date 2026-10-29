@@ -862,7 +862,7 @@ extern "C" {
 
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererCreate(
     JNIEnv* env, jobject, jobject surface, jint quality, jint msaa,
-    jint shadowSize, jint bloomLevels) {
+    jint shadowSize, jint bloomLevels, jboolean preferVulkan) {
     if (!surface) {
         throwIllegalArgument(env, "rendererCreate needs a live Surface");
         return 0;
@@ -875,6 +875,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererC
     }
     af::RendererOptions options{};
     options.quality = af::QualityPreset(quality);
+    options.preferVulkan = preferVulkan == JNI_TRUE;
     options.msaaSamples = msaa;
     options.shadowMapSize = shadowSize;
     options.bloomLevels = bloomLevels;
