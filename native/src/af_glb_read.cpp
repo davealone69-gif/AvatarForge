@@ -28,6 +28,8 @@ constexpr uint32_t GLB_MAGIC = 0x46546C67u;   /* 'glTF' little-endian */
 constexpr uint32_t CHUNK_JSON = 0x4E4F534Au;
 constexpr uint32_t CHUNK_BIN = 0x004E4942u;
 constexpr int MAX_NODE_DEPTH = 256;
+constexpr size_t MAX_GLB_BYTES = 128ull * 1024 * 1024;
+constexpr size_t MAX_JSON_BYTES = 16ull * 1024 * 1024;
 
 uint32_t rd32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
@@ -551,6 +553,10 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         if (error) *error = "GLB: file shorter than a header";
         return AF_ERR_INVALID_ARG;
     }
+    if (size > MAX_GLB_BYTES) {
+        if (error) *error = "GLB: file exceeds the 128 MiB import limit";
+        return AF_ERR_INVALID_ARG;
+    }
     if (rd32(data) != GLB_MAGIC) {
         if (error) *error = "GLB: bad magic (not a binary glTF)";
         return AF_ERR_INVALID_ARG;
@@ -566,6 +572,10 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         return AF_ERR_INVALID_ARG;
     }
     const size_t fileSize = total;   /* trust the header only within the actual buffer */
+    if (fileSize > MAX_GLB_BYTES) {
+        if (error) *error = "GLB: declared length exceeds the 128 MiB import limit";
+        return AF_ERR_INVALID_ARG;
+    }
 
     const uint8_t* jsonChunk = nullptr;
     size_t jsonSize = 0;

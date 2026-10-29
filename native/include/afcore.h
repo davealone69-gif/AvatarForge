@@ -268,7 +268,7 @@ int32_t af_engine_apply_blendshapes(af_engine* engine, const float* weights, int
 int32_t af_engine_blendshape_names(char names_out[][64], int32_t max_names);
 
 /* ------------------------------------------------------------------ geometry access ----- */
-/* Vertex layout, interleaved, for direct upload to a Vulkan/GLES vertex buffer:
+/* Vertex layout, interleaved, for direct upload to a GLES vertex buffer:
  *   float pos[3]; float normal[3]; float tangent[4]; float uv[2]; float color[4];
  *   uint16 joints[4]; float weights[4];          => 88 bytes per vertex (byte-exact, see af_vertex below)
  */
@@ -387,13 +387,13 @@ typedef struct af_stats {
     int32_t vertex_count, index_count, triangle_count, submesh_count, joint_count, blendshape_count;
     uint64_t texture_bytes, geometry_bytes, peak_field_bytes;
     float fit_anatomy_ms, field_ms, isosurface_ms, garment_ms, hair_ms, uv_ms, texture_ms, rig_ms, export_ms;
-    char gpu_hint[64];      /* "vulkan" | "gles31" | "software" - decided by the app layer */
+    char gpu_hint[64];      /* informational; the Android app reports "gles31" */
 } af_stats;
 
 int32_t af_engine_stats(const af_engine* engine, af_stats* out);
 
 /* The renderer runs in the app layer (it needs the Android window), so it reports the backend it
-   actually initialised: "vulkan", "gles31" or "software". Purely informational - the engine never
+   actually initialised (the Android app uses "gles31"). Purely informational - the engine never
    reads it - but it is what the SDK's health check reports to the user. */
 int32_t af_engine_set_gpu_hint(af_engine* engine, const char* hint);
 

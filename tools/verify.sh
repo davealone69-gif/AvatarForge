@@ -42,8 +42,26 @@ else
     grep -n "FAIL" build-host/host_tests_run.txt | head -10 || tail -20 build-host/host_tests_run.txt
 fi
 
+# ------------------------------------------------------------------ renderer fault injection --
+banner "renderer: GLES initialization, capability fallbacks and cleanup (host API mock)"
+if bash tools/test_renderer_host.sh > build-host/renderer_init_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/renderer_init_tests.txt)"
+else
+    bad "renderer initialization regressions - see build-host/renderer_init_tests.txt"
+    tail -15 build-host/renderer_init_tests.txt
+fi
+
+# ------------------------------------------------------------------ model-detail regressions --
+banner "model detail: hand frame and garment layer resolution"
+if bash tools/test_model_host.sh > build-host/model_detail_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/model_detail_tests.txt)"
+else
+    bad "model-detail regressions - see build-host/model_detail_tests.txt"
+    tail -15 build-host/model_detail_tests.txt
+fi
+
 # ------------------------------------------------------------------ 2. shader tables ------------
-banner "shaders: SPIR-V + GLSL ES tables match the sources"
+banner "shaders: complete GLSL ES table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
 # neither ANDROID_NDK nor ANDROID_NDK_HOME is exported (ANDROID_HOME alone is the common case).
 if [ -z "${ANDROID_NDK:-}" ] && [ -z "${ANDROID_NDK_HOME:-}" ]; then

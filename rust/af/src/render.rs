@@ -2,8 +2,7 @@
 //  af::render -- optional Rust binding for the custom renderer (feature = "renderer")
 // =============================================================================================
 //
-//  The renderer is C++ (native/src/render/) and needs a real Android window plus a Vulkan or
-//  GLES 3.1 driver, so this module is off by default: desktop builds and unit tests of the kernel
+//  The renderer is C++ (native/src/render/) and needs a real Android window plus a GLES 3.1 driver, so this module is off by default: desktop builds and unit tests of the kernel
 //  do not link it, and an Android build can turn it on to drive the exact same renderer the
 //  Kotlin app uses.
 //
@@ -32,7 +31,6 @@ pub enum Quality {
 #[derive(Clone, Copy, Debug)]
 pub struct RenderOptions {
     pub quality: i32,
-    pub prefer_vulkan: i32,
     pub enable_shadows: i32,
     pub enable_bloom: i32,
     pub enable_sss: i32,
@@ -54,20 +52,19 @@ impl Default for RenderOptions {
     fn default() -> Self {
         let mut options = Self {
             quality: Quality::Auto as i32,
-            prefer_vulkan: 1,
             enable_shadows: 1,
-            enable_bloom: 1,
+            enable_bloom: 0,
             enable_sss: 1,
             msaa_samples: 4,
             shadow_map_size: 2048,
             bloom_levels: 4,
             sun_azimuth_deg: 42.0,
             sun_elevation_deg: 38.0,
-            sun_intensity: 3.4,
+            sun_intensity: 1.5,
             turbidity: 2.6,
             ground_albedo: 0.28,
-            exposure: 1.0,
-            environment_intensity: 1.0,
+            exposure: 0.65,
+            environment_intensity: 0.65,
             shadow_softness: 1.0,
             ground_plane: 1,
         };
@@ -89,7 +86,7 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { yaw_deg: 180.0, pitch_deg: 4.0, distance: 3.0, target_y: 0.95, fov_deg: 32.0, roll_deg: 0.0 }
+        Self { yaw_deg: 180.0, pitch_deg: 4.0, distance: 3.5, target_y: 0.95, fov_deg: 32.0, roll_deg: 0.0 }
     }
 }
 
@@ -122,7 +119,7 @@ impl Default for RenderInfo {
 }
 
 impl RenderInfo {
-    /// "vulkan" or "gles31" - what the renderer actually initialised, never a guess.
+    /// Actual GLES backend identifier reported by the renderer.
     pub fn backend(&self) -> String {
         cstr(&self.backend)
     }
@@ -141,11 +138,13 @@ impl RenderInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct RenderStats {
     pub frame_ms: f32,
     pub cpu_ms: f32,
     pub fps: f32,
+    /// -1 means unavailable; never present as measured GPU time.
+    pub gpu_ms: f32,
     pub draw_calls: i32,
     pub triangles: i32,
     pub vertices: i32,
@@ -154,7 +153,36 @@ pub struct RenderStats {
     pub bloom_levels: i32,
     pub quality_level: i32,
     pub frames: i32,
+    pub frame_attempts: i32,
+    pub frame_submissions: i32,
+    pub present_requests_accepted: i32,
     pub texture_bytes: u64,
+}
+
+impl Default for RenderStats {
+    fn default() -> Self {
+        Self {
+            frame_ms: 0.0, cpu_ms: 0.0, fps: 0.0, gpu_ms: -1.0,
+            draw_calls: 0, triangles: 0, vertices: 0, shadow_map_size: 0,
+            msaa_samples: 0, bloom_levels: 0, quality_level: 0, frames: 0,
+            frame_attempts: 0, frame_submissions: 0, present_requests_accepted: 0,
+            texture_bytes: 0,
+        }
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<RenderOptions>() == 64);
+const _: () = assert!(core::mem::size_of::<RenderStats>() == 72);
+const _: () = assert!(core::mem::size_of::<Camera>() == 24);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unknown_gpu_time_and_camera_defaults_are_explicit() {
+        assert_eq!(RenderStats::default().gpu_ms, -1.0);
+        assert_eq!(Camera::default().distance, 3.5);
+    }
 }
 
 fn cstr<const N: usize>(bytes: &[c_char; N]) -> String {
@@ -200,7 +228,7 @@ extern "C" {
     );
 }
 
-/// Owns one backend instance (Vulkan or GLES) for one Android window.
+/// Owns one GLES backend instance for one Android window.
 pub struct Renderer {
     handle: *mut c_void,
 }

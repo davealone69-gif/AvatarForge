@@ -607,27 +607,21 @@ float BodyField::handShape(const Vec3& p, const Chain& c) const {
     const Vec3 palmNormal(-sx, 0.0f, 0.0f);
     const Vec3 across = palmNormal.cross(dirDown).normalizedOr({0, 0, 1});
 
-    /* Palm: a flattened rounded box (thinner at the wrist, wider at the knuckles). */
-    float d = sdRoundBox(p - c.palmCentre,
-                         Vec3(m_.palmWidth * 0.5f, m_.handLength * 0.26f, m_.palmThickness * 0.5f),
+    /* Palm: a flattened rounded box expressed in the hand's own frame. The old world-axis
+       box extruded through the thin side of a relaxed hand and read as a rectangular block. */
+    const Vec3 q = p - c.palmCentre;
+    const float alongDown = q.dot(dirDown);
+    const float alongAcross = q.dot(across);
+    const float alongNormal = q.dot(palmNormal);
+    const float halfLen = m_.handLength * 0.26f;
+    const float taper = 1.0f + 0.10f * saturate(-alongDown / maxf(halfLen, 1e-4f));
+    float d = sdRoundBox(Vec3(alongAcross, alongDown, alongNormal),
+                         Vec3(m_.palmWidth * 0.5f * taper, halfLen, m_.palmThickness * 0.5f),
                          m_.palmThickness * 0.45f);
-    {
-        /* Rotate the palm block into the hand frame by blending three sliver boxes; cheaper
-           and more stable than building a rotated box SDF with sheared basis. */
-        const Vec3 q = p - c.palmCentre;
-        const float alongDown = q.dot(dirDown);
-        const float alongAcross = q.dot(across);
-        const float alongNormal = q.dot(palmNormal);
-        const float halfLen = m_.handLength * 0.26f;
-        const float taper = 1.0f + 0.10f * saturate(-alongDown / maxf(halfLen, 1e-4f));
-        d = smin(d, sdRoundBox(Vec3(alongAcross, alongDown, alongNormal),
-                               Vec3(m_.palmWidth * 0.5f * taper, halfLen, m_.palmThickness * 0.5f),
-                               m_.palmThickness * 0.45f), 0.012f);
-        /* Thenar (thumb) pad and hypothenar pad - both read strongly at any distance. */
-        d = smin(d, blob(Vec3(alongAcross, alongDown, alongNormal),
-                         Vec3(m_.palmWidth * 0.42f, m_.handLength * 0.05f, -m_.palmThickness * 0.10f),
-                         Vec3(m_.palmWidth * 0.32f, m_.handLength * 0.16f, m_.palmThickness * 0.52f)), 0.018f);
-    }
+    /* Thenar (thumb) pad and hypothenar pad - both read strongly at any distance. */
+    d = smin(d, blob(Vec3(alongAcross, alongDown, alongNormal),
+                     Vec3(m_.palmWidth * 0.42f, m_.handLength * 0.05f, -m_.palmThickness * 0.10f),
+                     Vec3(m_.palmWidth * 0.32f, m_.handLength * 0.16f, m_.palmThickness * 0.52f)), 0.018f);
 
     /* Wrist stump for the cut plane. */
     d = smin(d, sdCapsule(p, c.wrist - dirDown * 0.02f, c.wrist + dirDown * 0.012f, m_.wristR), 0.012f);
@@ -642,12 +636,12 @@ float BodyField::handShape(const Vec3& p, const Chain& c) const {
         const float r1 = r0 * (i == 0 ? 0.96f : 0.90f);
         const float r2 = r0 * (i == 0 ? 0.92f : 0.80f);
         const float r3 = r0 * (i == 0 ? 0.88f : 0.68f);
-        /* Blend radius kept small (2.5 mm): adjacent fingers are only ~2 mm apart at the base,
-           and a blend comparable to that gap would fuse them into a mitten. The phalanges of
-           one finger overlap along their axis, so the small radius still reads as a smooth joint. */
-        d = smin(d, sdTaperedCapsule(p, j0, j1, r0, r1), 0.0025f);
-        d = smin(d, sdTaperedCapsule(p, j1, j2, r1, r2), 0.0025f);
-        d = smin(d, sdTaperedCapsule(p, j2, j3, r2, r3), 0.0025f);
+        /* Adjacent fingers are only ~2 mm apart at the base; a blend comparable to that gap
+           fuses them into a mitten. Use a sub-millimetre blend between fingers and rely on the
+           overlapping phalanges of one finger for a smooth joint. */
+        d = smin(d, sdTaperedCapsule(p, j0, j1, r0, r1), 0.0012f);
+        d = smin(d, sdTaperedCapsule(p, j1, j2, r1, r2), 0.0012f);
+        d = smin(d, sdTaperedCapsule(p, j2, j3, r2, r3), 0.0012f);
         /* Knuckle and inter-phalangeal joint bulges. */
         d = smin(d, blob(p, j1, Vec3(r1 * 1.10f, r1 * 1.10f, r1 * 1.10f)), 0.0025f);
         d = smin(d, blob(p, j2, Vec3(r2 * 1.08f, r2 * 1.08f, r2 * 1.08f)), 0.0022f);
@@ -951,12 +945,14 @@ float BodyField::faceFeatures(const Vec3& p) const {
 
     /*
      * Eyeballs, added LAST: the socket carve above is subtractive, so an eyeball unioned before it
-     * would be scooped out along with the orbit. Sclera + cornea sit inside the socket with the
-     * lids overlapping the corneal bulge, which is what gives the renderer a refraction volume and
-     * an eye that does not look painted on.
+     * would be scooped out along with the orbit. Use a HARD min here, not smin: a 3 mm smooth
+     * union blends the sclera into the lid margin and lets the coarse lattice phase decide how
+     * much of each eye survives extraction (measured 1637 vs 156 triangles on the device GLB).
+     * The lid crescents already overlap the cornea geometrically; the material boundary must stay
+     * crisp so both eyes extract the same exposed sclera patch.
      */
-    for (int side = 0; side < 2; ++side) {
-        d = smin(d, eyeballShape(p, side), 0.003f);
+    for (int side : {-1, 1}) {
+        d = minf(d, eyeballShape(p, side));
     }
 
     /* Fine facial micro-relief. Amplitude is deliberately tiny (0.35 mm) - it exists to give
@@ -1186,8 +1182,12 @@ float BodyField::clothLower(const Vec3& p) const {
     const float e = 2.45f;
     const float kk = std::pow(std::pow(std::fabs(nx), e) + std::pow(std::fabs(nz), e), 1.0f / e);
     float domain = smax((kk - 1.0f) * minf(rx, rz), maxf(hemY - p.y, p.y - topY), 0.012f);
-    /* Arms hang beside the hips: keep them out of the trousers. */
-    domain = smax(domain, -armsCut(p, thickness + 0.02f), 0.010f);
+    /* Arms hang beside the hips: keep them out of the waistband, but do not cut the trouser
+       legs below the crotch. The old unconditional subtraction removed cloth from the outer
+       thigh wherever the relaxed arm passed nearby, exposing skin through the garment. */
+    if (p.y > m_.y.crotchY) {
+        domain = smax(domain, -armsCut(p, thickness + 0.02f), 0.010f);
+    }
     (void)H;
     return smax(body(p) - thickness, domain, 0.0018f);
 }
@@ -1269,12 +1269,26 @@ float BodyField::gearShape(const Vec3& p) const {
         pad = smax(pad, s.y + r * 0.10f - p.y, 0.008f);           /* open underneath */
         d = minf(d, pad);
     }
-    /* Chest plate: a shell over the sternum, following the ribcage. */
+    /* Chest plate: a curved shell over the sternum, following the ribcage. A solid ellipsoid
+       here protruded ~8 cm in front of the cloth and read as a metal ball stuck to the chest.
+       The plate is the gap between two torso-profile offsets, clipped to the front sternum. */
     {
-        const float r = m_.chest.rx * (suit ? 1.10f : 0.92f);
-        const Vec3 cc(0.0f, m_.y.bustY + 0.02f * H, -(m_.chest.rz * 0.55f));
-        float cp = sdEllipsoid(p - cc, Vec3(r * 0.92f, r * 0.78f, r * 0.95f));
-        cp = smax(cp, -(p.y - (m_.y.underbustY - 0.02f * H)), 0.010f);      /* not below the ribs */
+        const float plate = maxf(suit ? 0.020f : 0.014f, minLayer());
+        const float y = clampf(p.y, m_.y.underbustY - 0.015f * H, m_.y.bustY + 0.060f * H);
+        const float rx = torsoProfileRx(y) * 1.06f + plate;
+        const float rz = torsoProfileRz(y) * 1.06f + plate;
+        const float cz = torsoProfileCz(y);
+        const float nx = p.x / rx;
+        const float nz = (p.z - cz) / rz;
+        const float e = 2.45f;
+        const float kk = std::pow(std::pow(std::fabs(nx), e) + std::pow(std::fabs(nz), e), 1.0f / e);
+        const float radial = (kk - 1.0f) * minf(rx, rz);
+        float cp = smax(radial, -plate - radial, 0.002f);
+        const float band = maxf((m_.y.underbustY - 0.015f * H) - p.y,
+                                p.y - (m_.y.bustY + 0.060f * H));
+        const float sternum = maxf(std::fabs(p.x) - rx * 0.72f,
+                                   p.z - (cz - rz * 0.10f));   /* front half only */
+        cp = smax(cp, maxf(band, sternum), 0.004f);
         d = minf(d, cp);
     }
     /* Belt / harness ring at the waist. */
@@ -1337,19 +1351,32 @@ float BodyField::hairShape(const Vec3& p) const {
      * the eyes, the whole face - is cut away, so the hair sits where hair sits and the face stays
      * clear. The tilt follows the brow ridge, which is already an anatomical anchor.
      */
-    const float tilt = 0.30f + 0.20f * (m_.sex == AF_SEX_FEMALE ? 1.0f : 0.0f);
-    const Vec3 hp(0.0f, browRidge_.y + headH * 0.05f, browRidge_.z + m_.head.rz * 0.10f);
+    const float tilt = 0.34f + 0.16f * (m_.sex == AF_SEX_FEMALE ? 1.0f : 0.0f);
+    const Vec3 hp(0.0f, browRidge_.y + headH * 0.10f, browRidge_.z + m_.head.rz * 0.05f);
     const float front = (p - hp).x * 0.0f + (p - hp).y * std::cos(tilt) - (p - hp).z * std::sin(tilt);
     d = smax(d, -front, 0.004f);
+    /* Explicit orbital clearance: a fringe or volume bulge must never become a visor over the
+       eyes. This carve is independent of the hairline plane, so it also catches style bulk. */
+    for (int s = 0; s < 2; ++s) {
+        const Vec3 e = eyeCentre_[static_cast<size_t>(s)];
+        const float r = m_.eyeRadius;
+        const float orbit = sdEllipsoid(p - (e + Vec3(0.0f, 0.0f, -r * 0.45f)),
+                                        Vec3(r * 2.10f, r * 1.70f, r * 1.55f));
+        d = smax(d, -orbit, 0.004f);
+    }
     /* Below the ears the head is bare; the mass must not wrap the jaw. */
     const float jawCut = eyeCentre_[0].y - headH * 0.14f - p.y;
     if (length <= 0.0f) d = smax(d, jawCut, 0.006f);
 
     /* Bulk: a volume that follows the skull outwards, for volume without thickness. */
     if (volume > 0.0f) {
-        const Vec3 c(0.0f, (crown + m_.y.eyeY) * 0.5f, m_.head.centreZ + m_.head.rz * 0.12f);
-        const float v = sdEllipsoid(p - c, Vec3(m_.head.rx * 1.02f + volume, headH * 0.52f + volume,
-                                               m_.head.rz * 1.02f + volume * 1.2f));
+        /* Bulk follows the cranium; it must not float the crown 7 cm above the skull. The old
+           ellipsoid used headH*0.52 + volume about a centre between crown and eyes, which made
+           a ponytail read as a helmet. Keep the extra volume modest and crown-clipped. */
+        const Vec3 c(0.0f, (crown + m_.y.chinY) * 0.5f, m_.head.centreZ);
+        float v = sdEllipsoid(p - c, Vec3(m_.head.rx * 1.02f + volume, headH * 0.50f + volume * 1.8f,
+                                          m_.head.rz * 1.02f + volume));
+        v = smax(v, p.y - (crown + thickness + volume), 0.004f);
         d = smin(d, smax(v, -front, 0.004f), 0.010f);
     }
     /* A crest keeps only a strip along the midline; used by the mohawk. */
@@ -1456,8 +1483,11 @@ int BodyField::classifyRegion(const Vec3& p) const {
     if (tongueShape(p) < kOnSurface) return REGION_TONGUE;
     if (lipsShape(p) < kOnSurface) return REGION_LIPS;
     if (browShape(p) < kOnSurface) return REGION_LASH;
-    for (int side = 0; side < 2; ++side) {
-        if (eyeballShape(p, side) < kOnSurface) return (side == 0) ? REGION_EYE_L : REGION_EYE_R;
+    /* eyeballShape() takes an anatomic side (+1 = character left, -1 = right), not an
+       array index. The old 0/1 loop swapped the material labels and made the exposed-sclera
+       regression impossible to satisfy on either side. */
+    for (int side : {-1, 1}) {
+        if (eyeballShape(p, side) < kOnSurface) return (side > 0) ? REGION_EYE_L : REGION_EYE_R;
     }
     /* Nails: dorsal side of each distal phalanx. */
     for (int side = -1; side <= 1; side += 2) {

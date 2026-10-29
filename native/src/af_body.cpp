@@ -127,7 +127,8 @@ Vec3 projectToSurface(const std::function<float(const Vec3&)>& field, const Vec3
  * version of the coarse shape.
  */
 size_t refineAdaptive(Mesh* mesh, const std::vector<uint8_t>& wanted,
-                      const std::function<Vec3(const Vec3&)>& project, float cell) {
+                      const std::function<Vec3(const Vec3&)>& project, float cell,
+                      const std::function<int(const Vec3&)>& regionFn = {}) {
     const size_t triCount = mesh->triangleCount();
     auto ekey = [](uint32_t a, uint32_t b) {
         if (a > b) std::swap(a, b);
@@ -161,6 +162,11 @@ size_t refineAdaptive(Mesh* mesh, const std::vector<uint8_t>& wanted,
     std::vector<float> newCurvature;
     std::unordered_map<uint64_t, uint32_t> midOf;
     midOf.reserve(splitEdge.size());
+    /* Optional region classifier for new edge midpoints. Inheriting endpoint A's region is
+       wrong across a material boundary: an eye/skin edge whose A vertex is skin keeps every
+       midpoint skin, so the sclera patch shrinks to the coarse lattice lottery and becomes
+       wildly asymmetric. Re-classify the projected midpoint when a classifier is supplied. */
+    const std::function<int(const Vec3&)>& classify = regionFn;
     auto midpoint = [&](uint32_t a, uint32_t b) -> uint32_t {
         const uint64_t k = ekey(a, b);
         const auto it = midOf.find(k);
@@ -169,7 +175,7 @@ size_t refineAdaptive(Mesh* mesh, const std::vector<uint8_t>& wanted,
         const Vec3 projected = project(mid);
         const uint32_t id = static_cast<uint32_t>(mesh->positions.size());
         mesh->positions.push_back(projected);
-        mesh->regions.push_back(mesh->regions[a]);
+        mesh->regions.push_back(classify ? classify(projected) : mesh->regions[a]);
         mesh->curvature.push_back(mesh->curvature.size() > b
                                       ? (mesh->curvature[a] + mesh->curvature[b]) * 0.5f
                                       : 1.0f);
@@ -621,7 +627,7 @@ bool buildBodyMesh(const BodyField& field, const BodyBuildOptions& optionsIn,
                 wanted[static_cast<size_t>(t)] = want ? 1 : 0;
             }
         });
-        refineAdaptive(&mesh, wanted, project, cell);
+        refineAdaptive(&mesh, wanted, project, cell, regionFn);
 #ifdef AF_ISO_DEBUG
         {
             const Mesh::ManifoldReport rr = mesh.audit();
@@ -653,7 +659,7 @@ bool buildBodyMesh(const BodyField& field, const BodyBuildOptions& optionsIn,
                 wanted[static_cast<size_t>(t)] = inMicroRegion(c) ? 1 : 0;
             }
         });
-        refineAdaptive(&mesh, wanted, project, cell);
+        refineAdaptive(&mesh, wanted, project, cell, regionFn);
         if (options.progress) options.progress(1, 0.62f);
         if (options.cancelled && options.cancelled()) return false;
     }

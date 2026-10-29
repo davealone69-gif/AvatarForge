@@ -40,15 +40,16 @@ keystore.properties
 # ---- build logs (the commands are documented; the logs are noise) -----------------------------
 *.log
 
-# ---- generated binaries: TRACKED BY DECISION --------------------------------------------------
-# prebuilt/ and artifacts/ are deliberately committed. They are build outputs, but they are also
-# the deliverables: someone cloning this repository can install the APK, open the sample .glb, or
-# build the app without an NDK, which matters more here than a tidy diff.
-#
-# The cost, stated plainly: ~65 MB in history (of which the sample model is 34 MB), and a new
-# blob for every rebuild rather than a small diff. To stop tracking them later:
-#     git rm -r --cached prebuilt artifacts   # and add the patterns back here
-# Everything else that a documented command regenerates stays ignored.
+# ---- generated binaries: CI artifacts are authoritative ---------------------------------------
+# Vulkan-era prebuilt libraries/APKs/AARs/sample GLBs were removed from tracking: stale binaries
+# can silently resurrect a deleted backend or model defect. Rebuild with tools/build_android.sh
+# or consume the exact-head CI artifact (SHA256SUMS + PROVENANCE.json). Audit records stay tracked.
+prebuilt/
+artifacts/*.apk
+artifacts/*.aab
+artifacts/*.aar
+artifacts/*.glb
+artifacts/BUILD-*.txt
 out/
 
 # ---- OS / editor cruft ------------------------------------------------------------------------
@@ -56,3 +57,7 @@ out/
 Thumbs.db
 *.swp
 *~
+
+# Python bytecode
+__pycache__/
+*.py[cod]

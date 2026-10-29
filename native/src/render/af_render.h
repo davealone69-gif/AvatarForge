@@ -1,25 +1,14 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_render.h  --  custom real-time renderer (Vulkan primary, GLES 3.1 fallback)
+ *  AvatarForge :: af_render.h -- GLES 3.1 real-time renderer
  * ============================================================================================
  *
- *  This renderer is written from scratch against the Khronos APIs. There is no game engine, no
- *  scene-graph library, no third-party renderer and no shader pack: every pipeline, every
- *  descriptor, every render target and every line of GLSL in this directory is part of the
- *  AvatarForge source tree.
+ * One supported backend: GlRenderer (af_gl.cpp), using EGL, VAOs, UBOs and FBOs.
+ * Renderer::create reports GLES initialization failures directly. No alternate API is
+ * attempted and no software renderer is substituted. Android's driver implementation is
+ * reported verbatim; an OS-level GLES translation layer is not an app Vulkan backend.
  *
- *  Architecture
- *  ------------
- *      Renderer (abstract)                 af_render.h      <- this file; the app/JNI talks to this
- *        ├── VulkanRenderer                af_vk.cpp        <- VK 1.0/1.1 core, no extensions required
- *        └── GlRenderer                    af_gl.cpp        <- EGL + OpenGL ES 3.1
- *
- *      create() probes Vulkan first (on Android: VK_KHR_android_surface via ANativeWindow); if the
- *      device exposes no usable Vulkan device, it falls back to GLES 3.1. If neither initialises,
- *      create() returns nullptr with an explanation - the app then reports "no GPU backend"
- *      instead of pretending to render. There is no software rasteriser fake.
- *
- *  Lighting model (identical in both backends - same GLSL, two syntax targets)
+ *  Lighting model
  *  ---------------------------------------------------
  *      * direct   : one directional sun, GGX specular, Smith visibility, 5-tap PCF shadow map
  *      * ambient  : analytic sky model (see af_environment.h) projected to 9 SH coefficients on
@@ -62,12 +51,11 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
-    bool  preferVulkan         = true;   /* false forces the GLES path (settings toggle)      */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
-    int   msaaSamples          = 4;      /* 1/2/4/8 accepted; backend clamps to what it supports */
-    int   shadowMapSize        = 2048;   /* square; 1024/2048/4096                             */
+    int   msaaSamples          = 4;      /* clamped to 1..4 (and to GL_MAX_SAMPLES) by the backend */
+    int   shadowMapSize        = 2048;   /* clamped to 512..2048; square, depth-only               */
     int   bloomLevels          = 4;
 
     /* Environment. Defaults are a clear late-afternoon studio exterior - the look the reference
@@ -86,7 +74,7 @@ struct RendererOptions {
 struct CameraState {
     float yawDeg    = 180.0f;   /* orbit around +Y; 180 looks at the model's front (-Z)       */
     float pitchDeg  = 4.0f;     /* + looks down                                               */
-    float distance  = 3.0f;     /* metres from the orbit target                               */
+    float distance  = 3.5f;     /* metres from the orbit target; frames a ~1.85 m avatar      */
     float targetY   = 0.95f;    /* orbit target height (mid-torso for a 1.75 m avatar)        */
     float fovDeg    = 32.0f;    /* vertical field of view; 32 mm-ish is flattering on faces   */
     float rollDeg   = 0.0f;
@@ -94,9 +82,10 @@ struct CameraState {
 
 /* Per-frame timing the UI shows in the stats drawer, and the budget controller reads. */
 struct RendererStats {
-    float frameMs        = 0.0f;   /* GPU-side frame time, 16-frame rolling mean              */
-    float cpuMs          = 0.0f;   /* CPU submit cost for the same window                     */
+    float frameMs        = 0.0f;   /* presented-frame interval EMA, not a GPU timestamp       */
+    float cpuMs          = 0.0f;   /* CPU wall time inside renderFrame()                      */
     float fps            = 0.0f;
+    float gpuMs          = -1.0f;  /* -1 = unknown; no GPU timestamp query is implemented     */
     int   drawCalls      = 0;
     int   triangles      = 0;
     int   vertices       = 0;
@@ -105,13 +94,16 @@ struct RendererStats {
     int   bloomLevels    = 0;
     uint64_t textureBytes = 0;
     int   qualityLevel   = 2;      /* effective QualityPreset after automatic stepping        */
-    int   frames         = 0;
+    int   frames         = 0;      /* accepted present requests, not mere loop iterations     */
+    int   frameAttempts  = 0;
+    int   frameSubmissions = 0;
+    int   presentRequestsAccepted = 0;
 };
 
 struct RendererInfo {
-    std::string backend;      /* "vulkan" | "gles31"                                     */
+    std::string backend;      /* "gles31"                                                */
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
-    std::string apiVersion;   /* e.g. "Vulkan 1.1.0" / "OpenGL ES 3.2"                   */
+    std::string apiVersion;   /* e.g. "OpenGL ES 3.2"                                    */
     std::string driver;       /* driver version string, shown in the health screen       */
     bool supportsShadows = false;
     bool supportsMsaa    = false;
@@ -133,6 +125,10 @@ public:
     static Renderer* create(ANativeWindow* window, const RendererOptions& options, std::string* error);
 
     virtual ~Renderer() {}
+
+    /* Non-empty after a frame failed. JNI converts this into an exception so the bounded
+       recovery policy can act; an empty string means no frame error was recorded. */
+    virtual std::string frameError() const { return {}; }
 
     /* Surface size in pixels. Safe to call every frame with the current size; the backend
        recreates swapchain/framebuffers only when the size actually changed. */

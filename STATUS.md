@@ -9,6 +9,23 @@ arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the 
 statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
 what that means and what is outstanding.
 
+### 2026-10-29 stability self-improvement path
+
+A no-AI, offline renderer-stability path is implemented: bounded safe fallback (max two automatic
+attempts), private fault journal, frame-submission probe, and copyable/exportable diagnostics report.
+It is covered by SDK JVM tests and the renderer host suite in CI. **Device visibility remains
+unverified**; the probe does not claim that pixels are visible. See
+[docs/SELF_IMPROVEMENT_PATH.md](docs/SELF_IMPROVEMENT_PATH.md).
+
+### 2026-10-29 device fault
+
+A supplied phone screenshot shows successful generation (417,150 triangles) followed by a viewer
+startup failure: Vulkan was disabled in settings and GLES initialization failed. The GLES path had
+invalid sampler/VAO setup ordering and discarded useful driver diagnostics. Those paths now have
+host fault-injection coverage, explicit retry/backend switching, conservative MSAA/HDR fallback, aligned camera UBO slices, and a restored Self diagnostics menu.
+**The phone has not been retested; visible rendering and FPS remain unverified.** See
+[the fault report](docs/RENDERER_FAULT_2026-10-29.md).
+
 ### 2026-10-18 continuation status
 
 - The complete 28-float image-analysis wire format and 1–4 record regressions pass. The full native
@@ -156,9 +173,11 @@ Phase 1 is *reliable rendering, GLB loading, crash-free lifecycle and profiling*
      `A-pose` / `Clip playback` chips, backed by `AvatarEngine.clipIndex(name)` and the renderer's
      `setClip(clip, speed=0, loop=false)` (a held first key of a real library clip, same skinning
      path as playback). No magic clip ids in the UI any more.
-4. **Release builds are signed and reproducible.** `app/build.gradle.kts` signs with
-   `keystore.properties` when present and falls back to the debug keystore otherwise; the Gradle
-   wrapper (8.9) is checked in; `tools/build_gradle.sh` pins JDK 17 + SDK + heap for this container.
+4. **Release signing is fail-closed.** `app/build.gradle.kts` uses `keystore.properties` or the
+   `AF_RELEASE_*` environment variables and **fails the build** when neither is present; there is no
+   debug-keystore fallback for release. CI may compile an explicitly UNSIGNED AAB with
+   `-Paf.allowUnsignedRelease=true` for packaging checks. A signed production AAB remains BLOCKED
+   here: this environment has no release keystore.
 5. **The native build is a first-class target**: `tools/build_android.sh` (run and verified here) and
    `tools/build-android.ps1` (Windows port, **not** executed — flagged as such in its header).
 6. **`tools/verify.sh`** — one command that re-runs every host-side acceptance check, including the
@@ -173,9 +192,9 @@ build *and* a GPU-capable host, which this container has neither of). So the hon
 
 * **statically verified here** — api level, permissions, provider config, native packaging, dex
   contents, kernel behaviour, shader compilation, glTF structure;
-* **not verified here** — anything that needs a GPU or a touchscreen: actual Vulkan/GLES pipeline
-  creation, frame rate, the budget controller's step-down, thermals, and the exact wall-clock of a
-  generation run on a real SoC.
+* **not verified here** — anything that needs a GPU or a touchscreen: actual GLES 3.1 context and
+  pipeline creation, frame rate, the budget controller's step-down, thermals, and the exact
+  wall-clock of a generation run on a real SoC.
 
 `DEVICE.md` is the pass that closes that gap; the highest-value item on it is the pose-mode check,
 because `[12]`'s device equivalent (does `Rest` return the avatar exactly to the build pose?) is the

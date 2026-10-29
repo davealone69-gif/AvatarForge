@@ -20,11 +20,11 @@ resolver = "2"
 members = ["af-core", "af-sys", "af"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.1"
 edition = "2021"
 rust-version = "1.70"
 license = "Apache-2.0"
-repository = "https://example.invalid/avatarforge"
+repository = "https://github.com/davealone69-gif/AvatarForge"
 
 [profile.release]
 opt-level = 3

@@ -3,7 +3,7 @@
  *
  * The result viewer/editor. This is where the app has to be honest about what it can do:
  *
- *   * the surface is the real renderer (Vulkan or GLES 3.1) drawing the real mesh - the same mesh
+ *   * the surface is the real GLES 3.1 renderer drawing the real mesh - the same mesh
  *     the .glb contains, deformed by the same rig;
  *   * pose and expression controls drive the kernel (applyPose / applyBlendshapes), which deforms
  *     the vertices the renderer then uploads. There is no separate "preview rig";
@@ -17,7 +17,6 @@
 package com.avatarforge.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -27,10 +26,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -45,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.EngineResult
 import com.avatarforge.sdk.summary
+import com.avatarforge.sdk.render.CameraGesture
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RendererInfo
@@ -75,6 +78,7 @@ fun ViewerScreen(
     onCamera: (CameraSettings) -> Unit,
     settings: RenderSettings,
     onSettings: (RenderSettings) -> Unit,
+    onRetryRenderer: (RenderSettings) -> Unit,
     panel: ViewerPanel,
     onPanel: (ViewerPanel) -> Unit,
     clipIndex: Int,
@@ -82,7 +86,9 @@ fun ViewerScreen(
     poseIndex: Int,
     onPose: (Int) -> Unit,
     onExpression: (Int, Float) -> Unit,
+    onResetExpressions: () -> Unit,
     expressionNames: List<String>,
+    expressionWeights: FloatArray,
     onExport: () -> Unit,
     onShare: () -> Unit,
     onExportTo: () -> Unit,
@@ -94,6 +100,13 @@ fun ViewerScreen(
     /** The SurfaceView, hoisted so this screen stays previewable in Compose tooling. */
     surface: @Composable () -> Unit,
 ) {
+    /* pointerInput(Unit) is deliberately long-lived: restarting it on every camera frame would
+       cancel the in-flight gesture. The callback therefore reads the *current* camera/callback
+       through rememberUpdatedState instead of closing over the first composition's value. */
+    val liveCamera by rememberUpdatedState(camera)
+    val liveOnCamera by rememberUpdatedState(onCamera)
+    val liveOnTapModel by rememberUpdatedState(onTapModel)
+
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         surface()
 
@@ -106,39 +119,35 @@ fun ViewerScreen(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        val yaw = camera.yawDeg - pan.x * 0.25f
-                        val pitch = (camera.pitchDeg + pan.y * 0.20f).coerceIn(-80f, 80f)
-                        val distance = (camera.distance / zoom).coerceIn(0.6f, 8f)
-                        onCamera(
-                            camera.copy(
-                                yawDeg = ((yaw % 360f) + 360f) % 360f,
-                                pitchDeg = pitch,
-                                distance = distance,
-                            )
-                        )
+                        liveOnCamera(CameraGesture.orbit(liveCamera, pan.x, pan.y, zoom))
                     }
                 }
-                .pointerInput(onTapModel) {
-                    detectTapGestures { offset -> onTapModel(offset.x, offset.y) }
+                .pointerInput(Unit) {
+                    detectTapGestures { offset -> liveOnTapModel(offset.x, offset.y) }
                 },
         )
 
         Column(
             Modifier
                 .align(Alignment.TopStart)
+                .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(12.dp),
+                .padding(12.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TextButton(onClick = onBack) { Text("← Back to editor") }
-            Header(result, rendererInfo, stats)
+            Header(result, rendererInfo, stats, rendererError != null)
             if (rendererError != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                 ) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("3D viewer failed to start", fontWeight = FontWeight.SemiBold)
+                        Text("3D viewer stopped", fontWeight = FontWeight.SemiBold)
                         Text(rendererError, style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { onRetryRenderer(settings) }) { Text("Retry viewer") }
+                        }
                     }
                 }
             }
@@ -162,25 +171,29 @@ fun ViewerScreen(
             }
         }
 
-        if (panel != ViewerPanel.CAMERA) {
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 56.dp),
-                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        Card(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 56.dp),
+            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                Modifier
+                    .padding(14.dp)
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when (panel) {
-                        ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
-                        ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
-                        ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
-                        ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
-                        ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
-                        ViewerPanel.CAMERA -> Unit
-                    }
+                when (panel) {
+                    ViewerPanel.CAMERA -> CameraPanel(camera, onCamera)
+                    ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
+                    ViewerPanel.FACE -> FacePanel(expressionNames, expressionWeights, onExpression, onResetExpressions)
+                    ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
+                    ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result, engine)
+                    ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
                 }
             }
         }
@@ -188,27 +201,82 @@ fun ViewerScreen(
 }
 
 @Composable
-private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats) {
+private fun CameraPanel(camera: CameraSettings, onCamera: (CameraSettings) -> Unit) {
+    val c = CameraGesture.clamped(camera)
+    Text("Camera", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Drag the model to orbit, pinch to zoom, tap to inspect. These controls move the same camera and work even if a gesture is unavailable.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        AssistChip(onClick = { onCamera(c.copy(yawDeg = CameraGesture.normalizeYaw(c.yawDeg - 15f))) }, label = { Text("Orbit left") })
+        AssistChip(onClick = { onCamera(c.copy(yawDeg = CameraGesture.normalizeYaw(c.yawDeg + 15f))) }, label = { Text("Orbit right") })
+        AssistChip(onClick = { onCamera(c.copy(pitchDeg = (c.pitchDeg + 10f).coerceIn(CameraGesture.MIN_PITCH, CameraGesture.MAX_PITCH))) }, label = { Text("Up") })
+        AssistChip(onClick = { onCamera(c.copy(pitchDeg = (c.pitchDeg - 10f).coerceIn(CameraGesture.MIN_PITCH, CameraGesture.MAX_PITCH))) }, label = { Text("Down") })
+        AssistChip(onClick = { onCamera(c.copy(distance = (c.distance / 1.2f).coerceIn(CameraGesture.MIN_DISTANCE, CameraGesture.MAX_DISTANCE))) }, label = { Text("Zoom in") })
+        AssistChip(onClick = { onCamera(c.copy(distance = (c.distance * 1.2f).coerceIn(CameraGesture.MIN_DISTANCE, CameraGesture.MAX_DISTANCE))) }, label = { Text("Zoom out") })
+        AssistChip(onClick = { onCamera(CameraSettings()) }, label = { Text("Reset") })
+    }
+    CameraSlider("Yaw", c.yawDeg, 0f..360f, "°") { onCamera(CameraGesture.clamped(c.copy(yawDeg = it))) }
+    CameraSlider("Pitch", c.pitchDeg, CameraGesture.MIN_PITCH..CameraGesture.MAX_PITCH, "°") { onCamera(CameraGesture.clamped(c.copy(pitchDeg = it))) }
+    CameraSlider("Distance", c.distance, CameraGesture.MIN_DISTANCE..CameraGesture.MAX_DISTANCE, " m") { onCamera(CameraGesture.clamped(c.copy(distance = it))) }
+    CameraSlider("Target height", c.targetY, 0f..2.5f, " m") { onCamera(CameraGesture.clamped(c.copy(targetY = it))) }
+    CameraSlider("Field of view", c.fovDeg, 20f..60f, "°") { onCamera(CameraGesture.clamped(c.copy(fovDeg = it))) }
+}
+
+@Composable
+private fun CameraSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    unit: String,
+    onChange: (Float) -> Unit,
+) {
+    Text("%s: %.1f%s".format(label, value, unit), style = MaterialTheme.typography.bodySmall)
+    Slider(value = value.coerceIn(range), onValueChange = onChange, valueRange = range)
+}
+
+@Composable
+private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererStats, failed: Boolean) {
+    // The old always-expanded card covered the face and hands in the supplied device screenshots.
+    // Keep the model visible by default; full build/driver evidence is one tap away.
+    var details by remember { mutableStateOf(false) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))) {
-        Column(Modifier.padding(10.dp)) {
-            Text(result.summary(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            val backend = info?.let { "${it.backend} · ${it.deviceName}" } ?: "initialising GPU…"
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "%.2f m · %,d tris".format(result.spec.heightM, result.triangleCount),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
+            }
+            val performance = if (failed) "GPU unavailable" else "%.0f FPS (%.1f ms)".format(stats.fps, stats.frameMs)
             Text(
-                "$backend · %.0f FPS (%.1f ms) · %s".format(
-                    stats.fps, stats.frameMs,
-                    if (stats.meetsTarget) "on target" else "below 30 FPS - auto quality will step down",
-                ),
+                "GLES 3.1 · $performance",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (!failed && stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
             )
-            Text(
-                "%.0f s to build · %d tris on screen".format(
-                    result.timings.values.sum() / 1000f,
-                    stats.triangles,
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (details) {
+                Text(result.summary(), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "%.0f s to build · %,d tris submitted · %.1f MiB textures".format(
+                        result.timings.values.sum() / 1000f, stats.triangles, stats.textureMiB,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                info?.let {
+                    // This is the driver's own description. Android may translate GLES internally;
+                    // it is not an AvatarForge backend selection.
+                    Text("Reported driver: ${it.deviceName} · ${it.apiVersion} · ${it.driver}", style = MaterialTheme.typography.labelSmall)
+                }
+                if (!failed && !stats.meetsTarget) {
+                    Text("Below 30 FPS: automatic quality reduction is active.", style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }
@@ -270,31 +338,51 @@ private fun PosePanel(poseIndex: Int, onPose: (Int) -> Unit, clipIndex: Int, onC
     }
 }
 
+/**
+ * Face-panel state lives in the host, not here: the sliders are a view of the weights the kernel is
+ * actually holding. Before this, every drag rebuilt a zeroed weight array, so moving a second
+ * channel silently reset the first one while the UI still showed it - a control that lied about
+ * what was applied.
+ */
 @Composable
-private fun FacePanel(names: List<String>, onExpression: (Int, Float) -> Unit) {
+private fun FacePanel(
+    names: List<String>,
+    weights: FloatArray,
+    onExpression: (Int, Float) -> Unit,
+    onReset: () -> Unit,
+) {
     var index by remember { mutableStateOf(0) }
-    var value by remember { mutableStateOf(0f) }
+    val selected = index.coerceIn(0, (names.size - 1).coerceAtLeast(0))
+    val value = weights.getOrElse(selected) { 0f }
+    val activeCount = weights.count { it > 0.001f }
     Text("Facial expressions (ARKit blendshapes)", style = MaterialTheme.typography.titleSmall)
     Text(
-        "%d channels, all of which move real vertices: the same morph targets the .glb contains.".format(names.size),
+        "%d channels, all of which move real vertices: the same morph targets the .glb contains. %d active."
+            .format(names.size, activeCount),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         names.forEachIndexed { i, name ->
-            FilterChip(selected = index == i, onClick = { index = i; onExpression(i, value) }, label = { Text(name) })
+            val applied = weights.getOrElse(i) { 0f }
+            FilterChip(
+                selected = selected == i,
+                onClick = { index = i },
+                label = { Text(if (applied > 0.001f) "%s ·%.2f".format(name, applied) else name) },
+            )
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(names.getOrElse(index) { "" }, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(names.getOrElse(selected) { "" }, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text("%.2f".format(value), style = MaterialTheme.typography.bodySmall)
     }
     Slider(
         value = value,
-        onValueChange = { value = it; onExpression(index, it) },
+        onValueChange = { onExpression(selected, it) },
         valueRange = 0f..1f,
+        enabled = names.isNotEmpty(),
     )
-    TextButton(onClick = { value = 0f; names.indices.forEach { onExpression(it, 0f) } }) { Text("Reset all channels") }
+    TextButton(onClick = onReset) { Text("Reset all channels") }
 }
 
 @Composable
@@ -318,11 +406,19 @@ private fun InspectPanel(result: EngineResult, picked: Int, onPick: (Int) -> Uni
 }
 
 @Composable
-private fun ExportPanel(onExport: () -> Unit, onShare: () -> Unit, onExportTo: () -> Unit, result: EngineResult) {
+private fun ExportPanel(
+    onExport: () -> Unit,
+    onShare: () -> Unit,
+    onExportTo: () -> Unit,
+    result: EngineResult,
+    engine: AvatarEngine,
+) {
     Text("Export", style = MaterialTheme.typography.titleSmall)
+    /* Counts come from the engine and the result, not from constants in the copy: a hard-coded
+       "71-joint / 15-clip" line would keep claiming those numbers after a library change. */
     Text(
-        "%.1f MB binary glTF (2.0): mesh, UV-mapped PBR textures, 71-joint skeleton, skin weights, %d ARKit morph targets and the 15 baked clips - one self-contained file."
-            .format(result.glbBytes / 1048576.0, result.blendshapeCount),
+        "%.1f MB binary glTF (2.0): mesh, UV-mapped PBR textures, %d-joint skeleton, skin weights, %d ARKit morph targets and %d baked clips - one self-contained file."
+            .format(result.glbBytes / 1048576.0, result.jointCount, result.blendshapeCount, engine.clipCount),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -354,7 +450,6 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }
     ToggleRow("Sub-surface scattering", settings.sss) { onSettings(settings.copy(sss = it)) }
     ToggleRow("Ground plane", settings.groundPlane) { onSettings(settings.copy(groundPlane = it)) }
-    ToggleRow("Prefer Vulkan (else GLES 3.1)", settings.preferVulkan) { onSettings(settings.copy(preferVulkan = it)) }
     Text("Exposure %.2f".format(settings.exposure), style = MaterialTheme.typography.bodySmall)
     Slider(value = settings.exposure, onValueChange = { onSettings(settings.copy(exposure = it)) }, valueRange = 0.3f..2.5f)
     Text("Sun azimuth %.0f°".format(settings.sunAzimuthDeg), style = MaterialTheme.typography.bodySmall)

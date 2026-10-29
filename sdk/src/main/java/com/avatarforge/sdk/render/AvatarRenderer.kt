@@ -2,16 +2,17 @@
  * AvatarForge :: AvatarRenderer.kt
  *
  * Kotlin wrapper over the custom renderer's C ABI (native/src/render/af_render_capi.cpp). The
- * renderer itself is C++ (Vulkan first, OpenGL ES 3.1 fallback) and shares nothing with any game
+ * renderer itself is C++ (OpenGL ES 3.1) and shares nothing with any game
  * engine - see native/src/render/af_render.h for the architecture.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
- * that with RenderSurfaceView, which owns a dedicated GL/Vulkan thread. Calling any method here
+ * that with RenderSurfaceView, which owns a dedicated GLES thread. Calling any method here
  * from another thread is a bug and the kernel will notice (the backends assert the thread).
  */
 package com.avatarforge.sdk.render
 
 import android.view.Surface
+import com.avatarforge.sdk.internal.KernelAccess
 import com.avatarforge.sdk.internal.NativeBridge
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -36,7 +37,7 @@ data class RendererInfo(
     val supportsFloatHdr: Boolean,
     val supportsAnisotropy: Boolean,
 ) {
-    val isVulkan: Boolean get() = backend.equals("vulkan", ignoreCase = true)
+    val isGles: Boolean get() = backend.startsWith("gles", ignoreCase = true)
 }
 
 /** Live frame statistics. */
@@ -52,6 +53,11 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
+    /** -1 means no GPU timestamp query is implemented; never display this as measured GPU time. */
+    val gpuMs: Float = -1f,
+    val frameAttempts: Int = 0,
+    val frameSubmissions: Int = 0,
+    val presentRequestsAccepted: Int = 0,
 ) {
     val meetsTarget: Boolean get() = fps >= 30f
 }
@@ -59,7 +65,6 @@ data class RendererStats(
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
-    val preferVulkan: Boolean = true,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -80,7 +85,7 @@ data class RenderSettings(
 data class CameraSettings(
     val yawDeg: Float = 180f,
     val pitchDeg: Float = 4f,
-    val distance: Float = 3.0f,
+    val distance: Float = 3.5f,
     val targetY: Float = 0.95f,
     val fovDeg: Float = 32f,
 )
@@ -89,7 +94,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     companion object {
         /**
-         * Creates a renderer for a live Surface. Throws when neither Vulkan nor GLES 3.1 can be
+         * Creates a renderer for a live Surface. Throws when GLES 3.1 cannot be
          * initialised - there is no software fallback and no "maybe it will work" path, because the
          * app's contract is that a button either does the real thing or is not there.
          */
@@ -100,12 +105,11 @@ class AvatarRenderer private constructor(private var handle: Long) {
             val handle = NativeBridge.rendererCreate(
                 surface,
                 settings.quality.value,
-                settings.preferVulkan,
                 settings.msaa,
                 settings.shadowMapSize,
                 settings.bloomLevels,
             )
-            check(handle != 0L) { "no GPU backend could be initialised (Vulkan and GLES 3.1 both refused)" }
+            check(handle != 0L) { "OpenGL ES 3.1 renderer could not be initialised" }
             val renderer = AvatarRenderer(handle)
             renderer.settings = settings
             renderer.applyOptions(settings)
@@ -134,13 +138,15 @@ class AvatarRenderer private constructor(private var handle: Long) {
     }
 
     fun stats(): RendererStats {
-        val floats = FloatArray(4)
-        val ints = IntArray(7)
+        val floats = FloatArray(5)
+        val ints = IntArray(10)
         NativeBridge.rendererStats(handle, floats, ints)
         return RendererStats(
             frameMs = floats[0], cpuMs = floats[1], fps = floats[2], textureMiB = floats[3],
             drawCalls = ints[0], triangles = ints[1], vertices = ints[2], shadowMapSize = ints[3],
             msaaSamples = ints[4], bloomLevels = ints[5], qualityLevel = ints[6],
+            gpuMs = floats[4], frameAttempts = ints[7], frameSubmissions = ints[8],
+            presentRequestsAccepted = ints[9],
         )
     }
 
@@ -155,12 +161,14 @@ class AvatarRenderer private constructor(private var handle: Long) {
      * only suggest the renderer could call back into the SDK.
      */
     fun attachEngine(engineHandle: Long, invalidate: Boolean = true) {
-        val rc = NativeBridge.rendererAttachEngine(handle, engineHandle)
+        /* The renderer keeps a pointer to the engine's arrays, so the pointer swap is fenced:
+           otherwise a generation job could free the old mesh between attach and the first upload. */
+        val rc = KernelAccess.withKernel { NativeBridge.rendererAttachEngine(handle, engineHandle) }
         check(rc == 0) { "renderer refused the engine (${NativeBridge.engineLastError(engineHandle)})" }
-        if (invalidate) NativeBridge.rendererInvalidateMesh(handle)
+        if (invalidate) invalidateMesh()
     }
 
-    fun invalidateMesh() = NativeBridge.rendererInvalidateMesh(handle)
+    fun invalidateMesh() = KernelAccess.withKernel { NativeBridge.rendererInvalidateMesh(handle) }
 
     fun setCamera(camera: CameraSettings) =
         NativeBridge.rendererSetCamera(handle, camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg)
@@ -180,7 +188,6 @@ class AvatarRenderer private constructor(private var handle: Long) {
             newSettings.turbidity,
             newSettings.environmentIntensity,
             newSettings.groundPlane,
-            newSettings.preferVulkan,
             newSettings.msaa,
             newSettings.shadowMapSize,
             newSettings.bloomLevels,
@@ -196,8 +203,14 @@ class AvatarRenderer private constructor(private var handle: Long) {
     fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =
         NativeBridge.rendererSetClip(handle, clip, speed, loop)
 
-    /** Draws one frame. Must be called on the render thread. */
-    fun frame(deltaSeconds: Float) = NativeBridge.rendererFrame(handle, deltaSeconds)
+    /**
+     * Draws one frame. Must be called on the render thread.
+     *
+     * Takes the kernel fence because a frame skins the mesh (clip playback) and then uploads the
+     * engine's own vertex buffer: without it, an expression slider on the UI thread could be writing
+     * vertices while the upload reads them.
+     */
+    fun frame(deltaSeconds: Float) = KernelAccess.withKernel { NativeBridge.rendererFrame(handle, deltaSeconds) }
 
     /** Blocks until the GPU is idle; used before destroying the renderer. */
     fun waitIdle() = NativeBridge.rendererWaitIdle(handle)
@@ -224,11 +237,16 @@ class AvatarRenderer private constructor(private var handle: Long) {
         val ndcX = (viewX / viewWidth) * 2f - 1f
         val ndcY = 1f - (viewY / viewHeight) * 2f
         val point = FloatArray(4)
-        val region = NativeBridge.enginePickRegion(
-            engineHandle,
-            camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg,
-            ndcX, ndcY, viewWidth, viewHeight, point,
-        )
+        /* Raycast against the live vertex array, which the GL thread rewrites every animated frame.
+           Bounded wait: a tap that cannot get the fence in 250 ms reports "nothing picked" rather
+           than intersecting a mesh that is mid-upload. */
+        val region = KernelAccess.tryWithKernel(250L) {
+            NativeBridge.enginePickRegion(
+                engineHandle,
+                camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg,
+                ndcX, ndcY, viewWidth, viewHeight, point,
+            )
+        } ?: return null
         if (region < 0) return null
         return RegionPick(region, point[0], point[1], point[2], point[3])
     }

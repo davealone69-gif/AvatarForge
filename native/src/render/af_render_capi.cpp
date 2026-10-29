@@ -22,6 +22,7 @@
 #include "af_render.h"
 #include "af_render_common.h"
 
+#include <cstddef>
 #include <cstring>
 #include <string>
 
@@ -40,7 +41,6 @@ extern "C" {
 /* ------------------------------------------------------------------ POD mirrors ----------- */
 typedef struct af_render_options {
     int32_t quality;             /* af::QualityPreset */
-    int32_t prefer_vulkan;
     int32_t enable_shadows;
     int32_t enable_bloom;
     int32_t enable_sss;
@@ -71,17 +71,22 @@ typedef struct af_render_info {
 } af_render_info;
 
 typedef struct af_render_stats {
-    float frame_ms, cpu_ms, fps;
+    float frame_ms, cpu_ms, fps, gpu_ms;
     int32_t draw_calls, triangles, vertices;
     int32_t shadow_map_size, msaa_samples, bloom_levels, quality_level, frames;
+    int32_t frame_attempts, frame_submissions, present_requests_accepted;
     uint64_t texture_bytes;
 } af_render_stats;
+
+static_assert(sizeof(af_render_options) == 64, "GLES options C/Rust layout");
+static_assert(sizeof(af_render_stats) == 72, "telemetry C/Rust layout");
+static_assert(offsetof(af_render_stats, texture_bytes) == 64, "64-bit telemetry alignment");
+
 
 void af_render_options_defaults(af_render_options* out) {
     if (!out) return;
     const af::RendererOptions d{};
     out->quality = int32_t(d.quality);
-    out->prefer_vulkan = d.preferVulkan ? 1 : 0;
     out->enable_shadows = d.enableShadows ? 1 : 0;
     out->enable_bloom = d.enableBloom ? 1 : 0;
     out->enable_sss = d.enableSss ? 1 : 0;
@@ -102,7 +107,6 @@ void af_render_options_defaults(af_render_options* out) {
 static af::RendererOptions toCpp(const af_render_options& o) {
     af::RendererOptions options;
     options.quality = af::QualityPreset(o.quality);
-    options.preferVulkan = o.prefer_vulkan != 0;
     options.enableShadows = o.enable_shadows != 0;
     options.enableBloom = o.enable_bloom != 0;
     options.enableSss = o.enable_sss != 0;
@@ -230,6 +234,7 @@ int32_t af_renderer_stats(void* handle, af_render_stats* out) {
     out->frame_ms = stats.frameMs;
     out->cpu_ms = stats.cpuMs;
     out->fps = stats.fps;
+    out->gpu_ms = stats.gpuMs;
     out->draw_calls = stats.drawCalls;
     out->triangles = stats.triangles;
     out->vertices = stats.vertices;
@@ -238,6 +243,9 @@ int32_t af_renderer_stats(void* handle, af_render_stats* out) {
     out->bloom_levels = stats.bloomLevels;
     out->quality_level = stats.qualityLevel;
     out->frames = stats.frames;
+    out->frame_attempts = stats.frameAttempts;
+    out->frame_submissions = stats.frameSubmissions;
+    out->present_requests_accepted = stats.presentRequestsAccepted;
     out->texture_bytes = stats.textureBytes;
     return AF_OK;
 }

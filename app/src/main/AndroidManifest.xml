@@ -34,13 +34,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Opening a .glb the user shares with us. A plain Intent filter: nothing leaves
-                 the device and no network scheme is accepted. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="model/gltf-binary" />
-            </intent-filter>
+            <!-- No ACTION_VIEW GLB filter is advertised until the importer is wired through
+                 JNI/UI and has a real open/import execution path. The native importer exists,
+                 but advertising a dead share target would be a false capability. -->
         </activity>
     </application>
 

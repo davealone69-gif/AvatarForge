@@ -23,7 +23,7 @@ the host cannot judge at all.
 
 | | |
 |---|---|
-| Device | arm64 Android 8.0+ (API 26), Vulkan 1.1 preferred — any GLES 3.1+ device also works, the renderer falls back |
+| Device | arm64 Android 8.0+ (API 26) with **OpenGL ES 3.1**; that is the only backend AvatarForge implements |
 | Host | `adb` from platform-tools, and a copy of this repo (for `tools/validate_glb.py`) |
 | Artifact | `artifacts/avatarforge-debug-arm64.apk` (or the release one, see §1) |
 | Free storage | ~2 GB on the device: every generation writes a 33–39 MB `.glb` plus its textures |
@@ -100,7 +100,7 @@ that is a finding — record it.
 ## 5. The viewer
 
 1. The model appears on a lit ground plane. Orbit with a drag, pinch to zoom.
-2. Open the **Stats** drawer: it shows backend (`vulkan`/`gles3`), frame ms, FPS, triangles, draw
+2. Open the **Stats** drawer: it shows backend (`gles31`), frame ms, FPS, triangles, draw
    calls, and the **quality level** the budget controller has settled on.
 3. Requirement: **≥30 FPS** while orbiting with the default (AUTO) quality. Orbiting fast on a
    mid-range phone should *step the quality down*, not drop frames: the three knobs the controller
@@ -196,8 +196,8 @@ It writes `artifacts/device-report.txt` and prints the same report. It installs 
 
 | Column | Why it is in a Phase 1 report |
 |---|---|
-| `gles renderer`, `vulkan` | which backend the device can actually run, and therefore which of the two renderer paths is being judged |
-| `declared gfx` | the `vulkan.*` / `opengl.*` feature flags, so a GLES-only device is identified as such instead of looking like a Vulkan failure |
+| `gles renderer` | the GLES backend string and driver text the device actually reported (there is no second backend) |
+| `declared gfx` | the `opengl.*` feature flags, so a device without ES 3.1 is identified as such instead of looking like a renderer failure |
 | `thermal status` before/after | a soak that throttles is not a rendering bug; without this column it looks like one |
 | `janky`, `p50`–`p99` | frame pacing over real frames, which is the only honest source for "30 FPS minimum" |
 | `memory now` | the PSS of the running process against the < 2 GB budget |
@@ -206,7 +206,7 @@ It writes `artifacts/device-report.txt` and prints the same report. It installs 
 Any row the device will not report is printed as `UNAVAILABLE (reason)`. It never prints a zero in
 place of a missing number — a blank that looks like a pass is the failure mode this project forbids.
 
-**Phase 1 is complete when** that report shows: a renderer string, Vulkan or `GLES 3.1` (not lower),
+**Phase 1 is complete when** that report shows: a renderer string, `GLES 3.1` (not lower),
 `janky` under 5 %, `p95` under 33.3 ms, `memory now` under 1.5 GB, zero crash entries, and a thermal
 status that did not reach `SEVERE` or `CRITICAL` during the soak.
 

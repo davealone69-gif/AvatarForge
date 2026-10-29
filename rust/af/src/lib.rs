@@ -57,7 +57,7 @@ pub use af_sys;
 /// loaded library that reports anything else.
 pub const ABI_VERSION: i32 = af_sys::AF_ABI_VERSION;
 
-/// Version string of the kernel currently loaded, e.g. "0.9.0".
+/// Version string of the kernel currently loaded, e.g. "0.10.1".
 pub fn kernel_version() -> &'static str {
     Engine::version()
 }
