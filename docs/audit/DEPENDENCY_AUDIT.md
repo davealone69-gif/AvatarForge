@@ -15,7 +15,7 @@ Compose BOM 2024.06.00, activity-compose 1.9.0, core-ktx 1.13.1, exifinterface 1
 
 ## Native
 
-Custom C++17 kernel/renderer. zlib is used for PNG; Android links the platform zlib, host tests used a locally built PIC zlib. Khronos EGL/GLES/Vulkan headers are required. No Filament/bgfx/Lugdunum runtime dependency is present.
+Custom C++17 kernel/renderer. zlib is used for PNG; Android links the platform zlib, host tests used a locally built PIC zlib. Khronos EGL/GLES headers are required (the Vulkan headers and loader dependency were removed with the Vulkan backend). No Filament/bgfx/Lugdunum runtime dependency is present.
 
 ## Rust
 

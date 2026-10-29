@@ -26,6 +26,44 @@
 namespace af {
 namespace {
 
+/* ---- option sanitisation -------------------------------------------------------------------
+ *
+ * Every value below arrives from outside the renderer: the Kotlin settings store, a host app, the
+ * C ABI or the Rust wrapper. A shadow map is `size * size * depth bytes` of GPU memory, so a stale
+ * or hostile 65536 would ask the driver for 16 GB and turn a settings bug into a lost context on a
+ * phone that was rendering fine a frame earlier. The renderer therefore owns the final word on
+ * what it will allocate, and reports the clamped values back through its stats.
+ */
+float finiteOr(float value, float fallback, float lo, float hi) {
+    if (!std::isfinite(value)) return fallback;
+    return std::clamp(value, lo, hi);
+}
+
+int clampedInt(int value, int fallback, int lo, int hi) {
+    /* Non-positive means "caller left it unset", not "allocate zero": use the documented default. */
+    if (value <= 0) return fallback;
+    return std::clamp(value, lo, hi);
+}
+
+RendererOptions sanitizeOptions(RendererOptions o) {
+    o.quality = (o.quality == QualityPreset::LOW || o.quality == QualityPreset::MEDIUM ||
+                 o.quality == QualityPreset::HIGH) ? o.quality : QualityPreset::AUTO;
+    /* 4x is the highest count this target set is budgeted for; more samples multiply the colour and
+       depth renderbuffer cost without a visible gain at phone DPI. */
+    o.msaaSamples = clampedInt(o.msaaSamples, 4, 1, 4);
+    o.shadowMapSize = clampedInt(o.shadowMapSize, 2048, 512, 2048);
+    o.bloomLevels = clampedInt(o.bloomLevels, 4, 0, 5);
+    o.sunAzimuthDeg = finiteOr(o.sunAzimuthDeg, 42.0f, 0.0f, 360.0f);
+    o.sunElevationDeg = finiteOr(o.sunElevationDeg, 38.0f, -5.0f, 90.0f);
+    o.sunIntensity = finiteOr(o.sunIntensity, 1.5f, 0.0f, 16.0f);
+    o.turbidity = finiteOr(o.turbidity, 2.6f, 0.5f, 20.0f);
+    o.groundAlbedo = finiteOr(o.groundAlbedo, 0.28f, 0.0f, 1.0f);
+    o.exposure = finiteOr(o.exposure, 0.65f, 0.05f, 8.0f);
+    o.environmentIntensity = finiteOr(o.environmentIntensity, 0.65f, 0.0f, 4.0f);
+    o.shadowSoftness = finiteOr(o.shadowSoftness, 1.0f, 0.25f, 8.0f);
+    return o;
+}
+
 std::string hexCode(unsigned int value) {
     char text[16];
     std::snprintf(text, sizeof(text), "0x%04X", value);
@@ -679,7 +717,7 @@ bool GlRenderer::createPlaceholderAtlas(std::string* error) {
 }
 
 bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std::string* error) {
-    options_ = options;
+    options_ = sanitizeOptions(options);
     std::string detail;
     auto failed = [error](const char* stage, const std::string& reason) {
         if (error) *error = std::string(stage) + ": " + (reason.empty() ? "unspecified failure" : reason);
@@ -1250,13 +1288,14 @@ void GlRenderer::renderFrame(float deltaSeconds) {
  *  Interface plumbing and teardown
  * ============================================================================================ */
 void GlRenderer::setOptions(const RendererOptions& options) {
+    const RendererOptions sanitized = sanitizeOptions(options);
     const bool needsRebuild =
-        options.msaaSamples != options_.msaaSamples ||
-        options.enableShadows != options_.enableShadows ||
-        (options.enableShadows && options.shadowMapSize != options_.shadowMapSize) ||
-        options.enableBloom != options_.enableBloom ||
-        (options.enableBloom && options.bloomLevels != options_.bloomLevels);
-    options_ = options;
+        sanitized.msaaSamples != options_.msaaSamples ||
+        sanitized.enableShadows != options_.enableShadows ||
+        (sanitized.enableShadows && sanitized.shadowMapSize != options_.shadowMapSize) ||
+        sanitized.enableBloom != options_.enableBloom ||
+        (sanitized.enableBloom && sanitized.bloomLevels != options_.bloomLevels);
+    options_ = sanitized;
     if (needsRebuild && context_ != EGL_NO_CONTEXT) targetsDirty_ = true;
 }
 

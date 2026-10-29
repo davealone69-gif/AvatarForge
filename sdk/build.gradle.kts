@@ -119,8 +119,10 @@ if (prebuiltJni != null) {
 }
 
 dependencies {
+    /* core-ktx is here for FileProvider (AvatarForge.shareIntent). EXIF decoding lives in :app
+       (ui/AppBitmaps.kt), so the SDK does not depend on exifinterface - a dead dependency in a
+       published AAR is a licence/size cost with no code behind it. */
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     testImplementation("junit:junit:4.13.2")
 }

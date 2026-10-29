@@ -4,6 +4,7 @@
  */
 #include "gl_mock.h"
 #include "af_render.h"
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -133,6 +134,40 @@ void capabilityTokens() {
     r.reset(af::createGlRenderer(window(), options(), &error));
     check(r && r->info().supportsFloatHdr, "exact float colour extension enables HDR");
 }
+/* A settings value is not a GPU allocation licence. These two cases used to reach glTexImage2D and
+   glRenderbufferStorageMultisample unchanged, so a stale/corrupt preference could ask for a 16 GB
+   shadow map and lose the context on a device that was rendering fine a frame earlier. */
+void optionSanitisation() {
+    af_test::reset();
+    af::RendererOptions hostile = options();
+    hostile.enableShadows = true;
+    hostile.shadowMapSize = 65536;
+    hostile.msaaSamples = 64;
+    hostile.exposure = std::nanf("");
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), hostile, &error));
+    check(r != nullptr, ("hostile option values still initialize: " + error).c_str());
+    check(r && r->stats().shadowMapSize == 2048, "shadow map size is clamped to the 2048 budget");
+    check(r && r->stats().msaaSamples >= 1 && r->stats().msaaSamples <= 4,
+          "MSAA request is clamped to 4 samples");
+    if (r) {
+        af::RendererOptions live = options();
+        live.enableShadows = true;
+        live.shadowMapSize = 100000;
+        live.enableBloom = true;
+        live.bloomLevels = 99;
+        r->setOptions(live);
+        r->renderFrame(1.0f / 60.0f);
+        r->renderFrame(1.0f / 60.0f);
+        check(r->stats().shadowMapSize == 2048, "setOptions clamps a later shadow map request");
+        check(r->stats().bloomLevels >= 0 && r->stats().bloomLevels <= 5,
+              "setOptions clamps the bloom chain length");
+        check(r->frameError().empty(), "clamped options still render a frame");
+    }
+    r.reset();
+    check(resourcesReleased(), "clamped-option teardown releases tracked resources");
+}
+
 void renderAbi() {
     af_render_options o{};
     af_render_options_defaults(&o);
@@ -174,7 +209,7 @@ int main() {
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
-    msaaFallback(); hdrFallback(); capabilityTokens(); selector(); renderAbi();
+    msaaFallback(); hdrFallback(); capabilityTokens(); selector(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

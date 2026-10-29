@@ -12,6 +12,7 @@
 package com.avatarforge.sdk.render
 
 import android.view.Surface
+import com.avatarforge.sdk.internal.KernelAccess
 import com.avatarforge.sdk.internal.NativeBridge
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -160,12 +161,14 @@ class AvatarRenderer private constructor(private var handle: Long) {
      * only suggest the renderer could call back into the SDK.
      */
     fun attachEngine(engineHandle: Long, invalidate: Boolean = true) {
-        val rc = NativeBridge.rendererAttachEngine(handle, engineHandle)
+        /* The renderer keeps a pointer to the engine's arrays, so the pointer swap is fenced:
+           otherwise a generation job could free the old mesh between attach and the first upload. */
+        val rc = KernelAccess.withKernel { NativeBridge.rendererAttachEngine(handle, engineHandle) }
         check(rc == 0) { "renderer refused the engine (${NativeBridge.engineLastError(engineHandle)})" }
-        if (invalidate) NativeBridge.rendererInvalidateMesh(handle)
+        if (invalidate) invalidateMesh()
     }
 
-    fun invalidateMesh() = NativeBridge.rendererInvalidateMesh(handle)
+    fun invalidateMesh() = KernelAccess.withKernel { NativeBridge.rendererInvalidateMesh(handle) }
 
     fun setCamera(camera: CameraSettings) =
         NativeBridge.rendererSetCamera(handle, camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg)
@@ -200,8 +203,14 @@ class AvatarRenderer private constructor(private var handle: Long) {
     fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =
         NativeBridge.rendererSetClip(handle, clip, speed, loop)
 
-    /** Draws one frame. Must be called on the render thread. */
-    fun frame(deltaSeconds: Float) = NativeBridge.rendererFrame(handle, deltaSeconds)
+    /**
+     * Draws one frame. Must be called on the render thread.
+     *
+     * Takes the kernel fence because a frame skins the mesh (clip playback) and then uploads the
+     * engine's own vertex buffer: without it, an expression slider on the UI thread could be writing
+     * vertices while the upload reads them.
+     */
+    fun frame(deltaSeconds: Float) = KernelAccess.withKernel { NativeBridge.rendererFrame(handle, deltaSeconds) }
 
     /** Blocks until the GPU is idle; used before destroying the renderer. */
     fun waitIdle() = NativeBridge.rendererWaitIdle(handle)
@@ -228,11 +237,16 @@ class AvatarRenderer private constructor(private var handle: Long) {
         val ndcX = (viewX / viewWidth) * 2f - 1f
         val ndcY = 1f - (viewY / viewHeight) * 2f
         val point = FloatArray(4)
-        val region = NativeBridge.enginePickRegion(
-            engineHandle,
-            camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg,
-            ndcX, ndcY, viewWidth, viewHeight, point,
-        )
+        /* Raycast against the live vertex array, which the GL thread rewrites every animated frame.
+           Bounded wait: a tap that cannot get the fence in 250 ms reports "nothing picked" rather
+           than intersecting a mesh that is mid-upload. */
+        val region = KernelAccess.tryWithKernel(250L) {
+            NativeBridge.enginePickRegion(
+                engineHandle,
+                camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg,
+                ndcX, ndcY, viewWidth, viewHeight, point,
+            )
+        } ?: return null
         if (region < 0) return null
         return RegionPick(region, point[0], point[1], point[2], point[3])
     }

@@ -7,11 +7,11 @@ Status: **PARTIAL** — source trace is real; Android/device execution remains C
 | Layer | Real entry point | Ownership / threading | Audit result |
 |---|---|---|---|
 | App UI | `app/.../MainActivity.kt`, `ui/ViewerScreen.kt` | Compose main thread; owns one `RenderSurfaceView` | REAL + VERIFIED by source; camera device proof still missing |
-| SDK | `sdk/.../AvatarEngine.kt`, `AvatarForge.kt` | Process singleton; native kernel handle | PARTIAL: generation now serialised on one engine thread; UI-thread parse/export and render-thread reads still need a single ownership/lock discipline |
+| SDK | `sdk/.../AvatarEngine.kt`, `AvatarForge.kt` | Process singleton; native kernel handle | REAL + VERIFIED by source: generation serialised on one engine thread, and mesh mutation vs renderer reads is fenced by `internal/KernelAccess.kt` (AF-007). Device stress proof still missing |
 | Render view | `sdk/.../render/RenderSurfaceView.kt` | Dedicated `HandlerThread`; Surface create/resize/destroy generation tokens | REAL + VERIFIED by source and host sequencing tests; physical Surface lifecycle unverified |
 | JNI | `native/src/android/af_jni.cpp` | Translates Kotlin arrays/direct buffers; callback global refs | PARTIAL: bounds checks exist; callback exception cleanup added; raw handle validity still relies on Kotlin lifetime |
 | Kernel | `native/src/af_engine.cpp` + geometry/rig/UV/texture/GLB | Thread-affine handle; borrowed pointers valid until next mutation | REAL + VERIFIED by host harness; concurrent renderer reads are not fully fenced |
-| Renderer | `native/src/render/af_render.cpp` → `af_vk.cpp` / `af_gl.cpp` | One renderer per Surface, one owning thread | PARTIAL: frame errors now propagate; Vulkan device path unverified |
+| Renderer | `native/src/render/af_render.cpp` → `af_gl.cpp` (GLES 3.1 only; `af_vk.cpp` deleted) | One renderer per Surface, one owning thread | PARTIAL: frame errors now propagate; GLES device pixels still unverified |
 | Rust | `rust/af`, `rust/af-core`, `rust/af-sys` | Optional RAII binding; not a Gradle module | UNVERIFIED: no Rust toolchain in this environment; renderer C ABI telemetry not yet mirrored |
 
 ## Critical execution paths

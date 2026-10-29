@@ -38,7 +38,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.avatarforge.app.ui.AppBitmaps
 import com.avatarforge.app.ui.DiagnosticsDialog
 import com.avatarforge.app.ui.InputScreen
@@ -71,16 +71,39 @@ import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RenderThermalPolicy
 import com.avatarforge.sdk.render.SettingsStore
+import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
 import com.avatarforge.sdk.recovery.RecoveryAdvisor
 import com.avatarforge.sdk.recovery.RecoveryBackend
 import com.avatarforge.sdk.recovery.RecoveryJournal
 import com.avatarforge.sdk.recovery.RecoveryRecordKind
 import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class Screen { INPUT, PROGRESS, VIEWER }
+
+/** Zero-valued frame stats used before a renderer exists; never presented as a real measurement. */
+private val EMPTY_RENDERER_STATS = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
+
+/** One analysed reference image, rendered as the card the user sees before pressing Generate. */
+private fun describeAnalysis(ref: ImageReference): String {
+    val an = ref.analysis
+    if (an == null) return "no analysis available"
+    return buildString {
+        append(if (ref.role == ImageRole.IDENTITY) "A: " else "B: ")
+        append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
+        append(" · ")
+        append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
+        append(" · skin L* %.0f".format(an.skinLab[0]))
+        append(" · hair L* %.0f".format(an.hairLab[0]))
+        append(" · garment metalness %.2f".format(an.metalConfidence))
+        append(" · key light %.2f".format(an.keyLightIntensity))
+    }
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -111,6 +134,13 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val health = remember { AvatarEngine.health() }
 
+        /* Stable stand-ins for the viewer's flows. The surface view is created during layout, so
+           the first viewer composition has no view to read from; these keep one of each
+           collectAsStateWithLifecycle() call site instead of a composable call behind a safe call. */
+        val noRendererInfo = remember { MutableStateFlow<RendererInfo?>(null) }
+        val noRendererStats = remember { MutableStateFlow(EMPTY_RENDERER_STATS) }
+        val noRendererError = remember { MutableStateFlow<String?>(null) }
+
         var surfaceViewState by remember { mutableStateOf<RenderSurfaceView?>(null) }
         var screen by remember { mutableStateOf(Screen.INPUT) }
         var prompt by remember { mutableStateOf("") }
@@ -118,6 +148,9 @@ class MainActivity : ComponentActivity() {
         var imageA by remember { mutableStateOf<Bitmap?>(null) }
         var imageB by remember { mutableStateOf<Bitmap?>(null) }
         var analysisNote by remember { mutableStateOf<String?>(null) }
+        /* The measurements the last successful reference-image analysis produced, kept so the
+           spec the user sees and approves is exactly the spec that gets built. */
+        var analysedImages by remember { mutableStateOf<List<ImageReference>>(emptyList()) }
         var job by remember { mutableStateOf<JobHandle?>(null) }
         var status by remember { mutableStateOf(JobStatus()) }
         var result by remember { mutableStateOf<EngineResult?>(null) }
@@ -149,6 +182,9 @@ class MainActivity : ComponentActivity() {
             }
 
             val expressionNames = remember { engine.blendshapeNames() }
+            /* One authoritative copy of the ARKit channel weights. Every slider writes here and the
+               whole array is re-applied, so channels compose instead of overwriting each other. */
+            var expressionWeights by remember { mutableStateOf(FloatArray(expressionNames.size)) }
 
         /* Storage Access Framework export: registered at composition scope, launched from the
            export panel. The app writes through the returned URI, so it needs no storage
@@ -187,6 +223,18 @@ class MainActivity : ComponentActivity() {
                 recoveryReportToSave = null
             }
 
+            /* The export is 33-40 MB; starting a two-minute build that cannot be written is worse
+               than refusing it up front. The check is the SDK's own, not a guess. */
+            fun hasStorageForExport(): Boolean {
+                if (AvatarForge.hasRoomForExport(context)) return true
+                Toast.makeText(
+                    context,
+                    "Not enough free storage for the ~40 MB export. Free some space and try again.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return false
+            }
+
             fun begin(started: JobHandle) {
                 job = started
                 screen = Screen.PROGRESS
@@ -194,6 +242,9 @@ class MainActivity : ComponentActivity() {
                     val outcome = runCatching { started.await() }
                     outcome.onSuccess {
                         result = it
+                        /* A new avatar starts with a neutral face; the previous channel weights
+                           belong to the previous mesh. */
+                        expressionWeights = FloatArray(expressionNames.size)
                         surfaceView?.attachEngine(engine.nativeHandle)
                         screen = Screen.VIEWER
                     }.onFailure { error ->
@@ -203,6 +254,36 @@ class MainActivity : ComponentActivity() {
                             Toast.LENGTH_LONG,
                         ).show()
                         screen = Screen.INPUT
+                    }
+                }
+            }
+
+            /* Off the main thread: the native analyser downsamples and histograms a 1600 px image,
+               which is long enough to drop frames if it ran inside composition. */
+            fun analyseReferences(bitmapA: Bitmap?, bitmapB: Bitmap?) {
+                if (bitmapA == null) {
+                    analysedImages = emptyList()
+                    analysisNote = null
+                    return
+                }
+                /* The pixel copy into a direct buffer happens on the IO thread too: a 1600 px
+                   ARGB image is up to 10 MB, and this is not work for the frame the user tapped on. */
+                scope.launch {
+                    val analysed = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val refA = ImageReference.fromBitmap(bitmapA, ImageRole.IDENTITY)
+                            val refB = bitmapB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
+                            engine.analyseImages(listOfNotNull(refA, refB))
+                        }.getOrNull()
+                    }
+                    if (analysed == null) {
+                        analysedImages = emptyList()
+                        analysisNote =
+                            "Reference analysis failed on this device; the prompt and the specification below are used unchanged."
+                    } else {
+                        analysedImages = analysed
+                        spec = engine.specFromImages(analysed, spec)
+                        analysisNote = analysed.joinToString("\n", transform = ::describeAnalysis)
                     }
                 }
             }
@@ -223,46 +304,54 @@ class MainActivity : ComponentActivity() {
                 onSpecChange = { spec = it },
                 imageA = imageA,
                 imageB = imageB,
-                onImageA = { imageA = it },
-                onImageB = { imageB = it },
+                /* Analysis runs when the image is chosen, not when Generate is pressed: the card
+                   above the spec editor then shows the measurements the kernel actually extracted,
+                   and the user can correct them before a build starts. */
+                onImageA = { picked ->
+                    imageA = picked
+                    analyseReferences(picked, imageB)
+                },
+                onImageB = { picked ->
+                    imageB = picked
+                    analyseReferences(imageA, picked)
+                },
                 analysisNote = analysisNote,
                 enabled = health.usable,
                 onGeneratePrompt = {
-                    /* The prompt parser is run first so the spec the user sees is the spec that gets
-                       built - including the measurements the prompt implied. */
-                    val parsed = runCatching { engine.parsePrompt(prompt, spec) }.getOrDefault(spec)
-                    spec = parsed
-                    begin(engine.generate(GenerationRequest(parsed, prompt)))
+                    if (hasStorageForExport()) {
+                        /* The prompt parser is run first so the spec the user sees is the spec that
+                           gets built - including the measurements the prompt implied. */
+                        val parsed = runCatching { engine.parsePrompt(prompt, spec) }.getOrDefault(spec)
+                        spec = parsed
+                        begin(engine.generate(GenerationRequest(parsed, prompt)))
+                    }
                 },
                 onGenerateImages = {
-                    val a = imageA ?: return@InputScreen
-                    val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
-                    val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                    val analysed = runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }.getOrNull()
-                    analysisNote = analysed?.joinToString("\n") { ref ->
-                        val an = ref.analysis
-                        if (an == null) "no analysis available" else buildString {
-                            append("subject %.0f%% of frame".format(an.subjectCoverage * 100f))
-                            append(" · ")
-                            append(if (an.isFullBody) "full body detected" else "upper body: lower body inferred")
-                            append(" · skin L* %.0f".format(an.skinLab[0]))
-                            append(" · hair L* %.0f".format(an.hairLab[0]))
-                            append(" · garment metalness %.2f".format(an.metalConfidence))
-                            append(" · key light %.2f".format(an.keyLightIntensity))
+                    val a = imageA
+                    if (a == null) {
+                        Toast.makeText(context, "Choose Image A first.", Toast.LENGTH_SHORT).show()
+                    } else if (hasStorageForExport()) {
+                        /* Reuse the analysis the user already saw. Only analyse here when that step
+                           has not run yet (for example after a process restart). */
+                        val analysed = analysedImages.ifEmpty {
+                            val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
+                            val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
+                            runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }
+                                .getOrDefault(emptyList())
                         }
-                    }
-                    val resolved = analysed?.let { engine.specFromImages(it, spec) } ?: spec
-                    spec = resolved
-                    begin(
-                        engine.generate(
-                            GenerationRequest(
-                                spec = resolved,
-                                prompt = prompt,
-                                imageA = analysed?.firstOrNull() ?: refA,
-                                imageB = analysed?.getOrNull(1) ?: refB,
+                        val resolved = if (analysed.isNotEmpty()) engine.specFromImages(analysed, spec) else spec
+                        spec = resolved
+                        begin(
+                            engine.generate(
+                                GenerationRequest(
+                                    spec = resolved,
+                                    prompt = prompt,
+                                    imageA = analysed.firstOrNull(),
+                                    imageB = analysed.getOrNull(1),
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
                 },
             )
 
@@ -277,12 +366,18 @@ class MainActivity : ComponentActivity() {
             Screen.VIEWER -> {
                 val finished = result
                 if (finished == null) {
-                    screen = Screen.INPUT
+                    /* Never write state during composition: with no result there is nothing to
+                       show, so route back on the next frame instead of mutating here. */
+                    LaunchedEffect(Unit) { screen = Screen.INPUT }
                 } else {
-                    val rendererInfo by surfaceViewState?.rendererInfo?.collectAsState() ?: remember { mutableStateOf(null) }
-                    val stats by surfaceViewState?.stats?.collectAsState()
-                        ?: remember { mutableStateOf(RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)) }
-                    val rendererError by surfaceViewState?.error?.collectAsState() ?: remember { mutableStateOf(null) }
+                    /* Lifecycle-aware: while the activity is stopped the 60 Hz stats stream is not
+                       collected, so a backgrounded viewer does no Compose work at all. */
+                    val rendererInfo by (surfaceViewState?.rendererInfo ?: noRendererInfo)
+                        .collectAsStateWithLifecycle()
+                    val stats by (surfaceViewState?.stats ?: noRendererStats)
+                        .collectAsStateWithLifecycle()
+                    val rendererError by (surfaceViewState?.error ?: noRendererError)
+                        .collectAsStateWithLifecycle()
                     ViewerScreen(
                         result = finished,
                         engine = engine,
@@ -320,18 +415,33 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         expressionNames = expressionNames,
+                        expressionWeights = expressionWeights,
                         onExpression = { index, value ->
-                            val weights = FloatArray(expressionNames.size)
-                            weights[index] = value
-                            engine.applyBlendshapes(weights)
-                            surfaceView?.invalidateMesh()
+                            if (index in expressionWeights.indices) {
+                                /* One array per edit, applied as a unit, on the render thread:
+                                   channels accumulate instead of resetting each other. */
+                                val next = expressionWeights.copyOf()
+                                next[index] = value.coerceIn(0f, 1f)
+                                expressionWeights = next
+                                surfaceView?.applyBlendshapes(next)
+                            }
+                        },
+                        onResetExpressions = {
+                            val neutral = FloatArray(expressionWeights.size)
+                            expressionWeights = neutral
+                            surfaceView?.applyBlendshapes(neutral)
                         },
                         onExport = {
-                            Toast.makeText(
-                                context,
-                                "Stored in ${finished.glbFile.parentFile?.absolutePath}",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                            /* The build already wrote the .glb; this action re-checks that it is
+                               really there and reports its measured size instead of pretending to
+                               save something a second time. */
+                            val file = finished.glbFile
+                            val message = if (file.isFile) {
+                                "Stored: ${file.absolutePath} (%.1f MB)".format(file.length() / 1048576.0)
+                            } else {
+                                "The exported file is missing at ${file.absolutePath}. Export again with Save to…."
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                         },
                         onShare = {
                             runCatching {

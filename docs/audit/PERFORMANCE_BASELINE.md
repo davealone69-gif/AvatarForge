@@ -22,5 +22,4 @@ Status: **PARTIAL** — prior device reports are real user evidence, not a curre
 1. Matched before/after camera screenshots and diagnostics on SM-S921B.
 2. 10-minute viewer soak: FPS interval, CPU submit, thermal status, PSS/native heap, texture bytes, fallback count.
 3. Diagnostic scene ladder to separate clear/submit/present/geometry/shader failures.
-4. Vulkan vs GLES forced runs with the same avatar and camera.
 5. Matched pixel comparison for moiré prefilter; no visual superiority claim until then.

@@ -54,8 +54,8 @@ struct RendererOptions {
     bool  enableShadows        = true;
     bool  enableBloom          = false;
     bool  enableSss            = true;   /* sub-surface scattering on skin/lips                */
-    int   msaaSamples          = 4;      /* 1/2/4/8 accepted; backend clamps to what it supports */
-    int   shadowMapSize        = 2048;   /* square; 1024/2048/4096                             */
+    int   msaaSamples          = 4;      /* clamped to 1..4 (and to GL_MAX_SAMPLES) by the backend */
+    int   shadowMapSize        = 2048;   /* clamped to 512..2048; square, depth-only               */
     int   bloomLevels          = 4;
 
     /* Environment. Defaults are a clear late-afternoon studio exterior - the look the reference

@@ -27,26 +27,39 @@ object RenderSettingsCodec {
         put("bloomLevels", settings.bloomLevels.toString())
     }
 
+    /*
+     * Every numeric field is clamped to the range the renderer will actually honour (af_gl.cpp
+     * sanitiseOptions enforces the same bounds). Stored preferences are input, not a promise: an
+     * old build's file, a hand-edited value or a corrupted write must not be able to ask for a
+     * 65,536 x 65,536 shadow map, and the settings screen must not display a value the renderer has
+     * already silently reduced.
+     */
     fun decode(values: Map<String, String>, defaults: RenderSettings = RenderSettings()): RenderSettings {
         fun bool(key: String, current: Boolean) = values[key]?.toBooleanStrictOrNull() ?: current
-        fun float(key: String, current: Float) = values[key]?.toFloatOrNull()?.takeIf { it.isFinite() } ?: current
-        fun int(key: String, current: Int) = values[key]?.toIntOrNull() ?: current
+        fun float(key: String, current: Float, lo: Float, hi: Float) =
+            values[key]?.toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(lo, hi) ?: current
+        fun int(key: String, current: Int, lo: Int, hi: Int) =
+            (values[key]?.toIntOrNull() ?: current).coerceIn(lo, hi)
+        /* Quality is matched exactly: an out-of-range stored id means "unknown", which must fall
+           back to the caller's default rather than clamp onto the highest preset. */
+        val quality = Quality.entries.firstOrNull { it.value == values["quality"]?.toIntOrNull() }
+            ?: defaults.quality
         return RenderSettings(
-            quality = Quality.of(int("quality", defaults.quality.value)),
+            quality = quality,
             shadows = bool("shadows", defaults.shadows),
             bloom = bool("bloom", defaults.bloom),
             sss = bool("sss", defaults.sss),
             groundPlane = bool("groundPlane", defaults.groundPlane),
-            exposure = float("exposure", defaults.exposure),
-            sunAzimuthDeg = float("sunAzimuthDeg", defaults.sunAzimuthDeg),
-            sunElevationDeg = float("sunElevationDeg", defaults.sunElevationDeg),
-            sunIntensity = float("sunIntensity", defaults.sunIntensity),
-            turbidity = float("turbidity", defaults.turbidity),
-            environmentIntensity = float("environmentIntensity", defaults.environmentIntensity),
-            shadowSoftness = float("shadowSoftness", defaults.shadowSoftness),
-            msaa = int("msaa", defaults.msaa),
-            shadowMapSize = int("shadowMapSize", defaults.shadowMapSize),
-            bloomLevels = int("bloomLevels", defaults.bloomLevels),
+            exposure = float("exposure", defaults.exposure, 0.05f, 8f),
+            sunAzimuthDeg = float("sunAzimuthDeg", defaults.sunAzimuthDeg, 0f, 360f),
+            sunElevationDeg = float("sunElevationDeg", defaults.sunElevationDeg, -5f, 90f),
+            sunIntensity = float("sunIntensity", defaults.sunIntensity, 0f, 16f),
+            turbidity = float("turbidity", defaults.turbidity, 0.5f, 20f),
+            environmentIntensity = float("environmentIntensity", defaults.environmentIntensity, 0f, 4f),
+            shadowSoftness = float("shadowSoftness", defaults.shadowSoftness, 0.25f, 8f),
+            msaa = int("msaa", defaults.msaa, 1, 4),
+            shadowMapSize = int("shadowMapSize", defaults.shadowMapSize, 512, 2048),
+            bloomLevels = int("bloomLevels", defaults.bloomLevels, 0, 5),
         )
     }
 }

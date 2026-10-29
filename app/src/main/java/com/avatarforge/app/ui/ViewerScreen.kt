@@ -86,7 +86,9 @@ fun ViewerScreen(
     poseIndex: Int,
     onPose: (Int) -> Unit,
     onExpression: (Int, Float) -> Unit,
+    onResetExpressions: () -> Unit,
     expressionNames: List<String>,
+    expressionWeights: FloatArray,
     onExport: () -> Unit,
     onShare: () -> Unit,
     onExportTo: () -> Unit,
@@ -188,9 +190,9 @@ fun ViewerScreen(
                 when (panel) {
                     ViewerPanel.CAMERA -> CameraPanel(camera, onCamera)
                     ViewerPanel.POSE -> PosePanel(poseIndex, onPose, clipIndex, onClip, engine)
-                    ViewerPanel.FACE -> FacePanel(expressionNames, onExpression)
+                    ViewerPanel.FACE -> FacePanel(expressionNames, expressionWeights, onExpression, onResetExpressions)
                     ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
-                    ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result)
+                    ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result, engine)
                     ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
                 }
             }
@@ -336,31 +338,51 @@ private fun PosePanel(poseIndex: Int, onPose: (Int) -> Unit, clipIndex: Int, onC
     }
 }
 
+/**
+ * Face-panel state lives in the host, not here: the sliders are a view of the weights the kernel is
+ * actually holding. Before this, every drag rebuilt a zeroed weight array, so moving a second
+ * channel silently reset the first one while the UI still showed it - a control that lied about
+ * what was applied.
+ */
 @Composable
-private fun FacePanel(names: List<String>, onExpression: (Int, Float) -> Unit) {
+private fun FacePanel(
+    names: List<String>,
+    weights: FloatArray,
+    onExpression: (Int, Float) -> Unit,
+    onReset: () -> Unit,
+) {
     var index by remember { mutableStateOf(0) }
-    var value by remember { mutableStateOf(0f) }
+    val selected = index.coerceIn(0, (names.size - 1).coerceAtLeast(0))
+    val value = weights.getOrElse(selected) { 0f }
+    val activeCount = weights.count { it > 0.001f }
     Text("Facial expressions (ARKit blendshapes)", style = MaterialTheme.typography.titleSmall)
     Text(
-        "%d channels, all of which move real vertices: the same morph targets the .glb contains.".format(names.size),
+        "%d channels, all of which move real vertices: the same morph targets the .glb contains. %d active."
+            .format(names.size, activeCount),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         names.forEachIndexed { i, name ->
-            FilterChip(selected = index == i, onClick = { index = i; onExpression(i, value) }, label = { Text(name) })
+            val applied = weights.getOrElse(i) { 0f }
+            FilterChip(
+                selected = selected == i,
+                onClick = { index = i },
+                label = { Text(if (applied > 0.001f) "%s ·%.2f".format(name, applied) else name) },
+            )
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(names.getOrElse(index) { "" }, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(names.getOrElse(selected) { "" }, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text("%.2f".format(value), style = MaterialTheme.typography.bodySmall)
     }
     Slider(
         value = value,
-        onValueChange = { value = it; onExpression(index, it) },
+        onValueChange = { onExpression(selected, it) },
         valueRange = 0f..1f,
+        enabled = names.isNotEmpty(),
     )
-    TextButton(onClick = { value = 0f; names.indices.forEach { onExpression(it, 0f) } }) { Text("Reset all channels") }
+    TextButton(onClick = onReset) { Text("Reset all channels") }
 }
 
 @Composable
@@ -384,11 +406,19 @@ private fun InspectPanel(result: EngineResult, picked: Int, onPick: (Int) -> Uni
 }
 
 @Composable
-private fun ExportPanel(onExport: () -> Unit, onShare: () -> Unit, onExportTo: () -> Unit, result: EngineResult) {
+private fun ExportPanel(
+    onExport: () -> Unit,
+    onShare: () -> Unit,
+    onExportTo: () -> Unit,
+    result: EngineResult,
+    engine: AvatarEngine,
+) {
     Text("Export", style = MaterialTheme.typography.titleSmall)
+    /* Counts come from the engine and the result, not from constants in the copy: a hard-coded
+       "71-joint / 15-clip" line would keep claiming those numbers after a library change. */
     Text(
-        "%.1f MB binary glTF (2.0): mesh, UV-mapped PBR textures, 71-joint skeleton, skin weights, %d ARKit morph targets and the 15 baked clips - one self-contained file."
-            .format(result.glbBytes / 1048576.0, result.blendshapeCount),
+        "%.1f MB binary glTF (2.0): mesh, UV-mapped PBR textures, %d-joint skeleton, skin weights, %d ARKit morph targets and %d baked clips - one self-contained file."
+            .format(result.glbBytes / 1048576.0, result.jointCount, result.blendshapeCount, engine.clipCount),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

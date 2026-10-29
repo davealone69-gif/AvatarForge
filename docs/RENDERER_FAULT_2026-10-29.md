@@ -1,5 +1,10 @@
 # Viewer startup fault — 2026-10-29
 
+> **Historical record.** Written when the viewer still offered a Vulkan backend. Vulkan was removed
+> from the project afterwards (see `docs/audit/FINDINGS.md` AF-002): the renderer is GLES 3.1 only,
+> and there is no "Try Vulkan" action in the current viewer. Read the diagnosis below as the incident
+> history, not as instructions for the current build.
+
 ## Observed on the supplied phone screenshot
 
 - The avatar build completed: 417,150 triangles, 304,797 vertices, 71 joints, 52 ARKit blendshapes.

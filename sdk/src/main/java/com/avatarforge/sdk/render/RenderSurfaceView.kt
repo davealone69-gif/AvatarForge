@@ -212,6 +212,25 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) =
         onRenderThread { it.renderer?.setOverlays(skeleton, flatShading, highlightRegion) }
 
+    /**
+     * Applies ARKit channel weights to the attached avatar and re-uploads the mesh.
+     *
+     * Runs on the render thread on purpose: the morph application writes the engine's vertex array,
+     * the renderer reads that same array, and doing the write from Compose would put a UI-thread
+     * mutation next to a GL-thread upload. [AvatarEngine.applyBlendshapes] takes the kernel fence as
+     * well, so this is ordered against an in-flight frame even if a caller invokes it directly.
+     */
+    fun applyBlendshapes(weights: FloatArray) = onRenderThread { view ->
+        if (view.released || view.attachedEngineHandle == 0L) return@onRenderThread
+        /* runCatching also covers the "view never bound to an engine" case: the lateinit access
+           raises UninitializedPropertyAccessException there, which is logged, not fatal. */
+        val applied = runCatching { engine.applyBlendshapes(weights) }.getOrElse { t ->
+            Log.e(RENDER_LOG_TAG, "Blendshape application failed", t)
+            false
+        }
+        if (applied) view.renderer?.invalidateMesh()
+    }
+
     /** Picks the region under a tap; null when the ray misses the avatar. */
     fun pick(viewX: Float, viewY: Float): RegionPick? {
         val handle = attachedEngineHandle
@@ -402,7 +421,6 @@ class RenderSurfaceView @JvmOverloads constructor(
             val info = created.info()
             _rendererInfo.value = info
             created.setCamera(camera)
-            created.applyOptions(settings)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
             if (recoveryProbe != null) {
                 _recoveryStatus.value = if (pendingEngineHandle != 0L) {

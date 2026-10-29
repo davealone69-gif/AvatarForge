@@ -33,7 +33,7 @@ export PATH=$JAVA_HOME/bin:/usr/local/tc/gradle-8.9/bin:$ANDROID_HOME/cmdline-to
 ```
 
 Which packages are needed and why is documented at the top of the script; the short version is that
-AGP 8.x needs JDK 17, the renderer links `vulkan`/`EGL`/`GLESv3`/`android`/`log` from the NDK
+AGP 8.x needs JDK 17, the renderer links `EGL`/`GLESv3`/`android`/`log` from the NDK
 sysroot, and the kernel needs only zlib (provided by the Android platform, `-lz` on a host).
 
 Hardware: this project is developed and verified on a 2 vCPU / 2 GB container. Configure Gradle

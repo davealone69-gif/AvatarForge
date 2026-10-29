@@ -1,5 +1,9 @@
 # Repository-wide 3D engine consolidation audit
 
+> **Historical snapshot (2026-10-18).** It describes the repository as it was before the GLES-only
+> conversion. Statements about a Vulkan renderer or a Vulkan/GLES comparison are superseded: Vulkan
+> was removed from the active project, and the supported backend is OpenGL ES 3.1.
+
 Date: 2026-10-18
 Target application: AvatarForge (Android-first)
 Owner scope: davealone69-gif GitHub repositories visible to the connected account

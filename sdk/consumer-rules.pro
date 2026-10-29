@@ -16,12 +16,11 @@
 -keepclasseswithmembers class * {
     native <methods>;
 }
+# The kernel resolves these three members with GetMethodID on the object it was handed. The class
+# itself may be renamed (the JNI code asks the JVM for the runtime class), the member names and
+# signatures may not. `AvatarEngine$KernelCallbacks` is a private *inner class*, so an
+# `implements`-based rule can never match it; this rule names it directly.
 -keepclassmembernames class com.avatarforge.sdk.AvatarEngine$KernelCallbacks {
-    public void onProgress(int, float, java.lang.String);
-    public void onLog(int, java.lang.String);
-    public boolean shouldCancel();
-}
--keepclassmembers class * implements com.avatarforge.sdk.AvatarEngine$* {
     public void onProgress(int, float, java.lang.String);
     public void onLog(int, java.lang.String);
     public boolean shouldCancel();
