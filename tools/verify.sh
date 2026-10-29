@@ -54,7 +54,7 @@ else
 fi
 
 # ------------------------------------------------------------------ 2. shader tables ------------
-banner "shaders: SPIR-V + GLSL ES tables match the sources"
+banner "shaders: GLES shader table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
 # neither ANDROID_NDK nor ANDROID_NDK_HOME is exported (ANDROID_HOME alone is the common case).
 if [ -z "${ANDROID_NDK:-}" ] && [ -z "${ANDROID_NDK_HOME:-}" ]; then
