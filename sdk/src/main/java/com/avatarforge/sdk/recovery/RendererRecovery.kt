@@ -184,7 +184,7 @@ object RecoveryAdvisor {
             RecoveryFaultCategory.FRAMEBUFFER -> "Safe recovery disables MSAA/HDR-dependent extras. If repeated, export the report for a render-target regression."
             RecoveryFaultCategory.GL_INVALID_OPERATION -> "Try Safe recovery and the alternate backend; export the report so the invalid GL call can be traced."
             RecoveryFaultCategory.RESIZE -> "Retry after rotation/resize completes. If repeated, export the report for a resize-target regression."
-            RecoveryFaultCategory.UNKNOWN -> "Try Safe recovery once, then export the report. Do not keep retrying in a loop."
+            RecoveryFaultCategory.UNKNOWN, null -> "Try Safe recovery once, then export the report. Do not keep retrying in a loop."
         }
         return if (repeats >= 3) "Repeated fault fingerprint ${lastFailure.fingerprint}. $base" else base
     }
