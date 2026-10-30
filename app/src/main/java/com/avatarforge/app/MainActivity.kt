@@ -104,10 +104,16 @@ private fun describeAnalysis(ref: ImageReference): String {
     }
 }
 
+/** Preserve the process-wide engine while Android replaces this Activity for a configuration change. */
+internal fun releaseEngineOnActivityDestroy(isChangingConfigurations: Boolean, release: () -> Unit) {
+    if (!isChangingConfigurations) release()
+}
+
 class MainActivity : ComponentActivity() {
 
     /** The render surface, owned by the activity so it survives recomposition. */
     private var surfaceView: RenderSurfaceView? = null
+    private var ownedEngine: AvatarEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -123,13 +129,16 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         surfaceView?.release()
         surfaceView = null
+        val engine = ownedEngine
+        ownedEngine = null
+        releaseEngineOnActivityDestroy(isChangingConfigurations) { engine?.release() }
         super.onDestroy()
     }
 
     @Composable
     private fun App() {
         val context = LocalContext.current
-        val engine = remember { AvatarEngine.get(context) }
+        val engine = remember { AvatarEngine.get(context).also { ownedEngine = it } }
         val scope = rememberCoroutineScope()
         val analysisRequestGuard = remember { ImageAnalysisRequestGuard() }
         val health = remember { AvatarEngine.health() }
