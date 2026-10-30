@@ -23,14 +23,17 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.render.DiagnosticRung
+import com.avatarforge.sdk.render.RenderedPixelCheck
 
 /** Offline self-diagnostics and deterministic recovery. Nothing is uploaded and no AI is used. */
 @Composable
 fun DiagnosticsDialog(
     report: String,
     recoveryStatus: String?,
+    renderedPixelCheck: RenderedPixelCheck?,
     selectedDiagnosticRung: DiagnosticRung,
     onDiagnosticRungSelected: (DiagnosticRung) -> Unit,
+    onCheckRenderedPixels: () -> Unit,
     onSafeRecovery: () -> Unit,
     onExportReport: () -> Unit,
     onClearJournal: () -> Unit,
@@ -76,6 +79,7 @@ fun DiagnosticsDialog(
                     }
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    TextButton(onClick = onCheckRenderedPixels) { Text("Check visible pixels") }
                     TextButton(onClick = onSafeRecovery) { Text("Safe recovery") }
                     TextButton(onClick = onExportReport) { Text("Export report") }
                     TextButton(onClick = {
@@ -83,6 +87,16 @@ fun DiagnosticsDialog(
                         Toast.makeText(context, "Recovery journal cleared", Toast.LENGTH_SHORT).show()
                     }) { Text("Clear journal") }
                 }
+                Text(
+                    renderedPixelCheck?.summary ?: "Visible output check: not run",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+                Text(
+                    "The check renders one fresh diagnostic frame and reads its full GLES scene framebuffer on demand; Vulkan currently reports unsupported.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
                 Text(
                     report,
                     style = MaterialTheme.typography.bodySmall,

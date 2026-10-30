@@ -45,6 +45,20 @@ int main() {
     assert(af::buildDiagnosticMesh(af::DiagnosticRung::PRODUCTION_AVATAR, 0.0f, &mesh));
     assert(mesh.vertices.empty() && mesh.indices.empty());
     assert(!af::buildDiagnosticMesh(static_cast<af::DiagnosticRung>(99), 0.0f, &mesh));
+    const std::uint8_t background[3] = {14, 19, 28};
+    const std::uint8_t image[] = {
+        14, 19, 28, 255,  /* exact clear colour */
+        16, 18, 30, 0,    /* within tolerance; alpha is irrelevant */
+        18, 19, 28, 255,  /* outside tolerance in red */
+        14, 19, 34, 255,  /* outside tolerance in blue */
+    };
+    std::uint64_t nonBackground = 99;
+    assert(af::countNonBackgroundPixels(image, 4, background, 3, &nonBackground));
+    assert(nonBackground == 2);
+    assert(!af::countNonBackgroundPixels(nullptr, 4, background, 3, &nonBackground));
+    assert(nonBackground == 0);
+    assert(!af::countNonBackgroundPixels(image, 4, nullptr, 3, &nonBackground));
+    assert(!af::countNonBackgroundPixels(image, 4, background, 3, nullptr));
     const af::GpuTimingResult unknown{};
     assert(!unknown.capability.supported && unknown.frameMs == -1.0f);
     float milliseconds = 99.0f;

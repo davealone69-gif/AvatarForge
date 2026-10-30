@@ -84,7 +84,11 @@ void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offs
         raiseGlError(GL_INVALID_VALUE);
     }
 }
-void glBindFramebuffer(GLenum, GLuint name) { state.currentFramebuffer = name; }
+void glBindFramebuffer(GLenum target, GLuint name) {
+    state.currentFramebuffer = name;
+    if (target == GL_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER) state.currentReadFramebuffer = name;
+    if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) state.currentDrawFramebuffer = name;
+}
 void glBindRenderbuffer(GLenum, GLuint name) { state.currentRenderbuffer = name; }
 void glBindTexture(GLenum, GLuint name) { state.currentTexture = name; }
 void glBindVertexArray(GLuint name) { state.currentVao = name; }
@@ -196,6 +200,7 @@ void glGetFloatv(GLenum, GLfloat* value) { *value = 4.0f; }
 void glGetIntegerv(GLenum key, GLint* value) {
     switch (key) {
         case GL_CURRENT_PROGRAM: *value = GLint(state.currentProgram); break;
+        case GL_READ_FRAMEBUFFER_BINDING: *value = GLint(state.currentReadFramebuffer); break;
         case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: *value = 256; break;
         case GL_MAX_SAMPLES: *value = 4; break;
         case GL_NUM_EXTENSIONS: *value = GLint(extensionNames().size()); break;
@@ -243,7 +248,32 @@ void glLinkProgram(GLuint p) {
     if (state.fault == af_test::Fault::ProgramLink && state.livePrograms == 1) state.programLinks[p] = false;
 }
 void glPolygonOffset(GLfloat, GLfloat) {}
-void glReadBuffer(GLenum) {}
+void glReadBuffer(GLenum value) { state.currentReadBuffer = value; }
+void glReadPixels(GLint, GLint, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
+    ++state.readPixelsCalls;
+    state.readPixelsWidth = width;
+    state.readPixelsHeight = height;
+    state.lastReadFramebuffer = state.currentReadFramebuffer;
+    if (format != GL_RGBA || type != GL_UNSIGNED_BYTE || width <= 0 || height <= 0 || !pixels) {
+        raiseGlError(GL_INVALID_OPERATION);
+        return;
+    }
+    auto* rgba = static_cast<GLubyte*>(pixels);
+    const size_t count = size_t(width) * size_t(height);
+    for (size_t i = 0; i < count; ++i) {
+        rgba[i * 4 + 0] = 14;
+        rgba[i * 4 + 1] = 19;
+        rgba[i * 4 + 2] = 28;
+        rgba[i * 4 + 3] = 255;
+    }
+    if (state.readPixelsHasAvatarPixel) {
+        rgba[0] = 220;
+        rgba[1] = 80;
+        rgba[2] = 40;
+        rgba[3] = 255;
+    }
+    if (state.readPixelsFail) raiseGlError(GL_INVALID_OPERATION);
+}
 void glRenderbufferStorageMultisample(GLenum, GLsizei samples, GLenum, GLsizei, GLsizei) {
     ++state.msaaAttempts;
     if (samples > 1 && state.rejectNextMsaa) { state.rejectNextMsaa = false; raiseGlError(GL_INVALID_VALUE); }

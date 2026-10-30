@@ -302,6 +302,7 @@ public:
     void setFlatShading(bool flat) override { flatShading_ = flat; }
     void setDiagnosticRung(int rung) override;
     int diagnosticRung() const override { return static_cast<int>(diagnosticRung_); }
+    RenderedPixelCheck checkRenderedPixels() override;
     void setHighlightRegion(int region) override { highlightRegion_ = region; }
     void setClip(int clip, float speed, bool loop) override;
     int currentClip() const override { return clip_; }
@@ -407,6 +408,10 @@ private:
     int triangles_ = 0;
     bool targetsDirty_ = false;
     bool contextLost_ = false;
+    bool lastPresentedFrameValid_ = false;
+    int lastPresentedWidth_ = 0;
+    int lastPresentedHeight_ = 0;
+    DiagnosticRung lastPresentedDiagnosticRung_ = DiagnosticRung::PRODUCTION_AVATAR;
     std::string frameError_;
     ResizeOutcome lastFrameResizeOutcome_{};
 };
@@ -1491,6 +1496,7 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     lastFrameResizeOutcome_ = {ResizeStatus::RESIZED, false, surfaceWidth_, surfaceHeight_,
                                surfaceWidth_, surfaceHeight_, {}};
     frameError_.clear();
+    lastPresentedFrameValid_ = false;
     ++stats_.frameAttempts;
     if (targetsDirty_) {
         targetsDirty_ = false;
@@ -1560,10 +1566,98 @@ void GlRenderer::renderFrame(float deltaSeconds) {
 
     ++stats_.presentRequestsAccepted;
     ++stats_.frames;
+    lastPresentedFrameValid_ = true;
+    lastPresentedWidth_ = surfaceWidth_;
+    lastPresentedHeight_ = surfaceHeight_;
+    lastPresentedDiagnosticRung_ = diagnosticRung_;
     updateFrameLoopTimingEstimate(stats_, deltaSeconds);
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
     stats_.vertices = vertexCount_;
+}
+
+RenderedPixelCheck GlRenderer::checkRenderedPixels() {
+    RenderedPixelCheck result;
+    result.width = surfaceWidth_;
+    result.height = surfaceHeight_;
+    if (diagnosticRung_ == DiagnosticRung::CLEAR ||
+        diagnosticRung_ == DiagnosticRung::PRODUCTION_AVATAR) {
+        result.status = RenderedPixelStatus::FIXTURE_REQUIRED;
+        result.diagnostic = "select a non-clear renderer diagnostic fixture to isolate avatar pixels from the studio ground";
+        return result;
+    }
+    if (contextLost_ || display_ == EGL_NO_DISPLAY || surface_ == EGL_NO_SURFACE ||
+        !lastPresentedFrameValid_ || stats_.frames <= 0 ||
+        lastPresentedWidth_ != surfaceWidth_ || lastPresentedHeight_ != surfaceHeight_ ||
+        lastPresentedDiagnosticRung_ != diagnosticRung_) {
+        result.status = RenderedPixelStatus::NO_COMPLETED_FRAME;
+        result.diagnostic = "no successfully presented frame matches the current diagnostic fixture and surface size";
+        return result;
+    }
+    if (!hdrFbo_ || surfaceWidth_ <= 0 || surfaceHeight_ <= 0) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = "the resolved scene framebuffer is unavailable";
+        return result;
+    }
+    if (!eglMakeCurrent(display_, surface_, surface_, context_)) {
+        std::string error;
+        failEgl("eglMakeCurrent for rendered-pixel diagnostic", &error);
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = error;
+        return result;
+    }
+
+    const std::size_t width = static_cast<std::size_t>(surfaceWidth_);
+    const std::size_t height = static_cast<std::size_t>(surfaceHeight_);
+    if (height == 0 || width > std::numeric_limits<std::size_t>::max() / 4 / height) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = "surface extent overflows the diagnostic readback buffer";
+        return result;
+    }
+    std::vector<GLubyte> pixels;
+    try {
+        pixels.resize(width * height * 4);
+    } catch (...) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = "could not allocate the temporary rendered-pixel readback buffer";
+        return result;
+    }
+
+    GLint previousReadFramebuffer = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    std::string error;
+    if (!checkGlError("querying the read framebuffer for pixel diagnostic", &error)) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = error;
+        return result;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, hdrFbo_);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(0, 0, surfaceWidth_, surfaceHeight_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer < 0 ? 0 : previousReadFramebuffer));
+    if (!checkGlError("reading rendered diagnostic pixels", &error)) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = error;
+        return result;
+    }
+
+    constexpr std::uint8_t kBackgroundRgb[3] = {14, 19, 28};
+    constexpr std::uint8_t kBackgroundTolerance = 3;
+    if (!countNonBackgroundPixels(pixels.data(), width * height, kBackgroundRgb,
+                                  kBackgroundTolerance, &result.nonBackgroundPixels)) {
+        result.status = RenderedPixelStatus::READBACK_FAILED;
+        result.diagnostic = "pixel classifier rejected the framebuffer readback";
+        return result;
+    }
+    if (result.nonBackgroundPixels == 0) {
+        result.status = RenderedPixelStatus::BACKGROUND_ONLY;
+        result.diagnostic = "readback contains only the known scene-clear colour within tolerance";
+    } else {
+        result.status = RenderedPixelStatus::NON_BACKGROUND_PIXELS_FOUND;
+        result.diagnostic = "readback contains pixels outside the known scene-clear colour tolerance";
+    }
+    return result;
 }
 
 /* ============================================================================================

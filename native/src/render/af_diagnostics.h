@@ -2,6 +2,7 @@
 #ifndef AF_DIAGNOSTICS_H
 #define AF_DIAGNOSTICS_H
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -33,6 +34,9 @@ struct DiagnosticMesh {
 /* Returns false for an invalid rung. CLEAR and PRODUCTION_AVATAR deliberately return an empty
    fixture; every other rung produces deterministic renderer-owned geometry. */
 bool buildDiagnosticMesh(DiagnosticRung rung, float timeSeconds, DiagnosticMesh* out);
+bool countNonBackgroundPixels(const std::uint8_t* rgba, std::size_t pixelCount,
+                              const std::uint8_t backgroundRgb[3], std::uint8_t tolerance,
+                              std::uint64_t* outCount);
 bool gpuTimestampDeltaToMilliseconds(std::uint64_t startTicks, std::uint64_t endTicks,
                                      std::uint32_t validBits, double periodNs,
                                      float* outMilliseconds);

@@ -191,6 +191,13 @@ internal object NativeBridge {
     external fun rendererSetClip(renderer: Long, clip: Int, speed: Float, loop: Boolean)
     external fun rendererSetDiagnosticRung(renderer: Long, rung: Int)
     external fun rendererDiagnosticRung(renderer: Long): Int
+    /** outInts = [status, width, height]; outLongs = [non-background pixel count]. */
+    external fun rendererCheckRenderedPixels(
+        renderer: Long,
+        outInts: IntArray,
+        outLongs: LongArray,
+        outStrings: Array<String?>,
+    ): Int
     external fun rendererInvalidateMesh(renderer: Long)
     external fun rendererFrame(renderer: Long, deltaSeconds: Float)
     external fun rendererWaitIdle(renderer: Long)

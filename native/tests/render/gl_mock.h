@@ -22,6 +22,8 @@ struct MockState {
     int legacyExtensionQueries = 0, indexedExtensionQueries = 0, anisotropyWrites = 0;
     GLfloat lastAnisotropy = 1.0f;
     GLuint currentProgram = 0, currentArrayBuffer = 0, currentUniformBuffer = 0, currentVao = 0, currentFramebuffer = 0;
+    GLuint currentReadFramebuffer = 0, currentDrawFramebuffer = 0, lastReadFramebuffer = 0;
+    GLenum currentReadBuffer = GL_BACK;
     GLuint cameraBuffer = 0;
     GLuint currentRenderbuffer = 0, currentTexture = 0;
     EGLContext currentContext = EGL_NO_CONTEXT;
@@ -49,6 +51,8 @@ struct MockState {
     int livePrograms = 0, liveShaders = 0, liveBuffers = 0, liveTextures = 0;
     int liveFramebuffers = 0, liveRenderbuffers = 0, liveVaos = 0;
     int msaaAttempts = 0, framebufferChecks = 0, draws = 0;
+    int readPixelsCalls = 0, readPixelsWidth = 0, readPixelsHeight = 0;
+    bool readPixelsHasAvatarPixel = false, readPixelsFail = false;
     bool failNextVertexArray = false;
     bool rejectNextMsaa = false;
     bool rejectSingleSample = false;

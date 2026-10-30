@@ -4,6 +4,7 @@
  */
 #include "gl_mock.h"
 #include "af_render.h"
+#include "../../src/render/af_diagnostics.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -93,6 +94,62 @@ void successAndOwnership() {
     }
     r.reset();
     check(resourcesReleased(), "successful renderer teardown releases every tracked resource");
+}
+void renderedPixelReadbackIsExplicitAndGlesOnly() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "visible-pixel fixture initializes the real GLES renderer");
+    if (!r) return;
+
+    r->setDiagnosticRung(static_cast<int>(af::DiagnosticRung::TRIANGLE));
+    const auto beforeFrame = r->checkRenderedPixels();
+    check(beforeFrame.status == af::RenderedPixelStatus::NO_COMPLETED_FRAME &&
+          af_test::state.readPixelsCalls == 0,
+          "readback refuses a fixture that has not completed a frame");
+    r->renderFrame(1.0f / 60.0f);
+    check(r->frameError().empty() && af_test::state.readPixelsCalls == 0,
+          "ordinary frame submission does not perform pixel readback");
+
+    const auto background = r->checkRenderedPixels();
+    check(background.status == af::RenderedPixelStatus::BACKGROUND_ONLY &&
+          background.nonBackgroundPixels == 0 && background.width == 720 && background.height == 1280,
+          "an explicit full-frame readback classifies a clear-only image as background");
+    check(af_test::state.readPixelsCalls == 1 && af_test::state.lastReadFramebuffer != 0 &&
+          af_test::state.currentReadFramebuffer == 0,
+          "readback reads the resolved offscreen scene framebuffer and restores the previous binding");
+
+    af_test::state.readPixelsHasAvatarPixel = true;
+    const auto visible = r->checkRenderedPixels();
+    check(visible.status == af::RenderedPixelStatus::NON_BACKGROUND_PIXELS_FOUND &&
+          visible.nonBackgroundPixels == 1,
+          "a single non-background rendered fixture pixel is detected reliably");
+    check(af_test::state.readPixelsCalls == 2 && af_test::state.readPixelsWidth == 720 &&
+          af_test::state.readPixelsHeight == 1280,
+          "each explicit check scans the complete framebuffer at the live surface extent");
+
+    r->setDiagnosticRung(static_cast<int>(af::DiagnosticRung::INDEXED_TRIANGLE));
+    const auto stale = r->checkRenderedPixels();
+    check(stale.status == af::RenderedPixelStatus::NO_COMPLETED_FRAME &&
+          af_test::state.readPixelsCalls == 2,
+          "readback does not reuse pixels from a different selected diagnostic rung");
+    r->renderFrame(1.0f / 60.0f);
+    af_test::state.readPixelsFail = true;
+    const auto failed = r->checkRenderedPixels();
+    check(failed.status == af::RenderedPixelStatus::READBACK_FAILED &&
+          af_test::state.currentReadFramebuffer == 0,
+          "readback GL errors are reported and framebuffer binding is restored");
+    af_test::state.readPixelsFail = false;
+    check(r->checkRenderedPixels().status == af::RenderedPixelStatus::NON_BACKGROUND_PIXELS_FOUND,
+          "pixel readback recovers after a one-shot injected GL error");
+
+    const int readsBeforeProduction = af_test::state.readPixelsCalls;
+    r->setDiagnosticRung(static_cast<int>(af::DiagnosticRung::PRODUCTION_AVATAR));
+    check(r->checkRenderedPixels().status == af::RenderedPixelStatus::FIXTURE_REQUIRED &&
+          af_test::state.readPixelsCalls == readsBeforeProduction,
+          "production scenes require an isolated fixture so the ground plane cannot be mistaken for avatar pixels");
+    r.reset();
+    check(resourcesReleased(), "visible-pixel diagnostic teardown releases all GLES resources");
 }
 void glesGpuTimerQueries() {
     af_test::reset();
@@ -441,12 +498,15 @@ void defaultBackendSelection() {
     check(defaults.preferVulkan && r && r->info().backend == "vulkan" && error.empty() &&
           af_test_vk::attempts == 1 && af_test::state.contextsCreated == 0,
           "native RendererOptions defaults to Vulkan without creating a GLES context");
+    check(r && r->checkRenderedPixels().status == af::RenderedPixelStatus::UNSUPPORTED_BACKEND,
+          "the Vulkan backend reports pixel readback as unsupported rather than returning a false result");
     r.reset();
     af_test::reset(); af_test_vk::reset();
 }
 }  // namespace
 int main() {
     successAndOwnership();
+    renderedPixelReadbackIsExplicitAndGlesOnly();
     glesGpuTimerQueries();
     failureCase(af_test::Fault::EglContext, "eglCreateContext(ES3): EGL_BAD_CONFIG (0x3005)", "EGL context failure");
     failureCase(af_test::Fault::FragmentCompile, "fragment shader forward: injected compile failure", "shader compile failure");

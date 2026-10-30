@@ -75,6 +75,10 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Rung confirmed by the live native renderer, or the default before renderer creation. */
     val effectiveDiagnosticRung: StateFlow<DiagnosticRung> = _effectiveDiagnosticRung.asStateFlow()
 
+    private val _renderedPixelCheck = MutableStateFlow<RenderedPixelCheck?>(null)
+    /** Last explicit rendered-pixel check; null until requested. */
+    val renderedPixelCheck: StateFlow<RenderedPixelCheck?> = _renderedPixelCheck.asStateFlow()
+
     private val _recoveryStatus = MutableStateFlow<RecoveryStatus?>(null)
     val recoveryStatus: StateFlow<RecoveryStatus?> = _recoveryStatus.asStateFlow()
 
@@ -255,6 +259,34 @@ class RenderSurfaceView @JvmOverloads constructor(
             view.renderer?.let { current ->
                 current.setDiagnosticRung(requested.value)
                 _effectiveDiagnosticRung.value = DiagnosticRung.orDefault(current.diagnosticRung())
+            }
+        }
+    }
+
+    /**
+     * Explicitly submits one fresh frame and checks its resolved pixels. Readback is synchronous,
+     * full-frame, and only happens for this request; the regular frame loop is unchanged.
+     */
+    fun requestRenderedPixelCheck() {
+        _renderedPixelCheck.value = null
+        onRenderThread { view ->
+            val current = view.renderer
+            if (view.released || current == null) {
+                view._renderedPixelCheck.value = RenderedPixelCheck(
+                    status = RenderedPixelStatus.RENDERER_UNAVAILABLE,
+                    diagnostic = "open the viewer and wait for its renderer to initialise",
+                )
+                return@onRenderThread
+            }
+            try {
+                current.frame(0f)
+                view._stats.value = current.stats()
+                view._renderedPixelCheck.value = current.checkRenderedPixels()
+            } catch (t: Throwable) {
+                view._renderedPixelCheck.value = RenderedPixelCheck(
+                    status = RenderedPixelStatus.READBACK_FAILED,
+                    diagnostic = "frame or pixel check failed: ${t.message ?: t.javaClass.simpleName}",
+                )
             }
         }
     }

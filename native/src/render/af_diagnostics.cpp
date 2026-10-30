@@ -139,6 +139,23 @@ const DiagnosticRungInfo& diagnosticRungInfo(DiagnosticRung rung) {
 
 bool diagnosticRungValid(int rung) { return rung >= 0 && rung < kDiagnosticRungCount; }
 
+bool countNonBackgroundPixels(const std::uint8_t* rgba, std::size_t pixelCount,
+                              const std::uint8_t backgroundRgb[3], std::uint8_t tolerance,
+                              std::uint64_t* outCount) {
+    if (outCount) *outCount = 0;
+    if (!rgba || !backgroundRgb || !outCount) return false;
+    std::uint64_t count = 0;
+    for (std::size_t i = 0; i < pixelCount; ++i) {
+        const std::uint8_t* pixel = rgba + i * 4;
+        const int dr = std::abs(int(pixel[0]) - int(backgroundRgb[0]));
+        const int dg = std::abs(int(pixel[1]) - int(backgroundRgb[1]));
+        const int db = std::abs(int(pixel[2]) - int(backgroundRgb[2]));
+        if (dr > tolerance || dg > tolerance || db > tolerance) ++count;
+    }
+    *outCount = count;
+    return true;
+}
+
 bool buildDiagnosticMesh(DiagnosticRung rung, float timeSeconds, DiagnosticMesh* out) {
     if (!out || !diagnosticRungValid(static_cast<int>(rung))) return false;
     out->vertices.clear();

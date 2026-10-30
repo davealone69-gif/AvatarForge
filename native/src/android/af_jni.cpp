@@ -1049,6 +1049,31 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererDi
     return renderer ? renderer->diagnosticRung() : 7;  /* production avatar is the safe default */
 }
 
+JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererCheckRenderedPixels(
+    JNIEnv* env, jobject, jlong r, jintArray outInts, jlongArray outLongs, jobjectArray outStrings) {
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
+    if (!renderer) {
+        throwIllegalArgument(env, "renderer handle is not open");
+        return AF_ERR_INVALID_ARG;
+    }
+    if (!outInts || env->GetArrayLength(outInts) < 3 || !outLongs || env->GetArrayLength(outLongs) < 1) {
+        throwIllegalArgument(env, "rendererCheckRenderedPixels needs 3 ints and 1 long of output storage");
+        return AF_ERR_INVALID_ARG;
+    }
+    const af::RenderedPixelCheck result = renderer->checkRenderedPixels();
+    const jint ints[3] = {static_cast<jint>(result.status), result.width, result.height};
+    const jlong count = static_cast<jlong>(result.nonBackgroundPixels);
+    env->SetIntArrayRegion(outInts, 0, 3, ints);
+    env->SetLongArrayRegion(outLongs, 0, 1, &count);
+    if (outStrings && env->GetArrayLength(outStrings) >= 1) {
+        jstring diagnostic = env->NewStringUTF(result.diagnostic.c_str());
+        env->SetObjectArrayElement(outStrings, 0, diagnostic);
+        env->DeleteLocalRef(diagnostic);
+    }
+    return AF_OK;
+}
+
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetClip(
     JNIEnv*, jobject, jlong r, jint clip, jfloat speed, jboolean loop) {
     auto rendererHandle = lookupRendererHandle(r);

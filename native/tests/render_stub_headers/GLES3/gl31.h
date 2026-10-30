@@ -73,6 +73,7 @@ typedef signed char GLbyte; typedef unsigned char GLubyte;
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_READ_FRAMEBUFFER 0x8CA8
 #define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
 #define GL_RENDERBUFFER 0x8D41
 #define GL_COLOR_ATTACHMENT0 0x8CE0
 #define GL_DEPTH_ATTACHMENT 0x8D00
@@ -127,6 +128,7 @@ void glGetShaderInfoLog(GLuint,GLsizei,GLsizei*,GLchar*); void glGetShaderiv(GLu
 const GLubyte* glGetString(GLenum); const GLubyte* glGetStringi(GLenum, GLuint);
 GLuint glGetUniformBlockIndex(GLuint,const GLchar*); GLint glGetUniformLocation(GLuint,const GLchar*);
 void glLinkProgram(GLuint); void glPolygonOffset(GLfloat,GLfloat); void glReadBuffer(GLenum);
+void glReadPixels(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
 void glRenderbufferStorageMultisample(GLenum,GLsizei,GLenum,GLsizei,GLsizei);
 void glShaderSource(GLuint,GLsizei,const GLchar* const*,const GLint*);
 void glTexImage2D(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const void*);

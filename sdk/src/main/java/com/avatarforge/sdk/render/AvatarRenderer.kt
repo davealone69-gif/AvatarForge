@@ -68,6 +68,40 @@ data class RendererStats(
 /** App-level graphics API; GLES through ANGLE still counts as GLES, not native Vulkan. */
 enum class RenderBackend { GLES, VULKAN }
 
+enum class RenderedPixelStatus(val nativeValue: Int, val label: String) {
+    UNSUPPORTED_BACKEND(0, "Unsupported backend"),
+    NO_COMPLETED_FRAME(1, "No matching completed frame"),
+    FIXTURE_REQUIRED(2, "Select a non-clear diagnostic fixture"),
+    READBACK_FAILED(3, "Pixel readback failed"),
+    BACKGROUND_ONLY(4, "Background only"),
+    NON_BACKGROUND_PIXELS_FOUND(5, "Non-background pixels found"),
+    RENDERER_UNAVAILABLE(6, "Renderer unavailable"),
+    UNKNOWN(-1, "Unknown result");
+
+    companion object {
+        fun fromNative(value: Int): RenderedPixelStatus =
+            entries.firstOrNull { it.nativeValue == value } ?: UNKNOWN
+    }
+}
+
+data class RenderedPixelCheck(
+    val status: RenderedPixelStatus,
+    val width: Int = 0,
+    val height: Int = 0,
+    val nonBackgroundPixels: Long = 0L,
+    val diagnostic: String = "",
+) {
+    val hasVisiblePixels: Boolean
+        get() = status == RenderedPixelStatus.NON_BACKGROUND_PIXELS_FOUND && nonBackgroundPixels > 0L
+
+    val summary: String
+        get() = buildString {
+            append(status.label)
+            if (width > 0 && height > 0) append(" — $nonBackgroundPixels non-background pixels in ${width}×${height}")
+            if (diagnostic.isNotBlank()) append("; $diagnostic")
+        }
+}
+
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
@@ -212,6 +246,26 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     /** Returns the native renderer's currently selected rung. */
     fun diagnosticRung(): Int = NativeBridge.rendererDiagnosticRung(handle)
+
+    /**
+     * Reads the full resolved scene framebuffer for the last completed diagnostic-fixture frame.
+     * This is an explicit, synchronizing diagnostic and is never called by [frame]. Call on the
+     * renderer thread; native Vulkan currently reports UNSUPPORTED_BACKEND.
+     */
+    fun checkRenderedPixels(): RenderedPixelCheck {
+        val ints = IntArray(3)
+        val longs = LongArray(1)
+        val strings = arrayOfNulls<String>(1)
+        val rc = NativeBridge.rendererCheckRenderedPixels(handle, ints, longs, strings)
+        check(rc == 0) { "rendered-pixel check bridge failed with code $rc" }
+        return RenderedPixelCheck(
+            status = RenderedPixelStatus.fromNative(ints[0]),
+            width = ints[1],
+            height = ints[2],
+            nonBackgroundPixels = longs[0],
+            diagnostic = strings[0].orEmpty(),
+        )
+    }
 
     /** Plays a library clip. [loop] is meaningful for the looping clips (idle, walk, run...). */
     fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =

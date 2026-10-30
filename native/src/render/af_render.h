@@ -154,6 +154,23 @@ struct ResizeOutcome {
     }
 };
 
+enum class RenderedPixelStatus : int32_t {
+    UNSUPPORTED_BACKEND = 0,
+    NO_COMPLETED_FRAME = 1,
+    FIXTURE_REQUIRED = 2,
+    READBACK_FAILED = 3,
+    BACKGROUND_ONLY = 4,
+    NON_BACKGROUND_PIXELS_FOUND = 5,
+};
+
+struct RenderedPixelCheck {
+    RenderedPixelStatus status = RenderedPixelStatus::UNSUPPORTED_BACKEND;
+    int width = 0;
+    int height = 0;
+    uint64_t nonBackgroundPixels = 0;
+    std::string diagnostic;
+};
+
 /*
  *  Ownership: one Renderer per surface. All methods must be called from the thread that created
  *  it (the app runs a dedicated render thread that owns the ANativeWindow). attachEngine() does
@@ -216,6 +233,9 @@ public:
        is PRODUCTION_AVATAR so existing viewers retain their normal scene until the user opts in. */
     virtual void setDiagnosticRung(int rung) = 0;
     virtual int diagnosticRung() const = 0;
+
+    /* Explicit readback of a completed diagnostic-fixture frame; never part of renderFrame(). */
+    virtual RenderedPixelCheck checkRenderedPixels() { return {}; }
 
     /* Highlights one af_region (or -1 for none) by tinting its submesh. Used by the region
        inspector: the UI taps the surface, does a CPU ray cast, and asks for the region name. */

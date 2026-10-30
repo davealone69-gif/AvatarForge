@@ -82,6 +82,7 @@ public:
     void setHighlightRegion(int r) override { backend_->setHighlightRegion(r); }
     void setDiagnosticRung(int r) override { backend_->setDiagnosticRung(r); }
     int diagnosticRung() const override { return backend_->diagnosticRung(); }
+    RenderedPixelCheck checkRenderedPixels() override { return backend_->checkRenderedPixels(); }
     void setClip(int clip, float speed, bool loop) override { backend_->setClip(clip, speed, loop); }
     int currentClip() const override { return backend_->currentClip(); }
     float clipTime() const override { return backend_->clipTime(); }

@@ -71,6 +71,7 @@ import com.avatarforge.sdk.render.DiagnosticRung
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RenderThermalPolicy
+import com.avatarforge.sdk.render.RenderedPixelCheck
 import com.avatarforge.sdk.render.SettingsStore
 import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
@@ -151,6 +152,7 @@ class MainActivity : ComponentActivity() {
         val noRendererInfo = remember { MutableStateFlow<RendererInfo?>(null) }
         val noRendererStats = remember { MutableStateFlow(EMPTY_RENDERER_STATS) }
         val noRendererError = remember { MutableStateFlow<String?>(null) }
+        val noRenderedPixelCheck = remember { MutableStateFlow<RenderedPixelCheck?>(null) }
 
         var surfaceViewState by remember { mutableStateOf<RenderSurfaceView?>(null) }
         var screen by session.screen
@@ -599,6 +601,8 @@ class MainActivity : ComponentActivity() {
             val frameStats = surfaceViewState?.stats?.value
             val viewerError = surfaceViewState?.error?.value
             val recoveryStatus = surfaceViewState?.recoveryStatus?.value
+            val renderedPixelCheck by (surfaceViewState?.renderedPixelCheck ?: noRenderedPixelCheck)
+                .collectAsStateWithLifecycle()
             val records = recoveryJournal.recent(20)
             val report = buildString {
                 append(AvatarForge.deviceReport(context))
@@ -636,7 +640,8 @@ class MainActivity : ComponentActivity() {
                 appendLine("Settings    : requested backend=${settings.backend}, quality=${settings.quality}")
                 appendLine("Effective   : requested backend=${effectiveSettings.backend}, actual=${info?.backend ?: "not initialised"}, quality=${effectiveSettings.quality}")
                 appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
-                appendLine("Diagnostic  : requested=${selectedDiagnosticRung.value} (${selectedDiagnosticRung.displayName}), current=${effectiveDiagnosticRung.value} (${effectiveDiagnosticRung.displayName}); visible pixels not verified")
+                appendLine("Diagnostic  : requested=${selectedDiagnosticRung.value} (${selectedDiagnosticRung.displayName}), current=${effectiveDiagnosticRung.value} (${effectiveDiagnosticRung.displayName})")
+                appendLine("Visible pixels: ${renderedPixelCheck?.summary ?: "not checked"}")
                 appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
                     camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
                 appendLine()
@@ -650,11 +655,13 @@ class MainActivity : ComponentActivity() {
             DiagnosticsDialog(
                 report = report,
                 recoveryStatus = recoveryStatus?.let { "${it.phase}: ${it.message}" },
+                renderedPixelCheck = renderedPixelCheck,
                 selectedDiagnosticRung = selectedDiagnosticRung,
                 onDiagnosticRungSelected = { rung ->
                     selectedDiagnosticRung = rung
                     surfaceView?.setDiagnosticRung(rung.value)
                 },
+                onCheckRenderedPixels = { surfaceViewState?.requestRenderedPixelCheck() },
                 onSafeRecovery = {
                     val view = surfaceView
                     if (view != null) {
