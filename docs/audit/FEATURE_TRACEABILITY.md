@@ -2,7 +2,7 @@
 
 | Feature | UI entry | SDK/JNI | Native execution | Verification status |
 |---|---|---|---|---|
-| Text → avatar | InputScreen generate | `AvatarEngine.generateFromText/generate` | `af_engine_analyze_prompt`, `af_engine_run_all` | PARTIAL: host kernel + prior CI; current exact-head CI pending |
+| Text → avatar | InputScreen generate | `AvatarEngine.generateFromText/generate` | `af_engine_analyze_prompt`, `af_engine_run_all` | PARTIAL: host kernel and exact-head Android APK CI run 41002485082 passed; installed-device generation and visual confirmation remain unverified |
 | Image cues → avatar | InputScreen images | IO-dispatched decode/analysis, cancellable and guarded against stale selection; `analyseImages`, `specFromImages` | bounded `af_engine_analyze_images` | PARTIAL: coarse classical cues only; decode/dispatch regression tests added; not identity reconstruction |
 | GLB export | Viewer export | `engineExportGlb`, SAF copy | `af_engine_export_glb` | REAL + VERIFIED by user GLB files and validator; current-head device export pending |
 | 3D viewer | ViewerScreen surface + native Vulkan default | `RenderSurfaceView`, `rendererFrame`, actual-backend diagnostics | Vulkan API 1.3 loader/device gates, enumerated required extensions, capability-checked queues/formats/limits; bounded GLES 3.1 fallback | PARTIAL: host selector/version tests, shader validation and ARM64 compile/link pass; AvatarForge Vulkan pixels/device runtime unverified |

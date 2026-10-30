@@ -1,14 +1,14 @@
 # Project status
 
-## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; task-start HEAD `187fa25`)
+## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; CI-verified source commit `401a005eac045371c0d3625baf4c523a55288435`)
 
 The owner-approved engineering directive was applied on the existing branch, preserving the three
 pre-existing local commits (clean-checkout verifier log, shoulder-width/image-role fixes, and stale
-image-analysis guard). At task start the local tip was `187fa25`, based on common commit `1dfcf40`.
-A later read-only check found `origin/arena/c87f5c50-avatarforge` at `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62`,
-two commits beyond that base. No merge, rebase, reset, or direct push to `arena` was performed. The
-authorized publication target is a new `fix/verify-clean-checkout-output-dir` remote branch; that
-same-name ref was absent at the last read-only check and must be rechecked before pushing.
+image-analysis guard). The branch started at `187fa25`, based on common commit `1dfcf40`; the arena
+remote was at `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62` (two commits past that base). The repair/audit
+commit `401a005eac045371c0d3625baf4c523a55288435` was pushed normally to the new
+`origin/fix/verify-clean-checkout-output-dir` branch. No merge, rebase, reset, force-push, or direct
+push to `arena` was performed; the arena ref remains unchanged.
 
 The renderer defaults to native Vulkan with explicit and bounded OpenGL ES 3.1 fallback. The requested
 target label is Vulkan `1.3.304`; the app declares `VK_API_VERSION_1_3` (standard patch-zero encoding)
@@ -16,9 +16,11 @@ and requires loader/device API 1.3. Shaders compile/validate for `vulkan1.3`. Th
 26.1.10909125 headers are revision 1.3.237; these and the supplied SM-S921B checker label are not
 AvatarForge runtime versions. The post-fix host verifier passed 423 kernel checks, 87 renderer
 fault checks plus 7 API-version checks, and 33 model regressions; all 12 GLES and 13 Vulkan shader
-modules validate. The ARM64 native build and 3 app / 38 SDK JVM tests pass, and compile-only
-artifacts were produced. Exact-head CI after the new-branch push, the app/device Vulkan path, visible
-pixels, validation-layer output, thermal soak and production signing remain **UNVERIFIED/BLOCKED**. See
+modules validate. Android APK workflow run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
+succeeded on this exact commit and staged, verified and uploaded artifact
+`AvatarForge-Android-401a005eac045371c0d3625baf4c523a55288435` (ID `12954506148`, 18,048,697 bytes).
+The ARM64 native build, 3 app / 38 SDK JVM tests and compile-only artifacts pass. The SM-S921B runtime,
+visible pixels, validation-layer output, thermal soak and production signing remain **UNVERIFIED/BLOCKED**. See
 [Vulkan target audit](docs/audit/VULKAN_TARGET_AUDIT.md), [device checklist](DEVICE.md), and the
 current exact-head test record in `docs/audit/VERIFICATION_RESULTS.md`.
 

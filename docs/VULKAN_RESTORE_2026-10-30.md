@@ -61,11 +61,13 @@ inside the viewer, not an encoded recording.
 - `g++ -fsyntax-only` against temporarily fetched Vulkan headers: `af_vk.cpp` and its helper
   translation units compile on the host. **Not an NDK build or GPU test.** `python3
   tools/embed_vulkan_shaders.py --check` requires NDK `glslc`, unavailable locally; CI runs it.
-- Android APK workflow compiles both shader dialects, validates the SHA-pinned historical Vulkan
-  SPIR-V modules with NDK `spirv-val`, and gates ARM64 native build, JVM tests and APK packaging.
-  **Check the run for the current commit before treating its APK as built**; a green build still
-  cannot approve pixels. No `adb`, local Android SDK/NDK, or SM-S921B is attached here, so
-  neither backend's live image has been visually approved.
+- Exact-head Android APK workflow [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
+  succeeded on commit `401a005eac045371c0d3625baf4c523a55288435`. It compiled both shader dialects,
+  validated the SHA-pinned historical Vulkan SPIR-V modules with NDK `spirv-val`, passed ARM64 native
+  build, JVM and package/provenance gates, and staged/verified/uploaded artifact
+  `AvatarForge-Android-401a005eac045371c0d3625baf4c523a55288435` (ID `12954506148`, 18,048,697 bytes).
+  A green build still cannot approve pixels. No `adb` or SM-S921B is attached here, so neither
+  backend's live image has been visually approved.
 
 **Device gate:** install the exact-head debug APK, regenerate an avatar, compare paused `REST`
 with live `walk`/`run` at matched camera/quality/thermal state on both GLES and explicit native

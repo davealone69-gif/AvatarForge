@@ -26,6 +26,7 @@
 
 - [x] Signed-tag verifier inputs now match the signed APK/AAB and SDK AAR staged by that job.
 - [x] `python3 tools/test_release_workflow.py` statically guards staging/verifier path consistency and current `fix/**` CI triggers.
+- [x] Fix-branch run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082) passed on `401a005`; staged, verified and uploaded artifact `AvatarForge-Android-401a005eac045371c0d3625baf4c523a55288435` (ID `12954506148`, 18,048,697 bytes, not expired).
 - [ ] Run the signed-release job on an authorized version tag and verify signed outputs; credentials are still required.
 - [ ] Install the exact signed build on the SM-S921B and complete the device checklist.
 
