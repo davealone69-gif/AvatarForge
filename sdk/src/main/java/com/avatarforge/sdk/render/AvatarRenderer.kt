@@ -207,6 +207,12 @@ class AvatarRenderer private constructor(private var handle: Long) {
     fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) =
         NativeBridge.rendererSetOverlays(handle, skeleton, flatShading, highlightRegion)
 
+    /** Selects a renderer-owned diagnostic fixture. Must be called on the render thread. */
+    fun setDiagnosticRung(rung: Int) = NativeBridge.rendererSetDiagnosticRung(handle, rung)
+
+    /** Returns the native renderer's currently selected rung. */
+    fun diagnosticRung(): Int = NativeBridge.rendererDiagnosticRung(handle)
+
     /** Plays a library clip. [loop] is meaningful for the looping clips (idle, walk, run...). */
     fun setClip(clip: Int, speed: Float = 1f, loop: Boolean = true) =
         NativeBridge.rendererSetClip(handle, clip, speed, loop)

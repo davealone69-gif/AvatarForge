@@ -8,6 +8,7 @@
 #include "af_render.h"
 #include "af_render_common.h"
 #include "af_environment.h"
+#include "af_diagnostics.h"
 #include "af_shaders.h"
 
 #include <EGL/egl.h>
@@ -297,6 +298,8 @@ public:
     void renderFrame(float deltaSeconds) override;
     void setSkeletonVisible(bool visible) override { skeletonVisible_ = visible; }
     void setFlatShading(bool flat) override { flatShading_ = flat; }
+    void setDiagnosticRung(int rung) override;
+    int diagnosticRung() const override { return static_cast<int>(diagnosticRung_); }
     void setHighlightRegion(int region) override { highlightRegion_ = region; }
     void setClip(int clip, float speed, bool loop) override;
     int currentClip() const override { return clip_; }
@@ -315,6 +318,7 @@ private:
     bool createTargets(std::string* error);
     void uploadAtlas(std::string* error);
     void ensureGeometryBuffers();
+    void writeDiagnosticMaterial();
     void rebuildMaterialBlocks();
     void buildSkeletonLines();
     void updateScene(float deltaSeconds);
@@ -380,6 +384,10 @@ private:
     EnvironmentParams env_{};
     ShGlobal sh_{};
     bool meshDirty_ = true;
+    DiagnosticRung diagnosticRung_ = DiagnosticRung::PRODUCTION_AVATAR;
+    DiagnosticMesh diagnosticMesh_{};
+    float diagnosticTimeSeconds_ = 0.0f;
+    bool diagnosticDirty_ = true;
     int highlightRegion_ = -1;
     bool skeletonVisible_ = false;
     bool flatShading_ = false;
@@ -901,7 +909,65 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
  *  Geometry and atlas
  * ============================================================================================ */
 void GlRenderer::ensureGeometryBuffers() {
-    if (!engine_) return;
+    const bool diagnostic = diagnosticRung_ != DiagnosticRung::PRODUCTION_AVATAR;
+    const bool animatedDiagnostic = diagnosticRung_ == DiagnosticRung::SKINNED_MESH ||
+                                    diagnosticRung_ == DiagnosticRung::BLENDSHAPE_MESH;
+    if (diagnostic) {
+        if (diagnosticDirty_ || animatedDiagnostic) {
+            if (!buildDiagnosticMesh(diagnosticRung_, diagnosticTimeSeconds_, &diagnosticMesh_)) {
+                vertexCount_ = indexCount_ = 0;
+                return;
+            }
+        }
+        const int32_t vcount = static_cast<int32_t>(diagnosticMesh_.vertices.size());
+        const int32_t icount = static_cast<int32_t>(diagnosticMesh_.indices.size());
+        const af_vertex* verts = diagnosticMesh_.vertices.empty() ? nullptr : diagnosticMesh_.vertices.data();
+        const uint32_t* indices = diagnosticMesh_.indices.empty() ? nullptr : diagnosticMesh_.indices.data();
+        if (!verts || vcount <= 0) {
+            vertexCount_ = indexCount_ = 0;
+            diagnosticDirty_ = false;
+            meshDirty_ = false;
+            return;
+        }
+
+        const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
+        glBindVertexArray(avatarVao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+        if (vbytes > vertexCapacity_) {
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbytes + vbytes / 4), nullptr, GL_DYNAMIC_DRAW);
+            vertexCapacity_ = vbytes + vbytes / 4;
+            vertexCount_ = 0;
+        }
+        if (diagnosticDirty_ || animatedDiagnostic || vertexCount_ != vcount) {
+            glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), verts);
+            vertexCount_ = vcount;
+        }
+        if (icount > 0 && indices) {
+            const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
+            if (ibytes > indexCapacity_) {
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibytes + ibytes / 4), nullptr, GL_DYNAMIC_DRAW);
+                indexCapacity_ = ibytes + ibytes / 4;
+                indexCount_ = 0;
+            }
+            if (diagnosticDirty_ || animatedDiagnostic || indexCount_ != icount) {
+                glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
+                indexCount_ = icount;
+            }
+        } else {
+            indexCount_ = 0;
+        }
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        diagnosticDirty_ = false;
+        meshDirty_ = false;
+        return;
+    }
+
+    if (!engine_) {
+        vertexCount_ = indexCount_ = 0;
+        return;
+    }
     const int32_t vcount = af_engine_vertex_count(engine_);
     const int32_t icount = af_engine_index_count(engine_);
     const af_vertex* verts = af_engine_vertices(engine_);
@@ -941,6 +1007,23 @@ void GlRenderer::ensureGeometryBuffers() {
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     meshDirty_ = false;
+}
+
+void GlRenderer::writeDiagnosticMaterial() {
+    MaterialUbo block{};
+    block.baseColorFactor[0] = block.baseColorFactor[1] = block.baseColorFactor[2] = 1.0f;
+    block.baseColorFactor[3] = 1.0f;
+    block.pbr[1] = 0.52f;
+    block.pbr[2] = 1.5f;
+    block.pbr2[2] = float(AF_KIND_GENERIC);
+    block.texFlags[0] = diagnosticMesh_.textured ? 1.0f : 0.0f;
+    /* Even the 1x1 placeholder is a valid sampled image, so the quad still exercises the sampler
+       path before a production engine has supplied its baked atlas. */
+    block.texFlags[3] = 1.0f;
+    block.region[0] = -1.0f;
+    glBindBuffer(GL_UNIFORM_BUFFER, materialUbo_);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(block), &block);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
 void GlRenderer::uploadAtlas(std::string* error) {
@@ -1102,7 +1185,11 @@ void GlRenderer::buildSkeletonLines() {
  *  Per-frame
  * ============================================================================================ */
 void GlRenderer::updateScene(float deltaSeconds) {
-    (void)deltaSeconds;
+    if (diagnosticRung_ == DiagnosticRung::SKINNED_MESH ||
+        diagnosticRung_ == DiagnosticRung::BLENDSHAPE_MESH) {
+        if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0f)
+            diagnosticTimeSeconds_ += std::min(deltaSeconds, 0.1f);
+    }
     env_.sunAzimuthDeg = options_.sunAzimuthDeg;
     env_.sunElevationDeg = options_.sunElevationDeg;
     env_.sunIntensity = options_.sunIntensity;
@@ -1115,6 +1202,8 @@ void GlRenderer::updateScene(float deltaSeconds) {
     /* depthZeroToOne = false: GL clip space, which is also why the ES dialect of the shaders has
        AF_CLIP_Y = +1 and rescales the shadow lookup's z. */
     buildCameraUbo(&scene_, camera_, options_, env_, sh_, surfaceWidth_, surfaceHeight_);
+    if (diagnosticRung_ != DiagnosticRung::PRODUCTION_AVATAR)
+        scene_.camera.envFlags[0] = 0.0f;  /* diagnostic fixtures do not sample the production shadow map */
     scene_.camera.envFlags[3] = flatShading_ ? 1.0f : 0.0f;
     scene_.camera.uiParams[0] = float(highlightRegion_);
     scene_.camera.uiParams[1] = highlightRegion_ >= 0 ? 1.0f : 0.0f;
@@ -1191,11 +1280,25 @@ void GlRenderer::setClip(int clip, float speed, bool loop) {
     if (engine_ && clip_ >= 0 && af_engine_apply_clip(engine_, clip_, 0.0f) == AF_OK) meshDirty_ = true;
 }
 
+void GlRenderer::setDiagnosticRung(int rung) {
+    if (!diagnosticRungValid(rung)) return;
+    const DiagnosticRung next = static_cast<DiagnosticRung>(rung);
+    if (next == diagnosticRung_) return;
+    const DiagnosticRung previous = diagnosticRung_;
+    diagnosticRung_ = next;
+    diagnosticTimeSeconds_ = 0.0f;
+    diagnosticDirty_ = true;
+    meshDirty_ = true;
+    if (next == DiagnosticRung::PRODUCTION_AVATAR && previous != next && engine_)
+        rebuildMaterialBlocks();
+}
+
 /* ============================================================================================
  *  Draw
  * ============================================================================================ */
 void GlRenderer::drawShadowPass() {
-    if (!options_.enableShadows || !engine_ || indexCount_ == 0) return;
+    if (diagnosticRung_ != DiagnosticRung::PRODUCTION_AVATAR ||
+        !options_.enableShadows || !engine_ || indexCount_ == 0) return;
     const int size = options_.shadowMapSize;
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
     glViewport(0, 0, size, size);
@@ -1229,7 +1332,8 @@ void GlRenderer::drawForwardPass() {
     glBindBufferRange(GL_UNIFORM_BUFFER, 0, cameraUbo_, GLintptr(frame) * cameraStride_, sizeof(CameraUbo));
 
     /* ---- studio ground ---- */
-    if (options_.groundPlane && engine_ && vertexCount_ > 0) {
+    if (diagnosticRung_ == DiagnosticRung::PRODUCTION_AVATAR &&
+        options_.groundPlane && engine_ && vertexCount_ > 0) {
         glDisable(GL_CULL_FACE);   /* the floor quad is visible from above and below */
         glUseProgram(groundProgram_);
         glBindVertexArray(groundVao_);
@@ -1246,7 +1350,8 @@ void GlRenderer::drawForwardPass() {
     }
 
     /* ---- the avatar: one draw per submesh so each gets its own material block ---- */
-    if (engine_ && vertexCount_ > 0 && indexCount_ > 0) {
+    if (diagnosticRung_ == DiagnosticRung::PRODUCTION_AVATAR &&
+        engine_ && vertexCount_ > 0 && indexCount_ > 0) {
         glUseProgram(forwardProgram_);
         glBindVertexArray(avatarVao_);
         glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
@@ -1271,10 +1376,34 @@ void GlRenderer::drawForwardPass() {
             ++drawCalls_;
         }
         triangles_ = indexCount_ / 3;
+    } else if (diagnosticRung_ != DiagnosticRung::CLEAR &&
+               diagnosticRung_ != DiagnosticRung::PRODUCTION_AVATAR && vertexCount_ > 0) {
+        writeDiagnosticMaterial();
+        glUseProgram(forwardProgram_);
+        glBindVertexArray(avatarVao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
+        for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+            glActiveTexture(GL_TEXTURE0 + slot);
+            glBindTexture(GL_TEXTURE_2D, atlasTexture_[slot]);
+        }
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, shadowTexture_);
+        glActiveTexture(GL_TEXTURE0);
+        glBindBufferRange(GL_UNIFORM_BUFFER, 1, materialUbo_, 0, sizeof(MaterialUbo));
+        if (diagnosticMesh_.indexed && indexCount_ > 0) {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
+            glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
+            triangles_ = indexCount_ / 3;
+        } else {
+            glDrawArrays(GL_TRIANGLES, 0, vertexCount_);
+            triangles_ = vertexCount_ / 3;
+        }
+        ++drawCalls_;
     }
 
     /* ---- skeleton overlay ---- */
-    if (skeletonVisible_ && lineVertexCount_ >= 2) {
+    if (diagnosticRung_ == DiagnosticRung::PRODUCTION_AVATAR &&
+        skeletonVisible_ && lineVertexCount_ >= 2) {
         glUseProgram(lineProgram_);
         glBindVertexArray(lineVao_);
         glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);

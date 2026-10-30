@@ -208,6 +208,8 @@ extern "C" {
     fn af_renderer_set_camera(handle: *mut c_void, camera: *const Camera);
     fn af_renderer_set_options(handle: *mut c_void, options: *const RenderOptions);
     fn af_renderer_set_overlays(handle: *mut c_void, skeleton: i32, flat: i32, highlight_region: i32);
+    fn af_renderer_set_diagnostic_rung(handle: *mut c_void, rung: i32);
+    fn af_renderer_diagnostic_rung(handle: *mut c_void) -> i32;
     fn af_renderer_set_clip(handle: *mut c_void, clip: i32, speed: f32, looped: i32);
     fn af_renderer_current_clip(handle: *mut c_void) -> i32;
     fn af_renderer_clip_time(handle: *mut c_void) -> f32;
@@ -320,6 +322,16 @@ impl<'engine> Renderer<'engine> {
                 highlight_region,
             )
         };
+    }
+
+    /// Selects a diagnostic fixture in the 0..=7 ladder. Invalid values are ignored by native code.
+    pub fn set_diagnostic_rung(&self, rung: i32) {
+        unsafe { af_renderer_set_diagnostic_rung(self.handle, rung) };
+    }
+
+    /// Returns the currently selected diagnostic rung (0..=7; 7 is production avatar).
+    pub fn diagnostic_rung(&self) -> i32 {
+        unsafe { af_renderer_diagnostic_rung(self.handle) }
     }
 
     /// Starts a clip. The renderer owns the playback clock from here on.

@@ -67,6 +67,7 @@ import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.JobHandle
 import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
+import com.avatarforge.sdk.render.DiagnosticRung
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
 import com.avatarforge.sdk.render.RenderThermalPolicy
@@ -159,6 +160,7 @@ class MainActivity : ComponentActivity() {
         val settingsStore = remember { SettingsStore(context) }
         var settings by remember { mutableStateOf(settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context)) }
         var effectiveSettings by remember { mutableStateOf(settings) }
+        var effectiveDiagnosticRung by remember { mutableStateOf(DiagnosticRung.PRODUCTION_AVATAR) }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
         var clipIndex by remember { mutableStateOf(0) }
         var poseIndex by remember { mutableStateOf(POSE_CLIP) }
@@ -166,6 +168,7 @@ class MainActivity : ComponentActivity() {
         var glbToSave by remember { mutableStateOf<EngineResult?>(null) }
         var menuExpanded by remember { mutableStateOf(false) }
         var showDiagnostics by remember { mutableStateOf(false) }
+        var selectedDiagnosticRung by remember { mutableStateOf(DiagnosticRung.PRODUCTION_AVATAR) }
         val recoveryJournal = remember { RecoveryJournal(context.filesDir) }
         var recoveryReportToSave by remember { mutableStateOf<String?>(null) }
 
@@ -292,6 +295,9 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(job) { job?.status?.collect { status = it } }
         LaunchedEffect(surfaceViewState) {
             surfaceViewState?.effectiveSettings?.collect { effectiveSettings = it }
+        }
+        LaunchedEffect(surfaceViewState) {
+            surfaceViewState?.effectiveDiagnosticRung?.collect { effectiveDiagnosticRung = it }
         }
         LaunchedEffect(Unit) {
             if (!health.usable) Toast.makeText(context, health.problem ?: "engine unavailable", Toast.LENGTH_LONG).show()
@@ -496,6 +502,7 @@ class MainActivity : ComponentActivity() {
                                         surfaceViewState = view
                                         view.bind(engine)
                                         view.attachEngine(engine.nativeHandle)
+                                        view.setDiagnosticRung(selectedDiagnosticRung.value)
                                         view.applySettings(settings)
                                         view.applyCamera(camera)
                                         view.setFrameLoopEnabled(true)
@@ -606,6 +613,7 @@ class MainActivity : ComponentActivity() {
                 appendLine("Settings    : requested backend=${settings.backend}, quality=${settings.quality}")
                 appendLine("Effective   : requested backend=${effectiveSettings.backend}, actual=${info?.backend ?: "not initialised"}, quality=${effectiveSettings.quality}")
                 appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
+                appendLine("Diagnostic  : requested=${selectedDiagnosticRung.value} (${selectedDiagnosticRung.displayName}), current=${effectiveDiagnosticRung.value} (${effectiveDiagnosticRung.displayName}); visible pixels not verified")
                 appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
                     camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
                 appendLine()
@@ -619,6 +627,11 @@ class MainActivity : ComponentActivity() {
             DiagnosticsDialog(
                 report = report,
                 recoveryStatus = recoveryStatus?.let { "${it.phase}: ${it.message}" },
+                selectedDiagnosticRung = selectedDiagnosticRung,
+                onDiagnosticRungSelected = { rung ->
+                    selectedDiagnosticRung = rung
+                    surfaceView?.setDiagnosticRung(rung.value)
+                },
                 onSafeRecovery = {
                     val view = surfaceView
                     if (view != null) {

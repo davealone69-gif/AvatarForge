@@ -91,13 +91,14 @@ python3 tools/embed_shaders.py --check   # requires glslc: compile every stage a
 
 The script embeds exactly the 12 required GLES stages and fails loudly on a missing, duplicate or
 unexpected stage. Vulkan uses an independent 13-module checked-in SPIR-V table and source gate.
-`tools/embed_vulkan_shaders.py --check` compiles and validates Vulkan modules with NDK `glslc` and
-`spirv-val` when available, targeting `vulkan1.3`. The app gates the Vulkan path on loader and
+`tools/embed_vulkan_shaders.py --check` compiles Vulkan modules with NDK `glslc` and checks the
+embedded `vulkan1.3` table. If optimizer output differs from the checked-in table, the exact pinned
+source/table pair is accepted only after every embedded module passes `spirv-val`. The app gates the Vulkan path on loader and
 physical-device API 1.3 and declares `VK_API_VERSION_1_3` (the standard patch-zero encoding). The
 requested target label `1.3.304` is logged separately; the pinned NDK `26.1.10909125` headers are
-revision 1.3.237 and neither value establishes the runtime loader/device version. The historical
-checked-in SPIR-V table remains hash-pinned, and every module must validate for Vulkan 1.3; `--check`
-does not rewrite it just because this NDK's optimizer emits different words. The SM-S921B checker
+revision 1.3.237 and neither value establishes the runtime loader/device version. The checked-in
+SPIR-V table is hash-pinned to the current sources and every module must validate for Vulkan 1.3;
+`--check` does not rewrite a pinned table just because another optimizer emits different words. The SM-S921B checker
 label is not proof of AvatarForge runtime selection or pixels. See
 `docs/audit/VULKAN_TARGET_AUDIT.md` for the target and evidence boundaries.
 
@@ -128,11 +129,10 @@ no NDK - see the RAM note in §4).
 Old Vulkan-era binaries were removed from tracking. Despite its legacy filename,
 `tools/verify_gles_artifacts.py` now requires `libafrender.so` to link system `libvulkan.so` and
 EGL/GLESv3, and rejects bundling a Vulkan loader inside any APK/AAB/AAR. The checked-in Vulkan
-SPIR-V table is compiled from `native/src/render/shaders_vk/`. The original pre-removal table is
-SHA-pinned to its byte-identical source inputs because this NDK's `glslc -O` emits different
-optimized bytes; CI compiles the sources and validates every pinned module with `spirv-val`.
-Editing those sources requires NDK `glslc` and `python3 tools/embed_vulkan_shaders.py` to update
-the table, followed by review of the historical-snapshot regression. GLES remains independent.
+SPIR-V table is compiled from `native/src/render/shaders_vk/` and pinned to its current GLSL sources.
+CI compiles those sources and validates every pinned module with `spirv-val`. Editing the sources
+requires NDK `glslc` and `python3 tools/embed_vulkan_shaders.py` to regenerate the table, followed by
+review of the pinned-snapshot regression. GLES remains independent.
 `tools/build-android.ps1` has **not** been executed here; use `-DryRun` to inspect its commands.
 
 ---
@@ -142,8 +142,8 @@ the table, followed by review of the historical-snapshot regression. GLES remain
 ```bash
 # Preferred: the wrapper pinned in gradle/wrapper (Gradle 8.9, downloads its distribution once)
 ./gradlew :app:assembleDebug                 # -> app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:assembleRelease               # signed: keystore.properties / AF_RELEASE_*; otherwise BLOCKED
-./gradlew :sdk:assembleRelease               # the SDK as an AAR for third-party consumers
+./gradlew :app:bundleRelease :sdk:assembleRelease -Paf.allowUnsignedRelease=true
+                                             # unsigned AAB + SDK AAR; compile/package checks only
 
 # This container / any machine that already has Gradle: the pinning wrapper
 tools/build_gradle.sh :app:assembleDebug -Paf.abIs=arm64-v8a -Paf.prebuiltJni=$PWD/prebuilt
@@ -161,19 +161,21 @@ Build properties, all optional:
 | `-Paf.prebuiltJni=$PWD/prebuilt` | package the `.so` files from `prebuilt/` and skip CMake entirely - the way to build the APK on a small machine |
 | `-Paf.lowRam=true` | `-O1` for the natives plus a single-threaded CMake build |
 
-Release signing is fail-closed: supply `keystore.properties` (storeFile / storePassword / keyAlias /
-keyPassword) or `AF_RELEASE_*` environment variables. Without them, release assembly is BLOCKED.
-CI may compile an explicitly unsigned AAB with `-Paf.allowUnsignedRelease=true`; that artifact is
-labelled UNSIGNED and is not a production release. R8 is deliberately off; see `app/build.gradle.kts`.
+Production signing configuration and signed-release publication have been removed. Only the debug
+variant is intended to produce an installable APK. App release-variant tasks require the explicit
+`-Paf.allowUnsignedRelease=true` opt-in and produce unsigned compile/package verification outputs;
+they are not installable production builds. The CI AAB is checked for signature entries and labelled
+`UNSIGNED`. The SDK AAR is a compile/package artifact, not a signed app. R8 is deliberately off; see
+`app/build.gradle.kts`.
 
 ### Artifacts
 
-Generated binaries are no longer tracked. The authoritative deliverables are the exact-head CI
-artifacts from the **Android APK** workflow: `AvatarForge-debug-arm64.apk`, an explicitly
-`AvatarForge-release-UNSIGNED-arm64.aab` (compile verification only), `AvatarForge-sdk.aar`,
-`SHA256SUMS` and `PROVENANCE.json`. CI rebuilds the ARM64 natives from the checkout, verifies
-dual-API/system-loader linkage, checks the APK/AAB/AAR, and uploads the result. Production signed
-AAB/APK delivery requires real signing credentials and remains BLOCKED until they are supplied.
+Generated binaries are no longer tracked. The exact-head CI artifact contains
+`AvatarForge-debug-arm64.apk` for testing, explicitly unsigned `AvatarForge-release-UNSIGNED-arm64.aab`
+and `AvatarForge-sdk.aar` for compile/package verification, plus `SHA256SUMS` and `PROVENANCE.json`.
+CI rebuilds the ARM64 natives from the checkout, verifies dual-API/system-loader linkage, checks the
+APK/AAB/AAR, and uploads the result. There is no signed production AAB/APK path or GitHub Release
+publication workflow.
 
 
 ## 5. Rust crates
@@ -218,8 +220,8 @@ installed but Python.
 tools/verify.sh
 ```
 
-`tools/verify.sh` runs the host kernel, renderer, device-report, model-detail and release-workflow
-regressions; shader table checks; exported-model validation; ABI conformance; Rust workspace tests
+`tools/verify.sh` runs the host kernel, renderer, device-report, model-detail and unsigned compile-only
+artifact policy regressions; shader table checks; exported-model validation; ABI conformance; Rust workspace tests
 when Cargo is available; and built-artifact checks. It exits non-zero if any executed gate fails.
 
 What that script cannot check is the device: rendering, frame timing, thermals and touch. That pass is

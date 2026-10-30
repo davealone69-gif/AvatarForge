@@ -178,6 +178,11 @@ public:
     virtual void setSkeletonVisible(bool visible) = 0;
     virtual void setFlatShading(bool flat) = 0;
 
+    /* Selects a renderer-owned diagnostic fixture. Invalid values are ignored; the default rung
+       is PRODUCTION_AVATAR so existing viewers retain their normal scene until the user opts in. */
+    virtual void setDiagnosticRung(int rung) = 0;
+    virtual int diagnosticRung() const = 0;
+
     /* Highlights one af_region (or -1 for none) by tinting its submesh. Used by the region
        inspector: the UI taps the surface, does a CPU ray cast, and asks for the region name. */
     virtual void setHighlightRegion(int region) = 0;

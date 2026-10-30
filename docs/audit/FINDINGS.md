@@ -5,10 +5,15 @@ The native Vulkan backend is restored as default, with explicit GLES and bounded
 Rows below that say it was *removed* describe an earlier branch checkpoint and are superseded by
 [the restoration report](../VULKAN_RESTORE_2026-10-30.md) and
 [the target-version audit](VULKAN_TARGET_AUDIT.md).
-In particular AF-002/009/014/015 remain **PARTIAL** pending exact-head CI and device verification.
+AF-002/009/014/015 remain **PARTIAL** pending exact-head CI and device verification.
 AF-034/035 are ported and host-tested; AF-038 now passes its 2048 sub-texel host gate, and AF-040's
 numeric reference ratios pass the no-garment host fixture. Visual/device acceptance remains open.
 Never interpret an old GLES-only artifact as the current branch's APK.
+
+**Signing-path directive (2026-10-30):** production signing and the signed-tag publication workflow
+have now been intentionally removed. AF-001 and AF-041 below describe the earlier implementation and
+are historical findings, not open requests to add signing credentials or restore that workflow. The
+current artifact contract is a debug test APK plus explicitly unsigned compile-only AAB/AAR outputs.
 
 Labels: **REAL + VERIFIED** = evidence in this repo/environment; **PARTIAL** = implemented or observed but missing a required proof; **UNVERIFIED** = no execution proof; **MISSING** = absent; **BLOCKED** = external credential/device/tool required.
 

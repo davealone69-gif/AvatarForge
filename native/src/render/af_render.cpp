@@ -78,6 +78,8 @@ public:
     void setSkeletonVisible(bool v) override { backend_->setSkeletonVisible(v); }
     void setFlatShading(bool f) override { backend_->setFlatShading(f); }
     void setHighlightRegion(int r) override { backend_->setHighlightRegion(r); }
+    void setDiagnosticRung(int r) override { backend_->setDiagnosticRung(r); }
+    int diagnosticRung() const override { return backend_->diagnosticRung(); }
     void setClip(int clip, float speed, bool loop) override { backend_->setClip(clip, speed, loop); }
     int currentClip() const override { return backend_->currentClip(); }
     float clipTime() const override { return backend_->clipTime(); }

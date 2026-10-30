@@ -40,7 +40,7 @@ and shader checks pass; actual phone initialization/rendering remains unverified
 1. Device-retest the exact-head build with Vulkan default and explicit GLES during live walk/run clips; capture actual-backend diagnostics, matched paused/live PNGs, fallback/errors and thermal state. Camera is user-confirmed but exact-build evidence is still needed.
 2. ~~Add a full engine read/write fence or ownership transfer so render-thread reads cannot race UI mutations/generation.~~ **DONE (AF-020)** — source + host compile proof; a device soak with clip playback, camera drags and expression edits still has to run.
 3. **PARTIAL (AF-016):** diagnostic rung names and pass criteria exist, but the selectable rendered-scene ladder and per-rung submission/visible-output reporting are still missing.
-4. Supply production signing credentials to unblock signed AAB/APK release.
+4. **Production signing removed by owner direction:** no signed AAB/APK release or publication path is planned; retain only the debug test APK and explicitly unsigned compile-only AAB/AAR.
 
 ## P1 — mobile stability
 

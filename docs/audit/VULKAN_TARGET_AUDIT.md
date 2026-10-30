@@ -18,14 +18,35 @@ A loader or device below API 1.3 is intended to use the existing GLES 3.1 fallba
 
 ## Shader and build evidence
 
-`tools/embed_vulkan_shaders.py` compiles all 13 Vulkan GLSL sources for `vulkan1.3` and validates the checked-in 13-module SPIR-V table with `spirv-val --target-env vulkan1.3`. The historical source/table pair remains SHA-pinned; this NDK's optimizer emits different bytes, so `--check` validates the snapshot without silently rewriting it. Results: **6/6** shader regression tests; all **13** sources compiled and all **13** embedded modules validated.
+`tools/embed_vulkan_shaders.py` compiles all 13 Vulkan GLSL sources for `vulkan1.3` and validates the checked-in 13-module SPIR-V table with `spirv-val --target-env vulkan1.3`. The current source/table pair is SHA-pinned; this NDK's optimizer can emit different bytes, so `--check` validates the pinned snapshot without silently rewriting it. Results: **6/6** shader regression tests; all **13** sources compiled and all **13** embedded modules validated.
 
 `tools/test_renderer_host.sh` passes **87/87** renderer host checks and **7/7** API-version helper checks. These cover GLES behavior, mocked Vulkan selection/fallback and version comparisons; they do **not** execute Vulkan commands or a GPU. `tools/build_android.sh arm64-v8a android-26` passes with NDK `26.1.10909125`. The native artifact guard confirms `libafrender.so` links Android's system `libvulkan.so` and no Vulkan loader is bundled.
 
-The exact-working-tree Gradle run also passes **3 app** and **38 SDK** JVM tests, builds the debug APK, unsigned compile-only release AAB and SDK AAR. Package, debug signature, no-INTERNET permission and all nine packaged native libraries were checked. These are compile/package results, not proof of Vulkan initialization or visible pixels.
+At the earlier audit checkpoint, Gradle passed **3 app** and **38 SDK** JVM tests and built the debug APK, unsigned compile-only release AAB and SDK AAR. Package, debug signature, no-INTERNET permission and packaged native libraries were checked. These are compile/package results, not proof of Vulkan initialization or visible pixels.
 
-## Supplied phone report and remaining proof
+## User-supplied SM-S921B recovery report and remaining proof
 
-The supplied SM-S921B / Xclipse 940 checker report, including its `1.3.304` label and reported feature names, describes capability observed by another probe. It does not prove AvatarForge created an instance, selected Vulkan, enabled a feature, made a swapchain, submitted frames or rendered correctly. `adb devices -l` is empty in this environment. No physical-device validation-layer/synchronization-validation run, exact-app Vulkan log, accepted-present trace, visual capture or thermal soak was available.
+The owner supplied an AvatarForge recovery export from a Samsung **SM-S921B** (API 37, arm64-v8a).
+It reports `VULKAN` requested but effective backend `gles31`, with `FALLBACK: Native Vulkan did not
+initialize`; a journal event records `backend=GLES` after the Vulkan-init-to-GLES transition. The GPU
+string is `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)`. This identifies the active app backend as
+GLES; the ANGLE/Vulkan driver string does not mean AvatarForge's native Vulkan renderer initialized.
 
-**Next device gate:** install the exact-head ARM64 APK on the SM-S921B; capture `AF_VK_CONTEXT` and Self diagnostics during live clips; confirm the actual backend, loader/device API and driver; enable Vulkan validation layers if available; exercise resize, surface loss, fallback and recovery; then attach matched visible-frame screenshots and a thermal soak. Until then, Vulkan runtime and image correctness remain **UNVERIFIED**.
+The same export reports `THERMAL_LIMIT` / **critical**, **29.3 FPS** with a **34.11 ms input-delta
+EMA** (explicitly not present-completion timing), **20.18 ms** CPU submit, and **25.81 ms** GPU time.
+It records 1,740 frame attempts, submissions and accepted presents, 422,600 triangles, 15 draw calls,
+90.7 MiB texture memory, quality level 0, MSAA 1×, shadow map 1024, bloom 0, and last error `none`.
+The report itself warns that frame submissions/presents do not prove visible pixels.
+
+This is user-provided device evidence, not an independently reproduced test. The export does not
+include the APK SHA or source commit, so it cannot be tied to the current working-tree build.
+`adb devices -l` is empty in this environment, and no screenshot or validation-layer trace was
+supplied. It is useful evidence of a GLES fallback and a critical-thermal, sub-30-FPS session, but
+does **not** verify native Vulkan runtime or visible image correctness. An earlier checker report's
+`1.3.304` capability label also does not prove AvatarForge selected Vulkan.
+
+**Next device gate:** reproduce on the exact-head ARM64 APK; capture `AF_VK_CONTEXT` and Self diagnostics
+during live clips; confirm the actual backend, loader/device API and driver; enable Vulkan validation
+layers if available; exercise resize, surface loss, fallback and recovery; then attach matched
+visible-frame screenshots and a thermal soak. Until then, native Vulkan runtime and image correctness
+remain **UNVERIFIED**.

@@ -70,13 +70,13 @@ else
     tail -15 build-host/model_detail_tests.txt
 fi
 
-# ------------------------------------------------------------------ Android release contract --
-banner "release workflow: signed artifact staging and provenance contract"
-if python3 tools/test_release_workflow.py > build-host/release_workflow_tests.txt 2>&1; then
-    ok "$(tail -1 build-host/release_workflow_tests.txt)"
+# ------------------------------------------------------------------ Android artifact policy --
+banner "Android artifacts: no production signing; unsigned compile-only outputs"
+if python3 tools/test_compile_only_artifacts.py > build-host/compile_only_artifact_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/compile_only_artifact_tests.txt)"
 else
-    bad "release workflow artifact paths are inconsistent - see build-host/release_workflow_tests.txt"
-    cat build-host/release_workflow_tests.txt
+    bad "compile-only artifact policy is inconsistent - see build-host/compile_only_artifact_tests.txt"
+    cat build-host/compile_only_artifact_tests.txt
 fi
 
 # ------------------------------------------------------------------ 2. shader tables ------------

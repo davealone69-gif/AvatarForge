@@ -1035,6 +1035,20 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
     renderer->setHighlightRegion(highlightRegion);
 }
 
+JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetDiagnosticRung(
+    JNIEnv*, jobject, jlong r, jint rung) {
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
+    if (renderer) renderer->setDiagnosticRung(rung);  /* invalid values retain the current rung */
+}
+
+JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererDiagnosticRung(
+    JNIEnv*, jobject, jlong r) {
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
+    return renderer ? renderer->diagnosticRung() : 7;  /* production avatar is the safe default */
+}
+
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetClip(
     JNIEnv*, jobject, jlong r, jint clip, jfloat speed, jboolean loop) {
     auto rendererHandle = lookupRendererHandle(r);

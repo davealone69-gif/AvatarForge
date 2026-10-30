@@ -189,6 +189,15 @@ void af_renderer_set_overlays(void* handle, int32_t skeleton, int32_t flat, int3
     r->setHighlightRegion(highlight_region);
 }
 
+void af_renderer_set_diagnostic_rung(void* handle, int32_t rung) {
+    if (af::Renderer* r = asRenderer(handle)) r->setDiagnosticRung(rung);
+}
+
+int32_t af_renderer_diagnostic_rung(void* handle) {
+    af::Renderer* r = asRenderer(handle);
+    return r ? r->diagnosticRung() : 7;
+}
+
 void af_renderer_set_clip(void* handle, int32_t clip, float speed, int32_t loop) {
     if (af::Renderer* r = asRenderer(handle)) r->setClip(clip, speed, loop != 0);
 }

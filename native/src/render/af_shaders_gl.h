@@ -2427,6 +2427,8 @@ static const char kSrc_forward_frag[] =
     "       nothing in the current pipeline is blended, so this only saves work on stray texels. */\n"
     "    af_const vec3 viewDir = normalize(cam.uCameraPos.xyz - vWorldPos);\n"
     "    fragColor = afShade(vWorldPos, vNormal, vTangent, vUv, viewDir);\n"
+    "    fragColor.rgb *= vColor.rgb;\n"
+    "    fragColor.a *= vColor.a;\n"
     "    if (fragColor.a <= 0.0) discard;\n"
     "}\n"
 ;

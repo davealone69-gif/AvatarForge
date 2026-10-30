@@ -1,5 +1,26 @@
 # Verification results
 
+## User-supplied SM-S921B recovery report — 2026-10-30 (not independently reproduced)
+
+The owner supplied a recovery export from a Samsung SM-S921B (API 37, arm64-v8a). It reports
+requested backend `VULKAN`, actual backend `gles31`, and `FALLBACK: Native Vulkan did not initialize`.
+The GPU string is ANGLE on Samsung Xclipse 940 / Vulkan 1.3.304. The session reports **critical**
+thermal status, **29.3 FPS** (34.11 ms input-delta EMA, not present-completion timing), **20.18 ms**
+CPU submit, **25.81 ms** GPU time, and 1,740 attempts, submissions and accepted presents. It also
+records 422,600 triangles, 15 draw calls, quality level 0, MSAA 1×, shadow 1024, bloom 0, and last
+error `none`.
+
+This is user-provided evidence, not an independently reproduced test: `adb devices -l` is empty here,
+and the export contains no APK SHA or source commit. The report explicitly says accepted presents do
+not prove visible pixels, so image correctness remains unverified. It does establish that the reported
+session fell back to GLES rather than using AvatarForge's native Vulkan renderer. See [DEVICE.md](../../DEVICE.md) and
+[VULKAN_TARGET_AUDIT.md](VULKAN_TARGET_AUDIT.md) for context and remaining checks.
+
+> **Historical record:** entries below describe earlier commits and predate the owner-directed
+> 2026-10-30 removal of production signing and signed-tag publication. Any credential or signed-release
+> references below are archived evidence, not current instructions. See `PROJECT_STATUS.md` and
+> `RELEASE_CHECKLIST.md` for the current unsigned-only policy.
+
 Checkpoint: 2026-10-29, branch `arena/aaf85469-avatarforge`.
 
 ## Zero-trust pass (code head `d7822b7`)

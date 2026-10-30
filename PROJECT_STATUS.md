@@ -1,6 +1,32 @@
 # Project status
 
-## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`; recorded CI run on `401a005eac045371c0d3625baf4c523a55288435`)
+## Current owner-directed update — 2026-10-30
+
+This working tree is on `fix/verify-clean-checkout-output-dir`, based on commit
+`67d525f66aaf56a0bfe650b9911cdbc07803880c`. The owner-selected production-signing path has been
+removed: no keystore configuration, release-credential lookup, signed-tag job, or signed GitHub
+Release remains. Only the debug APK is intended to be installable; release AAB/AAR tasks are guarded
+and their outputs are explicitly unsigned compile/package verification artifacts.
+
+The explicit `-Paf.allowUnsignedRelease=true` build produced a debug APK, unsigned release AAB, and
+SDK AAR. The debug APK passed `apksigner verify`; the AAB/AAR contain no signature entries, and the
+package native-linkage guard passed. `bash tools/verify.sh` passed: kernel **438/438**, renderer
+**102/102** plus **7/7** API checks, model **40/40**, and the compile-only, shader, export, ABI and
+Rust gates. Its final scan skipped the legacy `artifacts/` staging paths; the Gradle output packages
+were checked separately. The eight-rung diagnostic ladder is wired through the Compose dialog, Kotlin
+renderer, JNI/C ABI, shared native fixtures, and both GLES/Vulkan renderers.
+
+The owner supplied an SM-S921B/API 37 recovery report: requested backend `VULKAN`, actual `gles31`
+after `Native Vulkan did not initialize`; ANGLE reports Xclipse 940/Vulkan 1.3.304. That session
+reported **29.3 FPS** (34.11 ms input-delta EMA), 20.18 ms CPU submit, 25.81 ms GPU time, **critical**
+thermal state, and 1,740 accepted presents. This is user-provided evidence, not independently
+reproduced; its export contains no APK SHA or source commit, and accepted presents do not prove
+visible pixels. `adb devices -l` is empty here, so the runtime observation and image correctness
+remain **UNVERIFIED**. Details and limits are recorded in
+[DEVICE.md](DEVICE.md) and [the Vulkan audit](docs/audit/VULKAN_TARGET_AUDIT.md). This working tree is
+not committed or pushed; the earlier push authorization applied only to the prior batch.
+
+## Previous branch checkpoint — 2026-10-30 (superseded by the owner-directed update above)
 
 The owner-approved engineering directive was applied on the existing branch, preserving the three
 pre-existing local commits (clean-checkout verifier log, shoulder-width/image-role fixes, and stale
@@ -19,12 +45,14 @@ fault checks plus 7 API-version checks, and 33 model regressions; all 12 GLES an
 modules validate. Android APK workflow run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
 succeeded on this exact commit and staged, verified and uploaded artifact
 `AvatarForge-Android-401a005eac045371c0d3625baf4c523a55288435` (ID `12954506148`, 18,048,697 bytes).
-The ARM64 native build, 3 app / 38 SDK JVM tests and compile-only artifacts pass. The SM-S921B runtime,
-visible pixels, validation-layer output, thermal soak and production signing remain **UNVERIFIED/BLOCKED**. See
+The ARM64 native build, 3 app / 38 SDK JVM tests and compile-only artifacts passed at that earlier
+checkpoint. At that time production signing was still unverified; the subsequent owner direction
+removed the signing path. The SM-S921B runtime, visible pixels, validation-layer output and thermal
+soak remain **UNVERIFIED**. See
 [Vulkan target audit](docs/audit/VULKAN_TARGET_AUDIT.md), [device checklist](DEVICE.md), and the
 current exact-head test record in `docs/audit/VERIFICATION_RESULTS.md`.
 
-## Follow-up validation — 2026-10-30 (based on prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`)
+## Previous follow-up validation — 2026-10-30 (based on prior pushed tip; superseded)
 
 Repository: `/workspace/AvatarForge`; branch: `fix/verify-clean-checkout-output-dir`. The latest
 validation was performed on a working tree based on the prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`.
@@ -41,21 +69,18 @@ record relies on local test/build evidence, not a CI or device result.
   suite passes **40/40**, with exact 68 cm waist and 96 cm hip inputs preserved within 0.01 cm. The
   1.48 lower bound was removed because it contradicts the inverse reference target; finite upper cap
   1.67 remains. Broader visual, garment and device acceptance is still open.
-- **Renderer — PARTIAL:** optional GLES `EXT_disjoint_timer_query` timing is host-tested (**102/102**)
-  and the Android NDK compiles the Vulkan and GLES renderer translation units for arm64-v8a and
-  x86_64. There is still no selectable visible diagnostic scene ladder; its eight rungs are metadata.
-  The host runner skipped its pinned-header Vulkan API-version helper. No device is connected, so
-  Vulkan/GLES runtime, GPU timings, pixels, fallback and thermal behavior are unverified.
+- **Renderer — REAL, DEVICE UNVERIFIED:** the selectable eight-rung diagnostic ladder is implemented
+  across Compose, JNI/C ABI, and both native backends. Shared fixture tests and renderer host checks
+  pass, and the Android package build compiles arm64-v8a and x86_64. No device is connected, so
+  Vulkan/GLES runtime, visible pixels, GPU timings, fallback and thermal behavior remain unverified.
 - **App/build:** forced JVM tests pass (**3 app + 38 SDK**). `:app:assembleDebug` succeeds and
   packages both native ABIs. `/workspace/AvatarForge/app/build/outputs/apk/debug/app-debug.apk` is
   11,771,041 bytes, verified with the debug APK v2 signature, and contains no INTERNET permission;
   this is compile/package evidence only, not an installed or launched app.
-- **Other requested risks:** typed JNI handle registry checks are included in the passing 438-check
-  host suite and NDK build; stale reference-analysis guards are covered by the JVM suites. Rust ABI
-  parity remains **PARTIAL** at 15/47 symbols (32 unported). The release-workflow source contract
-  passes locally, and run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
-  succeeded on `401a005`; signed-tag production output remains unverified/blocked without release
-  credentials.
+- **Other requested risks:** typed JNI handle registry checks are included in the 438-check host
+  suite and NDK build; stale reference-analysis guards are covered by JVM suites. Rust ABI parity
+  remains **PARTIAL** at 15/47 symbols (32 unported). Earlier CI evidence on `401a005` does not verify
+  this working tree, and there is no production signing output by design.
 
 ## Historical snapshot — prior `arena/aaf85469-avatarforge` branch (2026-10-29)
 PR #20 remained draft when recorded below; `main` was then at `40ef65b`. Statements that Vulkan
@@ -129,12 +154,11 @@ The unsigned AAB is compile proof only, not an installable production release. T
 
 - Device pixel confirmation of the new eye/hair/chest/hand/garment/header fixes. The current device report still shows the pre-fix GLB and severe thermal state.
 - Device thermal cap effect; settings persistence on Android; sustained performance/memory; moiré pixel comparison.
-- Production signed AAB/APK: **BLOCKED**, no credentials.
+- Production signing: **INTENTIONALLY REMOVED**; there is no production-signed AAB/APK path to verify.
 - The ownership fence (AF-020) is implemented and compiled, but its absence of races is
   **UNVERIFIED** until a device soak runs camera drags + clip playback + expression edits + picking.
-- AF-016 remains **PARTIAL**: Vulkan timestamp recording and the optional GLES `EXT_disjoint_timer_query`
-  ring have host-tested contracts, but device execution is unverified and no selectable diagnostic
-  scenes/UI exist. The diagnostic scene ladder remains metadata only.
+- AF-016 remains **PARTIAL** for runtime validation: the selectable diagnostic scene ladder is now
+  implemented and host/build checked, but device execution and visible pixels remain unverified.
 - `CustomizationSchemas` is loaded but unused (AF-032): integration or deletion is still a decision.
 - Rust crates remain **UNVERIFIED** by compilation (no toolchain here); metadata now matches 0.10.1.
 - Lash geometry, strand-level hair, facial texture smudges and teeth cost (38,965 tris) remain unaddressed; no superiority claim.
@@ -145,5 +169,5 @@ The unsigned AAB is compile proof only, not an installable production release. T
    garment views plus a diagnostics export.
 2. Soak that build for ≥10 minutes with clip playback, camera orbiting, two simultaneous expression
    channels and repeated tap-picking, then export the recovery report.
-3. Supply `AF_RELEASE_*` secrets so the tag-only `signed-release` job can produce a signed AAB, and
-   implement the AF-016 diagnostic scene ladder.
+3. Do not restore production signing or signed-tag publication unless the owner explicitly changes
+   the policy; validate the diagnostic ladder's visible output when a device is available.

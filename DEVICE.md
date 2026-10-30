@@ -1,21 +1,40 @@
 # AvatarForge — on-device verification sheet
 
-Everything in this repository has been verified on the host: the kernel harness runs **386 checks with
-0 failures**, the arm64 native libraries link against NDK r26, and both the debug APK and the SDK AAR
-are built and inspected (manifest, permissions, FileProvider, stripped natives, dex contents).
-`tools/abi_conformance.py` passes for the C++ kernel (47/47) and reports the Rust core's progress
-against the same ABI.
+## Current host evidence — 2026-10-30
 
-**Nothing in this file has been executed yet.** There is no Android device and no emulator in the
-build environment — the emulator would need an x86_64 build plus a GPU-capable host, and the container
-has neither. So this is the ordered pass a human runs on a phone, with the exact commands and the
-numbers to write down. Until it is filled in, the app is *built and statically verified*, not
-*device-proven*, and the project's status says so.
+`bash tools/verify.sh` passes: the kernel harness reports **438 checks, 0 failures**; renderer tests
+report **102 checks, 0 failures** plus **7 API-version checks**; model-detail regressions report
+**40 checks, 0 failures**. Compile-only artifact policy, shader, export, ABI and Rust workspace gates
+also pass. Gradle produced the debug APK, unsigned compile-only AAB and SDK AAR, and the packaged
+native-linkage guard passed. These results verify builds and host behavior, not device pixels.
 
-The one thing to watch is the **posed-geometry path**: the kernel evaluates skinning from the bind
-pose, so composing poses is stateless (verified in host test `[12]`, which is the only part of the
-pipeline that cannot be checked without a GPU). Rendering, frame timing and thermals are the areas
-the host cannot judge at all.
+## User-supplied SM-S921B recovery report — not independently reproduced
+
+The owner supplied an AvatarForge recovery export for a Samsung **SM-S921B** (API 37, arm64-v8a).
+It records the following session:
+
+| Reported field | Device evidence |
+|---|---|
+| Requested / actual backend | `VULKAN` requested; `gles31` active |
+| Recovery | `FALLBACK: Native Vulkan did not initialize`; GLES active |
+| GPU string | ANGLE on Samsung Xclipse 940 / Vulkan 1.3.304 |
+| Thermal state | `THERMAL_LIMIT`, **critical** |
+| Frame pacing | **29.3 FPS**, 34.11 ms input-delta EMA (not present-completion timing) |
+| CPU submit / GPU time | 20.18 ms / 25.81 ms as reported by the app |
+| Frame counters | 1,740 attempts, submissions and accepted presents |
+| Scene counters | 422,600 triangles, 15 draw calls; texture memory 90.7 MiB |
+| Effective quality | Level 0, MSAA 1×, 1024 shadow map, bloom 0; last error `none` |
+
+This report is evidence that the app used its GLES fallback in that session; the ANGLE/Vulkan GPU
+string does **not** mean AvatarForge's native Vulkan renderer was active. The report explicitly warns
+that accepted presents do not prove visible pixels. It was not reproduced here: `adb devices -l` is
+empty in this environment, and no screenshot was supplied. The export contains no APK SHA or source
+commit, so these values cannot be attributed to the working-tree build. Actual image correctness and
+an independent runtime test therefore remain **UNVERIFIED**. The checklist below is still the full
+on-device pass to run when direct device access is available.
+
+The posed-geometry path is host-tested: skinning is evaluated from the bind pose, so composing poses
+is stateless. Rendering, frame pacing, GPU behavior and thermals still require device evidence.
 
 ---
 
@@ -35,12 +54,11 @@ the host cannot judge at all.
 
 ```bash
 adb install -r artifacts/avatarforge-debug-arm64.apk
-# or, after `tools/build_gradle.sh :app:assembleRelease`:
-adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-Expected: `Success`. The app appears as **AvatarForge**, no launcher icon from a stock set (it ships
-its own vector).
+Use the debug APK only; release-variant outputs are unsigned compile/package checks and are not
+installable test builds. Expected: `Success`. The app appears as **AvatarForge**, no launcher icon
+from a stock set (it ships its own vector).
 
 ## 2. Permission and network audit — must pass
 
@@ -238,14 +256,16 @@ system Vulkan capability and frame counters alone do not prove visible/sharp pix
 
 | Phase 1 item | Host evidence | Device evidence |
 |---|---|---|
-| rendering runs | 12 GLES stages / 13 Vulkan SPIR-V stages are CI-gated; GLES draw path and API selection are host-tested, not Vulkan pixels | **none yet** — cannot be claimed |
+| rendering runs | 12 GLES stages / 13 Vulkan SPIR-V stages are gated; GLES draw path and API selection are host-tested, not Vulkan pixels | User-supplied report records GLES fallback and 1,740 accepted presents; not independently reproduced and no visual proof |
 | GLB loading | harness `[14]`: the exporter's own 34 MB file imports back with all 10 primitives sharing one vertex pool, 71 joints, inverse bind matrices, 52 morph targets, 5 decoded PNGs, and 45 hostile inputs rejected cleanly | **none yet** |
 | crash-free lifecycle | harness `[14]` hostile-input sweep (truncation, bit flips, cyclic graphs, bad accessor ranges) under ASan/UBSan; cancel/rotate paths are §9 below | **none yet** |
 | profiling | harness `[15]`: CPU stage timings exact against a synthetic clock, GPU timings reported as −1 when the device cannot measure them | **none yet** |
 | scene, culling, LOD | harness `[15]`: parent-to-child composition, conservative sphere culling, monotone LOD, deterministic light order | **none yet** |
 
-The honest summary: Phase 1 is *implemented and host-verified*, and not one row of it is
-device-verified. The report above is how that changes.
+The honest summary: Phase 1 is *implemented and host-verified*. The supplied report gives useful but
+unreproduced evidence of a GLES fallback, critical thermals and sub-30 FPS input-delta pacing; it does
+not complete device validation or prove a visible image. A direct run with logs and screenshots is
+still required.
 
 ## 10. Record sheet
 

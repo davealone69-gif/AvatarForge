@@ -15,11 +15,12 @@ mkdir -p "$OUT"
     "$ROOT/native/tests/render/vulkan_factory_mock.cpp" \
     "$ROOT/native/src/render/af_gl.cpp" \
     "$ROOT/native/src/render/af_render.cpp" \
+    "$ROOT/native/src/render/af_diagnostics.cpp" \
     "$ROOT/native/src/render/af_shaders.cpp"
 "$OUT/renderer_init_tests"
 
 "$CXX" -std=c++17 -O1 -g -Wall -Wextra -Werror \
-    -I"$ROOT/native/src/render" \
+    -I"$ROOT/native/include" -I"$ROOT/native/src/render" \
     -o "$OUT/renderer_diagnostic_tests" \
     "$ROOT/native/tests/render/diagnostic_tests.cpp" \
     "$ROOT/native/src/render/af_diagnostics.cpp"

@@ -178,6 +178,8 @@ public:
     void renderFrame(float deltaSeconds) override;
     void setSkeletonVisible(bool visible) override { skeletonVisible_ = visible; }
     void setFlatShading(bool flat) override { flatShading_ = flat; }
+    void setDiagnosticRung(int rung) override;
+    int diagnosticRung() const override { return diagnosticRung_; }
     void setHighlightRegion(int region) override { highlightRegion_ = region; }
     void setClip(int clip, float speed, bool loop) override;
     int currentClip() const override;
@@ -236,6 +238,7 @@ private:
                             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
     bool createFramebuffer(VkRenderPass pass, const std::vector<VkImageView>& views, uint32_t w,
                            uint32_t h, VkFramebuffer* out);
+    void writeDiagnosticMaterial(bool textured);
     void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to,
                       VkImageAspectFlags aspect);
     void generateMips(VkCommandBuffer cmd, VkImage image, int32_t width, int32_t height,
@@ -437,6 +440,10 @@ private:
     float clipSpeed_ = 1.0f;
     bool clipLoop_ = true;
     float clipTime_ = 0.0f;
+    int diagnosticRung_ = static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR);
+    float diagnosticTime_ = 0.0f;
+    bool diagnosticMaterialOverwritten_ = false;
+    DiagnosticMesh diagnosticMesh_{};
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     int drawCallsThisFrame_ = 0;
     int trianglesThisFrame_ = 0;
@@ -2503,7 +2510,16 @@ bool VulkanRenderer::uploadAtlas(std::string* error) {
  *  Per-frame state
  * ============================================================================================ */
 void VulkanRenderer::updateScene(float deltaSeconds) {
-    (void)deltaSeconds;
+    if (diagnosticRung_ != static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR)) {
+        if (std::isfinite(deltaSeconds) && deltaSeconds > 0.0f)
+            diagnosticTime_ += deltaSeconds;
+        writeDiagnosticMaterial(diagnosticRung_ == static_cast<int>(DiagnosticRung::TEXTURED_QUAD));
+    } else if (!engine_) {
+        writeDiagnosticMaterial(false);
+    } else if (diagnosticMaterialOverwritten_ && engine_) {
+        rebuildMaterialBlocks();
+        diagnosticMaterialOverwritten_ = false;
+    }
     /* Environment -> the analytic sky parameters -> 9 SH coefficients. The SH projection is the
        only per-change CPU cost in the lighting path (about 0.13 M sky evaluations) and it is
        skipped entirely while the environment is unchanged. */
@@ -2608,8 +2624,26 @@ void VulkanRenderer::updateScene(float deltaSeconds) {
         c->texel[2] = c->texel[3] = 0.0f;
     }
 
-    rebuildMaterialBlocks();
+    if (diagnosticRung_ == static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR))
+        rebuildMaterialBlocks();
     buildSkeletonLines();
+}
+
+void VulkanRenderer::writeDiagnosticMaterial(bool textured) {
+    if (!materialUboMapped_ || materialStride_ < sizeof(MaterialUbo)) return;
+    MaterialUbo block{};
+    block.baseColorFactor[0] = block.baseColorFactor[1] = block.baseColorFactor[2] = 1.0f;
+    block.baseColorFactor[3] = 1.0f;
+    block.pbr[1] = 0.55f;
+    block.pbr[2] = 1.5f;
+    block.pbr2[2] = float(AF_KIND_GENERIC);
+    block.texFlags[0] = textured ? 1.0f : 0.0f;
+    /* Placeholder atlas images are valid sampled descriptors too; keep the quad on the
+       sampling path even before an engine's baked atlas has been uploaded. */
+    block.texFlags[3] = textured ? 1.0f : 0.0f;
+    block.region[0] = -1.0f;
+    std::memcpy(materialUboMapped_, &block, sizeof(block));
+    diagnosticMaterialOverwritten_ = true;
 }
 
 /** Writes one std140 material block per submesh, plus one extra block for the studio ground. */
@@ -2774,6 +2808,73 @@ void VulkanRenderer::setClip(int clip, float speed, bool loop) {
 /** Uploads the kernel's deformed stream; allocation faults must abort recording, not present
  * an empty frame as if it contained the avatar. */
 bool VulkanRenderer::uploadDynamicGeometry(VkCommandBuffer cmd) {
+    if (diagnosticRung_ != static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR)) {
+        diagnosticMesh_ = {};
+        const DiagnosticRung rung = static_cast<DiagnosticRung>(diagnosticRung_);
+        if (!buildDiagnosticMesh(rung, diagnosticTime_, &diagnosticMesh_)) {
+            frameError_ = "Vulkan diagnostic fixture build failed";
+            return false;
+        }
+        const uint32_t vcount = static_cast<uint32_t>(diagnosticMesh_.vertices.size());
+        const uint32_t icount = static_cast<uint32_t>(diagnosticMesh_.indices.size());
+        const uint64_t vbytes = uint64_t(vcount) * VertexLayout::stride;
+        if (vbytes > vertexCapacity_) {
+            if (vertexBuffer_ != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device_, vertexBuffer_, nullptr);
+                vkFreeMemory(device_, vertexMem_, nullptr);
+                vertexBuffer_ = VK_NULL_HANDLE;
+                vertexMapped_ = nullptr;
+            }
+            const uint64_t capacity = vbytes + vbytes / 4;
+            if (capacity != 0 && !createBuffer(capacity, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                               &vertexBuffer_, &vertexMem_, &vertexMapped_)) {
+                frameError_ = "Vulkan diagnostic vertex buffer allocation failed";
+                return false;
+            }
+            vertexCapacity_ = capacity;
+        }
+        if (vbytes != 0 && vertexMapped_)
+            std::memcpy(vertexMapped_, diagnosticMesh_.vertices.data(), size_t(vbytes));
+        vertexCount_ = static_cast<int32_t>(vcount);
+        indexCount_ = 0;
+        if (diagnosticMesh_.indexed && icount != 0) {
+            const uint64_t ibytes = uint64_t(icount) * sizeof(uint32_t);
+            if (ibytes > indexCapacity_) {
+                if (indexBuffer_ != VK_NULL_HANDLE) {
+                    vkDestroyBuffer(device_, indexBuffer_, nullptr);
+                    vkFreeMemory(device_, indexMem_, nullptr);
+                    indexBuffer_ = VK_NULL_HANDLE;
+                    indexMapped_ = nullptr;
+                }
+                const uint64_t capacity = ibytes + ibytes / 4;
+                if (!createBuffer(capacity, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                  &indexBuffer_, &indexMem_, &indexMapped_)) {
+                    frameError_ = "Vulkan diagnostic index buffer allocation failed";
+                    return false;
+                }
+                indexCapacity_ = capacity;
+            }
+            std::memcpy(indexMapped_, diagnosticMesh_.indices.data(), size_t(ibytes));
+            indexCount_ = static_cast<int32_t>(icount);
+        }
+        if (vbytes != 0 || (diagnosticMesh_.indexed && icount != 0)) {
+            VkMemoryBarrier bar{};
+            bar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            bar.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            bar.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
+                                VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                                 0, 1, &bar, 0, nullptr, 0, nullptr);
+        }
+        meshDirty_ = false;
+        indexDirty_ = false;
+        return true;
+    }
     if (!engine_) return true;
     const int32_t vcount = af_engine_vertex_count(engine_);
     const int32_t sourceIndexCount = af_engine_index_count(engine_);
@@ -2912,7 +3013,8 @@ void VulkanRenderer::recordShadowPass(VkCommandBuffer cmd) {
     bi.pClearValues = &clear;
     vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
 
-    if (options_.enableShadows && engine_ && vertexCount_ > 0 &&
+    if (diagnosticRung_ == static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR) &&
+        options_.enableShadows && engine_ && vertexCount_ > 0 &&
         vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
         VkViewport vp{0.0f, 0.0f, float(options_.shadowMapSize), float(options_.shadowMapSize), 0.0f, 1.0f};
         VkRect2D sc{{0, 0}, {uint32_t(options_.shadowMapSize), uint32_t(options_.shadowMapSize)}};
@@ -2979,8 +3081,10 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     const VkDescriptorSet set0 = cameraSets_.empty() ? VK_NULL_HANDLE : cameraSets_[0];
     const uint32_t offsets0[2] = {frameIndex_ * cameraStride_, uint32_t(2 * bloomLevels_) * postStride_};
 
+    const bool production = diagnosticRung_ == static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR);
+
     /* ---- studio ground ------------------------------------------------------------------------ */
-    if (options_.groundPlane && engine_ && vertexCount_ > 0) {
+    if (production && options_.groundPlane && engine_ && vertexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, groundPipeline_);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &groundBuffer_, &offset);
@@ -2996,8 +3100,30 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
         ++drawCallsThisFrame_;
     }
 
-    /* ---- the avatar --------------------------------------------------------------------------- */
-    if (avatarVisible_ && engine_ && vertexCount_ > 0 &&
+    /* ---- diagnostic fixture or the avatar ---------------------------------------------------- */
+    if (!production && diagnosticRung_ != static_cast<int>(DiagnosticRung::CLEAR) &&
+        diagnosticMesh_.vertices.size() > 0 && vertexBuffer_ != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);
+        if (set0 != VK_NULL_HANDLE)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 0, 1,
+                                    &set0, 2, offsets0);
+        if (materialSet_ != VK_NULL_HANDLE) {
+            const uint32_t matOffset = 0;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, avatarLayout_, 1, 1,
+                                    &materialSet_, 1, &matOffset);
+        }
+        if (diagnosticMesh_.indexed && indexCount_ > 0) {
+            vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, uint32_t(indexCount_), 1, 0, 0, 0);
+            trianglesThisFrame_ = indexCount_ / 3;
+        } else {
+            vkCmdDraw(cmd, uint32_t(vertexCount_), 1, 0, 0);
+            trianglesThisFrame_ = vertexCount_ / 3;
+        }
+        ++drawCallsThisFrame_;
+    } else if (production && avatarVisible_ && engine_ && vertexCount_ > 0 &&
         vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
         VkDeviceSize offset = 0;
@@ -3040,7 +3166,7 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     }
 
     /* ---- skeleton overlay --------------------------------------------------------------------- */
-    if (skeletonVisible_ && lineVertexCount_ >= 2 && lineBuffer_ != VK_NULL_HANDLE) {
+    if (production && skeletonVisible_ && lineVertexCount_ >= 2 && lineBuffer_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, linePipeline_);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &lineBuffer_, &offset);
@@ -3077,7 +3203,8 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     /* 0. Forward+ light culling. The compute shader writes one compact light list per screen tile;
        the explicit barrier keeps the result ordered before any fragment stage consumes it. */
-    if (forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
+    if (diagnosticRung_ == static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR) &&
+        forwardPlusPipeline_ != VK_NULL_HANDLE && forwardPlusSet_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, forwardPlusPipeline_);
         const uint32_t cameraOffset = frameIndex_ * cameraStride_;
         VkDescriptorSet sets[3] = {cameraSets_[0], materialSet_, forwardPlusSet_};
@@ -3580,6 +3707,23 @@ void VulkanRenderer::attachEngine(af_engine* engine) {
             return;
         }
         rebuildMaterialBlocks();
+    }
+}
+
+void VulkanRenderer::setDiagnosticRung(int rung) {
+    if (!diagnosticRungValid(rung)) return;
+    if (diagnosticRung_ == rung) return;
+    const int production = static_cast<int>(DiagnosticRung::PRODUCTION_AVATAR);
+    const bool wasDiagnostic = diagnosticRung_ != production;
+    diagnosticRung_ = rung;
+    diagnosticMesh_ = {};
+    vertexCount_ = 0;
+    indexCount_ = 0;
+    if (rung == production && wasDiagnostic && engine_ && device_) {
+        rebuildMaterialBlocks();
+        diagnosticMaterialOverwritten_ = false;
+        meshDirty_ = true;
+        indexDirty_ = true;
     }
 }
 

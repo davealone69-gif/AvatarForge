@@ -189,6 +189,8 @@ internal object NativeBridge {
     )
     external fun rendererSetOverlays(renderer: Long, skeleton: Boolean, flat: Boolean, highlightRegion: Int)
     external fun rendererSetClip(renderer: Long, clip: Int, speed: Float, loop: Boolean)
+    external fun rendererSetDiagnosticRung(renderer: Long, rung: Int)
+    external fun rendererDiagnosticRung(renderer: Long): Int
     external fun rendererInvalidateMesh(renderer: Long)
     external fun rendererFrame(renderer: Long, deltaSeconds: Float)
     external fun rendererWaitIdle(renderer: Long)

@@ -3,6 +3,9 @@
 #define AF_DIAGNOSTICS_H
 
 #include <cstdint>
+#include <vector>
+
+#include "afcore.h"
 
 namespace af {
 
@@ -20,6 +23,16 @@ struct DiagnosticRungInfo {
 constexpr int kDiagnosticRungCount = static_cast<int>(DiagnosticRung::COUNT);
 const DiagnosticRungInfo& diagnosticRungInfo(DiagnosticRung rung);
 bool diagnosticRungValid(int rung);
+struct DiagnosticMesh {
+    std::vector<af_vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    bool indexed = false;
+    bool textured = false;
+};
+
+/* Returns false for an invalid rung. CLEAR and PRODUCTION_AVATAR deliberately return an empty
+   fixture; every other rung produces deterministic renderer-owned geometry. */
+bool buildDiagnosticMesh(DiagnosticRung rung, float timeSeconds, DiagnosticMesh* out);
 bool gpuTimestampDeltaToMilliseconds(std::uint64_t startTicks, std::uint64_t endTicks,
                                      std::uint32_t validBits, double periodNs,
                                      float* outMilliseconds);

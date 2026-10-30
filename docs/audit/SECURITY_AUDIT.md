@@ -12,7 +12,7 @@ Status: **PARTIAL**.
 
 ## Fixes
 
-- Release signing is fail-closed. CI unsigned AAB is explicitly labelled and never published. Tag release requires production secrets and verifies APK/AAB signatures.
+- Production signing configuration, tag-triggered signed release, and GitHub Release publication are removed. CI builds the debug test APK plus an explicitly unsigned AAB and SDK AAR for compile/package verification; it labels the AAB and rejects signature entries.
 - JNI callback exceptions are described/cleared; a broken cancellation hook fails closed by requesting cancellation.
 - Native GLB/PNG import limits added: 128 MiB GLB, 16 MiB JSON, 2 M vertices, PNG 8192²/256 MiB decoded/64 MiB IDAT. These are defence-in-depth; the user-facing import path is still missing.
 - Native image analysis now rejects non-positive/oversized dimensions, unsupported channels, overflowing or over-cap packed buffers, and image counts beyond the four declared roles; JNI validates parallel arrays/direct-buffer capacities. GLB byte-export allocation now has RAII cleanup on all return paths.

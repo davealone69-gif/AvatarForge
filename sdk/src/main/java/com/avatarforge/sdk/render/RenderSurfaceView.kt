@@ -67,6 +67,14 @@ class RenderSurfaceView @JvmOverloads constructor(
     /** Settings actually requested by the view, including deterministic recovery changes. */
     val effectiveSettings: StateFlow<RenderSettings> = _effectiveSettings.asStateFlow()
 
+    private val _requestedDiagnosticRung = MutableStateFlow(DiagnosticRung.PRODUCTION_AVATAR)
+    /** Rung requested by the host, retained even while no drawing surface exists. */
+    val requestedDiagnosticRung: StateFlow<DiagnosticRung> = _requestedDiagnosticRung.asStateFlow()
+
+    private val _effectiveDiagnosticRung = MutableStateFlow(DiagnosticRung.PRODUCTION_AVATAR)
+    /** Rung confirmed by the live native renderer, or the default before renderer creation. */
+    val effectiveDiagnosticRung: StateFlow<DiagnosticRung> = _effectiveDiagnosticRung.asStateFlow()
+
     private val _recoveryStatus = MutableStateFlow<RecoveryStatus?>(null)
     val recoveryStatus: StateFlow<RecoveryStatus?> = _recoveryStatus.asStateFlow()
 
@@ -220,6 +228,18 @@ class RenderSurfaceView @JvmOverloads constructor(
     fun setOverlays(skeleton: Boolean, flatShading: Boolean, highlightRegion: Int) {
         requestedOverlays = RequestedOverlays(skeleton, flatShading, highlightRegion)
         onRenderThread { it.renderer?.setOverlays(skeleton, flatShading, highlightRegion) }
+    }
+
+    /** Validates and retains a rung, then applies it on the renderer's owning thread. */
+    fun setDiagnosticRung(rung: Int) {
+        val requested = DiagnosticRung.orDefault(rung)
+        _requestedDiagnosticRung.value = requested
+        onRenderThread { view ->
+            view.renderer?.let { current ->
+                current.setDiagnosticRung(requested.value)
+                _effectiveDiagnosticRung.value = DiagnosticRung.orDefault(current.diagnosticRung())
+            }
+        }
     }
 
     /**
@@ -441,6 +461,10 @@ class RenderSurfaceView @JvmOverloads constructor(
             }
             created.setCamera(camera)
             if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            /* Reapply after engine attachment so a recreated renderer cannot silently return to
+               production output and so the selected rung is authoritative for the next frame. */
+            created.setDiagnosticRung(_requestedDiagnosticRung.value.value)
+            _effectiveDiagnosticRung.value = DiagnosticRung.orDefault(created.diagnosticRung())
             requestedOverlays.let { created.setOverlays(it.skeleton, it.flat, it.region) }
             requestedClip?.let { created.setClip(it.clip, it.speed, it.loop) }
             if (recoveryProbe != null) {

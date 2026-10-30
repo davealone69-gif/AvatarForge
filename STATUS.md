@@ -3,6 +3,9 @@
 **Current branch (2026-10-30).** The default is GLES 3.1, with an explicitly selectable native
 Vulkan backend restored. The Vulkan path has source/host checks but no completed device pixel test;
 see [PROJECT_STATUS.md](PROJECT_STATUS.md) and [the restoration report](docs/VULKAN_RESTORE_2026-10-30.md).
+Production signing and the signed GitHub Release workflow are intentionally removed; the active
+artifact contract is a debug test APK plus explicitly unsigned compile-only AAB/AAR outputs. See the
+current signing-path record in [PROJECT_STATUS.md](PROJECT_STATUS.md).
 The entries below preserve an older 2026-10-18/29 checkpoint and its artifact references; they
 are not proof that the current branch was built or tested on a phone.
 
@@ -10,10 +13,12 @@ are not proof that the current branch was built or tested on a phone.
 photorealistic full-body 3D avatar entirely on the device, from a text prompt, a photo, or a
 two-image reference flow (identity + equipment). No server, no network, no game engine.
 
-**Where it stands.** The kernel, the renderer, the SDK and the app are complete and build. The 0.10.1
-arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the current source and
-statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
-what that means and what is outstanding.
+**Where it stands.** The kernel, renderer, SDK and app build; the current host suite passes 438 kernel
+checks, 102 renderer checks, 7 API checks and 40 model regressions. A user-provided SM-S921B/API 37
+recovery report records requested Vulkan falling back to `gles31`, critical thermal state and 29.3 FPS
+by input-delta EMA. The report has no APK SHA/commit, is not independently reproduced, and accepted
+presents do not prove visible pixels. No device is attached to this environment; image correctness and
+live renderer behavior remain unverified. See [the device verification sheet](DEVICE.md).
 
 ### 2026-10-29 stability self-improvement path
 

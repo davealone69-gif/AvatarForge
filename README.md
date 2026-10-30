@@ -29,8 +29,9 @@ SM-S921B checker report is separate capability evidence, not proof that AvatarFo
 or produced visible pixels. The Vulkan path is **unverified in the app on a Samsung GPU**; see
 `docs/audit/VULKAN_TARGET_AUDIT.md` and `DEVICE.md` for current evidence and the on-device gate.
 Host regressions cover UV-atlas overflow, skinning cost, image bounds and frame-timing validity.
-Visible pixels, sustained performance/thermal behaviour and production signing remain unverified
-or BLOCKED. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
+Visible pixels and sustained performance/thermal behaviour remain unverified. Production signing is
+intentionally not provided; only a debug test APK and explicitly unsigned compile-only AAB/AAR artifacts
+are produced. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
 
 ## Repository layout
 
@@ -123,9 +124,9 @@ Not yet chosen. Add a `LICENSE` before publishing this repository.
 
 **Fastest route:** open the [Android APK workflow](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) and open the latest successful run. Under **Artifacts**, download `AvatarForge-Android-<commit>` and extract the ZIP. Install `AvatarForge-debug-arm64.apk` for testing on a modern ARM64 Android phone.
 
-For a versioned production download, open [GitHub Releases](https://github.com/davealone69-gif/AvatarForge/releases). A version tag starts a separate signed-release job; it requires production `AF_RELEASE_*` credentials and does not publish if they are missing.
-
-Release signing is fail-closed: there is no fallback debug certificate. The CI unsigned AAB is compile verification only, not a production release. The debug APK is the installable test artifact. Never commit a release keystore or its passwords.
+There are no versioned production downloads or signed-release workflow. Production signing configuration
+has been removed. CI provides an explicitly unsigned AAB and the SDK AAR only for compile/package
+verification; neither is a production release. The debug APK is the installable test artifact.
 
 Install from the phone: download the APK, open it in Downloads, and allow installation from that source if Android asks. The APK is ARM64 and targets Android 8.0 (API 26) or newer. AvatarForge is intended to work offline and its APK must not request the `INTERNET` permission.
 

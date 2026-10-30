@@ -1,5 +1,3 @@
-import java.util.Properties
-
 /*
  * AvatarForge :: :app
  *
@@ -13,23 +11,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-/*
- * Release signing is fail-closed. A production release/AAB requires a real keystore supplied
- * through keystore.properties (ignored by git) or AF_RELEASE_* environment variables. CI may
- * compile an explicitly unsigned release artifact with -Paf.allowUnsignedRelease=true, but that
- * artifact is labelled UNSIGNED, is never published, and is not installable as an update.
- * There is no silent debug-keystore fallback for release.
- */
-val keystoreProps = rootProject.file("keystore.properties")
-val props = Properties().apply { if (keystoreProps.exists()) keystoreProps.inputStream().use { load(it) } }
-fun signingValue(propKey: String, envKey: String): String? =
-    (props.getProperty(propKey) ?: System.getenv(envKey))?.takeIf { it.isNotBlank() }
-val releaseStorePath = signingValue("storeFile", "AF_RELEASE_STORE_FILE")
-val releaseStorePassword = signingValue("storePassword", "AF_RELEASE_STORE_PASSWORD")
-val releaseKeyAlias = signingValue("keyAlias", "AF_RELEASE_KEY_ALIAS")
-val releaseKeyPassword = signingValue("keyPassword", "AF_RELEASE_KEY_PASSWORD")
-val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
-    .all { it != null } && file(releaseStorePath!!).isFile
+/* Production signing is intentionally not configured. Only the debug variant is installable;
+   release-variant outputs are unsigned compile/package checks and must not be distributed. */
 val allowUnsignedRelease = providers.gradleProperty("af.allowUnsignedRelease").orNull == "true"
 
 android {
@@ -53,21 +36,11 @@ android {
         ndk { abiFilters += abis }
     }
 
-    if (hasReleaseSigning) {
-        signingConfigs.create("release") {
-            storeFile = file(releaseStorePath!!)
-            storePassword = releaseStorePassword!!
-            keyAlias = releaseKeyAlias!!
-            keyPassword = releaseKeyPassword!!
-        }
-    }
-
     buildTypes {
         debug {
             isMinifyEnabled = false
         }
         release {
-            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else null
             /* R8 is off deliberately: the SDK is reached through JNI by name, and a shrinking pass
                that renamed the bridge class would fail at runtime rather than at build time. If
                shrinking is wanted later, the keep rules in consumer-rules.pro are already the
@@ -101,20 +74,18 @@ android {
     }
 }
 
-tasks.register("verifyReleaseSigning") {
+tasks.register("verifyCompileOnlyRelease") {
     doLast {
-        if (!hasReleaseSigning && !allowUnsignedRelease) {
+        if (!allowUnsignedRelease) {
             throw GradleException(
-                "Release signing is BLOCKED: supply keystore.properties or AF_RELEASE_* credentials. " +
-                "For compile-only CI artifacts use -Paf.allowUnsignedRelease=true; the result is UNSIGNED and must not be published."
+                "Release variants are compile-only and have no production signing path. " +
+                "Use -Paf.allowUnsignedRelease=true only for explicitly unsigned compile/package verification."
             )
         }
-        if (!hasReleaseSigning) {
-            logger.warn("AvatarForge: building an explicitly UNSIGNED release artifact for compile verification only.")
-        }
+        logger.warn("AvatarForge: building an explicitly UNSIGNED release variant for compile/package verification only.")
     }
 }
-tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn("verifyReleaseSigning") }
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn("verifyCompileOnlyRelease") }
 
 dependencies {
     implementation(project(":sdk"))

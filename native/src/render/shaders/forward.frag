@@ -11,5 +11,7 @@ void main() {
        nothing in the current pipeline is blended, so this only saves work on stray texels. */
     af_const vec3 viewDir = normalize(cam.uCameraPos.xyz - vWorldPos);
     fragColor = afShade(vWorldPos, vNormal, vTangent, vUv, viewDir);
+    fragColor.rgb *= vColor.rgb;
+    fragColor.a *= vColor.a;
     if (fragColor.a <= 0.0) discard;
 }

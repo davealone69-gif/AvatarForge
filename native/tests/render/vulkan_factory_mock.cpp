@@ -28,6 +28,8 @@ public:
     }
     void setSkeletonVisible(bool) override {}
     void setFlatShading(bool) override {}
+    void setDiagnosticRung(int rung) override { if (rung >= 0 && rung < 8) diagnosticRung_ = rung; }
+    int diagnosticRung() const override { return diagnosticRung_; }
     void setHighlightRegion(int) override {}
     void setClip(int, float, bool) override {}
     int currentClip() const override { return -1; }
@@ -43,6 +45,7 @@ public:
 private:
     RendererOptions options_{};
     RendererStats stats_{};
+    int diagnosticRung_ = 7;
 };
 }
 Renderer* createVulkanRenderer(ANativeWindow*, const RendererOptions&, std::string* error) {
