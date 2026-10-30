@@ -93,6 +93,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var requestedOverlays = RequestedOverlays(false, false, -1)
 
     /** Native handle of the engine currently attached (0 = none). */
+    private val engineAttachmentState = EngineAttachmentState()
     @Volatile var attachedEngineHandle: Long = 0L
         private set
 
@@ -211,10 +212,25 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     /** Attaches a freshly generated engine so the viewer shows it. */
+    @Synchronized
     fun attachEngine(engineHandle: Long) {
+        val attachment = engineAttachmentState.attach(engineHandle)
         attachedEngineHandle = engineHandle
         pendingEngineHandle = engineHandle
-        onRenderThread { it.renderer?.attachEngine(engineHandle) }
+        onRenderThread { view ->
+            if (!view.engineAttachmentState.isCurrent(attachment)) {
+                view.retireEngineAttachment(attachment)
+                return@onRenderThread
+            }
+            view.renderer?.attachEngine(attachment.engineHandle)
+        }
+    }
+
+    @Synchronized
+    private fun retireEngineAttachment(attachment: EngineAttachmentState.Attachment) {
+        if (!engineAttachmentState.retire(attachment)) return
+        attachedEngineHandle = 0L
+        pendingEngineHandle = 0L
     }
 
     /** Tells the renderer the engine's geometry changed (new pose, blendshapes, clip frame). */
