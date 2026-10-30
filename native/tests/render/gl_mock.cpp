@@ -52,7 +52,10 @@ EGLSurface eglCreateWindowSurface(EGLDisplay, EGLConfig, EGLNativeWindowType, co
     ++state.surfacesCreated; return reinterpret_cast<EGLSurface>(uintptr_t(4));
 }
 EGLBoolean eglMakeCurrent(EGLDisplay, EGLSurface, EGLSurface, EGLContext context) { state.currentContext = context; return EGL_TRUE; }
-EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint key, EGLint* value) { *value = key == EGL_WIDTH ? 720 : 1280; return EGL_TRUE; }
+EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint key, EGLint* value) {
+    *value = key == EGL_WIDTH ? state.surfaceWidth : state.surfaceHeight;
+    return EGL_TRUE;
+}
 EGLBoolean eglDestroySurface(EGLDisplay, EGLSurface) { ++state.surfacesDestroyed; return EGL_TRUE; }
 EGLBoolean eglDestroyContext(EGLDisplay, EGLContext) { ++state.contextsDestroyed; return EGL_TRUE; }
 EGLBoolean eglTerminate(EGLDisplay) { return EGL_TRUE; }
@@ -118,9 +121,15 @@ void glCullFace(GLenum) {}
 void glDeleteBuffers(GLsizei n, const GLuint* p) { drop(n, p, state.liveBuffers); }
 void glDeleteFramebuffers(GLsizei n, const GLuint* p) { drop(n, p, state.liveFramebuffers); }
 void glDeleteProgram(GLuint) { --state.livePrograms; }
-void glDeleteRenderbuffers(GLsizei n, const GLuint* p) { drop(n, p, state.liveRenderbuffers); }
+void glDeleteRenderbuffers(GLsizei n, const GLuint* p) {
+    drop(n, p, state.liveRenderbuffers);
+    for (GLsizei i = 0; i < n; ++i) state.renderbufferSizes.erase(p[i]);
+}
 void glDeleteShader(GLuint p) { --state.liveShaders; state.shaderTypes.erase(p); }
-void glDeleteTextures(GLsizei n, const GLuint* p) { drop(n, p, state.liveTextures); }
+void glDeleteTextures(GLsizei n, const GLuint* p) {
+    drop(n, p, state.liveTextures);
+    for (GLsizei i = 0; i < n; ++i) state.textureSizes.erase(p[i]);
+}
 void glDeleteVertexArrays(GLsizei n, const GLuint* p) {
     drop(n, p, state.liveVaos); for (GLsizei i = 0; i < n; ++i) state.vaos.erase(p[i]);
 }
@@ -241,13 +250,15 @@ void glLinkProgram(GLuint p) {
 }
 void glPolygonOffset(GLfloat, GLfloat) {}
 void glReadBuffer(GLenum) {}
-void glRenderbufferStorageMultisample(GLenum, GLsizei samples, GLenum, GLsizei, GLsizei) {
+void glRenderbufferStorageMultisample(GLenum, GLsizei samples, GLenum, GLsizei width, GLsizei height) {
     ++state.msaaAttempts;
+    state.renderbufferSizes[state.currentRenderbuffer] = {width, height};
     if (samples > 1 && state.rejectNextMsaa) { state.rejectNextMsaa = false; raiseGlError(GL_INVALID_VALUE); }
     if (samples == 1 && state.rejectSingleSample) raiseGlError(GL_INVALID_VALUE);
 }
 void glShaderSource(GLuint, GLsizei, const GLchar* const*, const GLint*) {}
-void glTexImage2D(GLenum, GLint, GLint internal, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) {
+void glTexImage2D(GLenum, GLint, GLint internal, GLsizei width, GLsizei height, GLint, GLenum, GLenum, const void*) {
+    state.textureSizes[state.currentTexture] = {width, height};
     if (internal == GL_RGBA16F && state.rejectFloatHdr) {
         state.incompleteNextTextureFramebuffer = true;
     }

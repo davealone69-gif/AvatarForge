@@ -5,6 +5,7 @@
 #include <GLES3/gl31.h>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace af_test {
@@ -26,9 +27,11 @@ struct MockState {
     GLuint currentRenderbuffer = 0, currentTexture = 0;
     EGLContext currentContext = EGL_NO_CONTEXT;
     EGLint eglError = EGL_SUCCESS;
+    EGLint surfaceWidth = 720, surfaceHeight = 1280;
     std::vector<GLenum> glErrors;
     std::map<GLuint, VertexArray> vaos;
     std::map<GLuint, GLsizeiptr> bufferSizes;
+    std::map<GLuint, std::pair<GLsizei, GLsizei>> textureSizes, renderbufferSizes;
     std::map<GLuint, GLenum> shaderTypes;
     std::map<GLuint, bool> programLinks;
     std::map<GLint, GLuint> uniformOwners;

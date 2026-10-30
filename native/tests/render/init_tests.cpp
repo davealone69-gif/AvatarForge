@@ -29,6 +29,12 @@ af::RendererOptions options() {
     o.msaaSamples = 2;
     return o;
 }
+bool hasExtent(const std::map<GLuint, std::pair<GLsizei, GLsizei>>& sizes, int width, int height) {
+    for (const auto& entry : sizes) {
+        if (entry.second.first == width && entry.second.second == height) return true;
+    }
+    return false;
+}
 bool resourcesReleased() {
     const auto& s = af_test::state;
     return s.livePrograms == 0 && s.liveShaders == 0 && s.liveBuffers == 0 && s.liveTextures == 0 &&
@@ -197,6 +203,49 @@ void resizeAllocationFailureRestoresTargetsAndSignalsOwner() {
     }
     r.reset();
     check(resourcesReleased(), "resize-failure teardown releases every tracked resource");
+}
+void automaticResizeRetryUsesChangedEglExtent() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "automatic-resize retry fixture initializes");
+    if (r) {
+        check(hasExtent(af_test::state.textureSizes, 720, 1280) &&
+              hasExtent(af_test::state.renderbufferSizes, 720, 1280),
+              "initial targets use the mock EGL surface extent");
+        const int drawsBefore = af_test::state.draws;
+        const int framesBefore = r->stats().frames;
+        const int submissionsBefore = r->stats().frameSubmissions;
+
+        af_test::state.surfaceWidth = 900;
+        af_test::state.surfaceHeight = 1600;
+        af_test::state.incompleteNextTextureFramebuffer = true;
+        r->renderFrame(1.0f / 60.0f);
+        check(contains(r->frameError(), "GLES resize target allocation failed") &&
+              contains(r->frameError(), "previous targets restored"),
+              "first frame detects the changed EGL extent and restores targets after allocation failure");
+        check(af_test::state.draws == drawsBefore && r->stats().frameSubmissions == submissionsBefore &&
+              r->stats().frames == framesBefore,
+              "failed resize does not draw or submit a frame against mismatched extents");
+        check(hasExtent(af_test::state.textureSizes, 720, 1280) &&
+              hasExtent(af_test::state.renderbufferSizes, 720, 1280) &&
+              !hasExtent(af_test::state.textureSizes, 900, 1600) &&
+              !hasExtent(af_test::state.renderbufferSizes, 900, 1600),
+              "failed new-size allocations are discarded and old-size targets remain live");
+
+        r->renderFrame(1.0f / 60.0f);
+        check(r->frameError().empty() && r->stats().frames == framesBefore + 1 &&
+              r->stats().frameSubmissions == submissionsBefore + 1,
+              "next frame automatically retries the still-current EGL extent and recovers");
+        check(af_test::state.draws > drawsBefore &&
+              hasExtent(af_test::state.textureSizes, 900, 1600) &&
+              hasExtent(af_test::state.renderbufferSizes, 900, 1600) &&
+              !hasExtent(af_test::state.textureSizes, 720, 1280) &&
+              !hasExtent(af_test::state.renderbufferSizes, 720, 1280),
+              "recovered frame draws only after targets match the new EGL dimensions");
+    }
+    r.reset();
+    check(resourcesReleased(), "automatic-resize retry teardown releases every tracked resource");
 }
 void resizeTargetRestoreFailurePreservesFatalDiagnostic() {
     af_test::reset();
@@ -417,6 +466,7 @@ int main() {
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner(); resizeAllocationFailureRestoresTargetsAndSignalsOwner();
+    automaticResizeRetryUsesChangedEglExtent();
     resizeTargetRestoreFailurePreservesFatalDiagnostic();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
     selector(); defaultBackendSelection(); vulkanSelection(); optionSanitisation(); renderAbi();
