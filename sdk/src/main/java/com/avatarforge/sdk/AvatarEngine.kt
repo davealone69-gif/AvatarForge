@@ -695,7 +695,12 @@ class AvatarEngine private constructor(private val appContext: Context) {
                     "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
                 }
                 val h = openHandle()
-                NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
+                val budgetRc = KernelAccess.withKernel {
+                    NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
+                }
+                check(budgetRc == 0) {
+                    "memory-budget setup failed (\${NativeBridge.engineLastError(h)})"
+                }
                 val resetRc = KernelAccess.withKernel {
                     NativeBridge.engineReset(
                         h, request.spec.packInts(), request.spec.packFloats(), request.prompt,
