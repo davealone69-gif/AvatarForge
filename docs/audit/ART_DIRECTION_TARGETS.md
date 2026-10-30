@@ -1,6 +1,6 @@
 # Art-direction targets
 
-Status: **reference set recorded, measured against the current build, gap open as AF-040.**
+Status: **partial host improvement; strict reference ratios and visual acceptance remain open as AF-040.**
 Source: the user supplied Dropbox folder `avatar/guides/body` on 2026-10-30 with the instruction
 "Use these as guides". Nine images: two DAZ3D Genesis-8 marketing renders (Kira HD, Ms Lucy HD),
 four studio body/pose references, two cropped shape references and one VRM/VTuber character sheet.
@@ -15,7 +15,7 @@ every number below is a ratio that can be verified against the engine's own land
 | Property | Reference reading | Why it matters |
 |---|---|---|
 | Silhouette | Athletic-adult female, adult proportions, roughly 7.5 heads tall | The current build is anatomically plausible in height but not in mass distribution |
-| Shoulder : waist | 0.74–0.76 (both Genesis-8 references) | A waist this narrow relative to the shoulder is most of what reads as "athletic" |
+| Waist / shoulder width | 0.74–0.76 (both Genesis-8 references) | The waist-to-shoulder ratio strongly shapes the athletic silhouette |
 | Shoulder : hip | ≈ 1.05–1.10 (shoulders just wider than hips) | The current build inverts this |
 | Neck | Long, narrow, clearly separated from the trapezius | A wide neck reads as stylised immediately |
 | Limbs | Deltoid and calf defined; forearm tapers hard to the wrist; ankle distinctly narrower than calf | Blocky limbs are the second-strongest stylisation cue after proportion |
@@ -45,6 +45,16 @@ Measured from the engine's own vertex buffer (`/home/user/fault-review/probe/geo
 The hip measurement includes the lower garment, which is why the ratio is so far off; the
 underlying landmark solver is still the thing to change, not the garment.
 
+### AF-040 host follow-up
+
+A no-garment 1.72 m athletic-female fixture now measures a 0.372 m biacromial landmark span and
+0.250/0.363 m waist/hip sections on the extracted skin mesh. That is shoulder/waist **1.488**,
+waist/shoulder **0.672**, and shoulder/hip **1.025**. The waist adjustment is within the existing
+broad host guard of shoulder/waist 1.48–1.67, but it remains short of the reference waist/shoulder
+target 0.74–0.76; the hip ratio is also below 1.05. This body-only fixture is not directly
+comparable with the older t-shirt vertex-buffer probe. Attempts to further change the hip or
+shoulder produced host shell-winding or shoulder-breadth failures and were reverted.
+
 ## 3. Known geometry defects visible in the reference render
 
 These come from the offline renderer (`/home/user/fault-review/probe/preview.cpp`, which
@@ -66,8 +76,14 @@ the device):
 A change to proportions or garment geometry is accepted only when all of the following hold, and
 each one is either an existing host check or an added one:
 
-- [ ] Shoulder : hip in 1.05–1.10 and shoulder : waist in 1.48–1.67, asserted in
-      `native/tests/model_detail_tests.cpp` against the built mesh (not the spec).
+The legacy broad host guard (shoulder/waist **1.48–1.67**) is not equivalent to the reference
+table's waist/shoulder **0.74–0.76**. Keep these conventions distinct; the current fixture passes
+the broad guard but does not satisfy the stricter reference ratio.
+
+- [ ] Reference waist/shoulder in 0.74–0.76 and shoulder/hip in 1.05–1.10, measured against
+      the built mesh and documented landmarks.
+- [ ] The separate broad host guard, shoulder/waist in 1.48–1.67, remains green without regressing
+      exact tape inputs or mesh-shell checks.
 - [ ] No garment component whose bounding-box aspect is within 1.25 of a sphere and whose volume
       exceeds 50 cm³ (catches the shoulder pads and the bust spheres).
 - [ ] Upper-garment hem within 2 cm of the measured waist landmark; hem visible in the silhouette.

@@ -10,12 +10,12 @@
  *        engine or renderer entry point and reports its af_result unchanged;
  *      * every failure is reported to Kotlin as an exception (IllegalStateException /
  *        IllegalArgumentException with the kernel's own message), never as a silent no-op;
- *      * no global state: engine and renderer handles are allocated per call and owned by Kotlin,
- *        and the callback trampoline is attached to the engine handle so it dies with it.
+ *      * JNI exposes opaque registry tokens, not native addresses; leases keep objects alive
+ *        during calls and the callback trampoline is attached to the engine object.
  *
  *  Threading: the engine is thread-affine (one thread at a time, see afcore.h). Kotlin calls
  *  these functions from its engine thread and, once the viewer is open, from the render thread -
- *  the SDK enforces that by transferring ownership, not by locking here.
+ *  the SDK serializes native work; registry leases only protect object lifetime across destroy/use.
  *
  *  The method names match com.avatarforge.sdk.internal.NativeBridge; if you rename one, rename it
  *  there too or the SDK stops linking (which is the point: the bridge has no dynamic dispatch).
@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "../../include/afcore.h"
+#include "af_handle_registry.h"
 #include "../af_image.h"
 #include "../af_image_pack.h"
 #include "../render/af_render.h"
@@ -67,7 +68,47 @@ struct EngineHandle {
     jmethodID onProgress = nullptr;
     jmethodID onLog = nullptr;
     jmethodID shouldCancel = nullptr;
+    JavaVM* javaVm = nullptr;
+
+    ~EngineHandle() {
+        if (engine) af_engine_destroy(engine);
+        if (!callbackObject || !javaVm) return;
+        JNIEnv* env = nullptr;
+        bool attached = false;
+        const jint status = javaVm->functions->GetEnv(javaVm, reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+        if (status == JNI_EDETACHED) {
+            if (javaVm->functions->AttachCurrentThread(javaVm, reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return;
+            attached = true;
+        } else if (status != JNI_OK || !env) {
+            return;
+        }
+        env->DeleteGlobalRef(callbackObject);
+        callbackObject = nullptr;
+        if (attached) javaVm->DetachCurrentThread();
+    }
 };
+
+/* Declare the engine lease before the renderer so reverse member destruction tears down the
+   renderer while its attached engine is still alive. */
+struct RendererHandle {
+    std::shared_ptr<EngineHandle> attachedEngine;
+    std::unique_ptr<af::Renderer> renderer;
+};
+
+af::jni::HandleRegistry& handleRegistry() {
+    static af::jni::HandleRegistry registry;
+    return registry;
+}
+
+std::shared_ptr<EngineHandle> lookupEngineHandle(jlong token) {
+    return handleRegistry().get<EngineHandle>(static_cast<std::int64_t>(token),
+                                               af::jni::HandleKind::Engine);
+}
+
+std::shared_ptr<RendererHandle> lookupRendererHandle(jlong token) {
+    return handleRegistry().get<RendererHandle>(static_cast<std::int64_t>(token),
+                                                 af::jni::HandleKind::Renderer);
+}
 
 thread_local JNIEnv* g_tlsEnv = nullptr;   /* set for the duration of each bridged call */
 
@@ -205,11 +246,9 @@ void writeSpec(JNIEnv* env, const af_spec& spec, jintArray outInts, jfloatArray 
     }
 }
 
-EngineHandle* asHandle(jlong value) { return reinterpret_cast<EngineHandle*>(value); }
-
 /* Runs one engine call and converts a failure into a Java exception. */
 template <typename Fn>
-jint guarded(JNIEnv* env, EngineHandle* h, const char* what, Fn&& fn) {
+jint guarded(JNIEnv* env, const std::shared_ptr<EngineHandle>& h, const char* what, Fn&& fn) {
     if (!h || !h->engine) {
         throwIllegalArgument(env, std::string(what) + ": engine handle is not open");
         return AF_ERR_INVALID_ARG;
@@ -245,9 +284,13 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCre
     af_spec spec{};
     if (!readSpec(env, ints, floats, prompt, &spec)) return 0;
 
-    EngineHandle* handle = new EngineHandle();
+    auto handle = std::make_shared<EngineHandle>();
+    if (env->GetJavaVM(&handle->javaVm) != JNI_OK) {
+        throwIllegalState(env, "JNI engineCreate", AF_ERR_INTERNAL, "could not obtain the Java VM");
+        return 0;
+    }
     af_callbacks cb{};
-    cb.user = handle;
+    cb.user = handle.get();
     cb.on_progress = trampolineProgress;
     cb.on_log = trampolineLog;
     cb.should_cancel = trampolineShouldCancel;
@@ -261,7 +304,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCre
             if (env->ExceptionCheck()) env->ExceptionClear();
             env->DeleteGlobalRef(handle->callbackObject);
             handle->callbackObject = nullptr;
-            delete handle;
+            handle.reset();
             throwIllegalArgument(env, "Callbacks does not implement onProgress/onLog/shouldCancel");
             return 0;
         }
@@ -271,25 +314,26 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCre
     const af_result rc = af_result(af_engine_create(&spec, callbacks ? &cb : nullptr, &handle->engine));
     g_tlsEnv = nullptr;
     if (rc != AF_OK) {
-        if (handle->callbackObject) env->DeleteGlobalRef(handle->callbackObject);
-        delete handle;
+        handle.reset();
         throwIllegalState(env, "af_engine_create", rc, "the kernel refused the specification");
         return 0;
     }
-    return reinterpret_cast<jlong>(handle);
+    const std::int64_t token = handleRegistry().insert(af::jni::HandleKind::Engine, handle);
+    if (token == 0) {
+        handle.reset();
+        throwIllegalState(env, "JNI engineCreate", AF_ERR_INTERNAL, "no native handle token is available");
+        return 0;
+    }
+    return static_cast<jlong>(token);
 }
 
-JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineDestroy(JNIEnv* env, jobject, jlong h) {
-    EngineHandle* handle = asHandle(h);
-    if (!handle) return;
-    if (handle->engine) af_engine_destroy(handle->engine);
-    if (handle->callbackObject) env->DeleteGlobalRef(handle->callbackObject);
-    delete handle;
+JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineDestroy(JNIEnv*, jobject, jlong h) {
+    (void)handleRegistry().remove<EngineHandle>(static_cast<std::int64_t>(h), af::jni::HandleKind::Engine);
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineReset(
     JNIEnv* env, jobject, jlong h, jintArray ints, jfloatArray floats, jstring prompt) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     af_spec spec{};
     if (!readSpec(env, ints, floats, prompt, &spec)) return AF_ERR_INVALID_ARG;
     return guarded(env, handle, "af_engine_reset", [&](af_engine* e) { return af_engine_reset(e, &spec); });
@@ -297,13 +341,13 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineRese
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSetMemoryBudget(
     JNIEnv* env, jobject, jlong h, jlong bytes) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     return guarded(env, handle, "af_engine_set_memory_budget",
                    [&](af_engine* e) { return af_engine_set_memory_budget(e, uint64_t(bytes)); });
 }
 
 JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineLastError(JNIEnv* env, jobject, jlong h) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     const char* text = (handle && handle->engine) ? af_engine_last_error(handle->engine) : "";
     return env->NewStringUTF(text ? text : "");
 }
@@ -311,7 +355,7 @@ JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineL
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnalyzePrompt(
     JNIEnv* env, jobject, jlong h, jstring prompt, jintArray outInts, jfloatArray outFloats,
     jobjectArray outPrompt) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!prompt) {
         throwIllegalArgument(env, "prompt is null");
         return AF_ERR_INVALID_ARG;
@@ -338,7 +382,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnalyzeImages(
     JNIEnv* env, jobject, jlong h, jintArray widths, jintArray heights, jintArray channels,
     jintArray roles, jobjectArray pixels, jfloatArray outAnalyses) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) {
         throwIllegalArgument(env, "engine handle is not open");
         return AF_ERR_INVALID_ARG;
@@ -437,7 +481,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
    with a single enum rather than eight trampolines. */
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineStage(
     JNIEnv* env, jobject, jlong h, jint stage) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     return guarded(env, handle, "stage", [&](af_engine* e) -> int32_t {
         switch (stage) {
             case AF_STAGE_FIT_ANATOMY:  return af_engine_fit_anatomy(e);
@@ -453,18 +497,18 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineStag
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineRunAll(JNIEnv* env, jobject, jlong h) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     return guarded(env, handle, "af_engine_run_all", [](af_engine* e) { return af_engine_run_all(e); });
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineDirtyMask(JNIEnv* env, jobject, jlong h) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     return guarded(env, handle, "af_engine_dirty_mask", [](af_engine* e) { return af_engine_dirty_mask(e); });
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineApplyPose(
     JNIEnv* env, jobject, jlong h, jfloatArray quats) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!quats) {
         throwIllegalArgument(env, "pose is null");
         return AF_ERR_INVALID_ARG;
@@ -480,7 +524,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAppl
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSampleClip(
     JNIEnv* env, jobject, jlong h, jint clip, jfloat time, jfloatArray outQuats) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!outQuats) {
         throwIllegalArgument(env, "outQuats is null");
         return AF_ERR_INVALID_ARG;
@@ -497,14 +541,14 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSamp
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineApplyClip(
     JNIEnv* env, jobject, jlong h, jint clip, jfloat time) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     return guarded(env, handle, "af_engine_apply_clip",
                    [&](af_engine* e) { return af_engine_apply_clip(e, clip, time); });
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineApplyBlendshapes(
     JNIEnv* env, jobject, jlong h, jfloatArray weights) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!weights) {
         throwIllegalArgument(env, "weights is null");
         return AF_ERR_INVALID_ARG;
@@ -544,7 +588,7 @@ JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineC
 
 JNIEXPORT jfloat JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineClipDuration(
     JNIEnv*, jobject, jlong h, jint clip) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return 0.0f;
     return af_engine_clip_duration(handle->engine, clip);
 }
@@ -555,7 +599,7 @@ JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineR
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCounts(
     JNIEnv* env, jobject, jlong h, jintArray out) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine || !out || env->GetArrayLength(out) < 5) {
         throwIllegalArgument(env, "engineCounts needs an open engine and a 5-element array");
         return AF_ERR_INVALID_ARG;
@@ -569,14 +613,14 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCoun
 
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineVertexBytes(
     JNIEnv*, jobject, jlong h) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return 0;
     return jlong(af_engine_vertex_count(handle->engine)) * jlong(sizeof(af_vertex));
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCopyVertices(
     JNIEnv* env, jobject, jlong h, jobject dst, jboolean rest) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine || !dst) {
         throwIllegalArgument(env, "copyVertices needs an open engine and a direct ByteBuffer");
         return AF_ERR_INVALID_ARG;
@@ -597,7 +641,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCopy
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCopyIndices(
     JNIEnv* env, jobject, jlong h, jobject dst) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine || !dst) {
         throwIllegalArgument(env, "copyIndices needs an open engine and a direct ByteBuffer");
         return AF_ERR_INVALID_ARG;
@@ -620,7 +664,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCopy
    followed by 6 floats {bounds_min[3], bounds_max[3]}. */
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSubmeshInfo(
     JNIEnv* env, jobject, jlong h, jintArray outInts, jfloatArray outFloats) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return AF_ERR_INVALID_ARG;
     const int count = af_engine_submesh_count(handle->engine);
     const af_submesh* list = af_engine_submeshes(handle->engine);
@@ -654,7 +698,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSubm
    4 texture flags packed into the tail. */
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineMaterialInfo(
     JNIEnv* env, jobject, jlong h, jobjectArray outNames, jfloatArray outFloats) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return AF_ERR_INVALID_ARG;
     const int count = af_engine_material_count(handle->engine);
     const af_material* list = af_engine_materials(handle->engine);
@@ -688,7 +732,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineMate
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineJointInfo(
     JNIEnv* env, jobject, jlong h, jint joint, jintArray outInts, jfloatArray outFloats, jobjectArray outName) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return AF_ERR_INVALID_ARG;
     af_joint_info info{};
     const int32_t rc = af_engine_joint_info(handle->engine, joint, &info);
@@ -716,7 +760,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineJoin
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineJointMatrices(
     JNIEnv* env, jobject, jlong h, jfloatArray out) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine || !out) {
         throwIllegalArgument(env, "jointMatrices needs an open engine and a float array");
         return AF_ERR_INVALID_ARG;
@@ -734,7 +778,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineJoin
 
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineTextureInfo(
     JNIEnv* env, jobject, jlong h, jint slot, jintArray out) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return 0;
     af_texture tex{};
     const int32_t rc = af_engine_texture(handle->engine, slot, &tex);
@@ -748,7 +792,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineTex
 
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCopyTexture(
     JNIEnv* env, jobject, jlong h, jint slot, jobject dst) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine || !dst) {
         throwIllegalArgument(env, "copyTexture needs an open engine and a direct ByteBuffer");
         return 0;
@@ -770,7 +814,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCop
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExportGlb(
     JNIEnv* env, jobject, jlong h, jstring path) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!path) {
         throwIllegalArgument(env, "path is null");
         return AF_ERR_INVALID_ARG;
@@ -787,7 +831,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExpo
    number of bytes written. The SDK caches the export bytes after the first call. */
 JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExportGlbBytes(
     JNIEnv* env, jobject, jlong h, jobject dst) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return 0;
     uint8_t* bytes = nullptr;
     size_t size = 0;
@@ -811,7 +855,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExp
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineStats(
     JNIEnv* env, jobject, jlong h, jfloatArray outFloats, jlongArray outLongs) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return AF_ERR_INVALID_ARG;
     af_stats stats{};
     const int32_t rc = af_engine_stats(handle->engine, &stats);
@@ -836,7 +880,7 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineStat
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_enginePickRegion(
     JNIEnv* env, jobject, jlong h, jfloat yawDeg, jfloat pitchDeg, jfloat distance, jfloat targetY,
     jfloat fovDeg, jfloat ndcX, jfloat ndcY, jint width, jint height, jfloatArray outPoint) {
-    EngineHandle* handle = asHandle(h);
+    auto handle = lookupEngineHandle(h);
     if (!handle || !handle->engine) return -1;
     af::CameraState camera{};
     camera.yawDeg = yawDeg;
@@ -890,16 +934,24 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererC
         throwIllegalState(env, "Renderer::create", AF_ERR_UNSUPPORTED, error);
         return 0;
     }
-    return reinterpret_cast<jlong>(renderer);
+    auto handle = std::make_shared<RendererHandle>();
+    handle->renderer.reset(renderer);
+    const std::int64_t token = handleRegistry().insert(af::jni::HandleKind::Renderer, handle);
+    if (token == 0) {
+        throwIllegalState(env, "JNI rendererCreate", AF_ERR_INTERNAL, "no native handle token is available");
+        return 0;
+    }
+    return static_cast<jlong>(token);
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererDestroy(JNIEnv*, jobject, jlong r) {
-    delete reinterpret_cast<af::Renderer*>(r);
+    (void)handleRegistry().remove<RendererHandle>(static_cast<std::int64_t>(r), af::jni::HandleKind::Renderer);
 }
 
 JNIEXPORT jboolean JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererResize(
     JNIEnv* env, jobject, jlong r, jint width, jint height) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) {
         throwIllegalArgument(env, "renderer handle is not open");
         return JNI_FALSE;
@@ -909,13 +961,17 @@ JNIEXPORT jboolean JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_render
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererAttachEngine(
     JNIEnv* env, jobject, jlong r, jlong h) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
-    EngineHandle* handle = asHandle(h);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
+    auto handle = lookupEngineHandle(h);
     if (!renderer || !handle) {
         throwIllegalArgument(env, "rendererAttachEngine needs both an open renderer and an engine");
         return AF_ERR_INVALID_ARG;
     }
+    auto previousEngine = std::move(rendererHandle->attachedEngine);
+    rendererHandle->attachedEngine = handle;
     renderer->attachEngine(handle->engine);
+    (void)previousEngine;
     const std::string frameError = renderer->frameError();
     if (!frameError.empty()) {
         throwIllegalState(env, "rendererAttachEngine", AF_ERR_INTERNAL, frameError);
@@ -926,7 +982,8 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererAt
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetCamera(
     JNIEnv*, jobject, jlong r, jfloat yaw, jfloat pitch, jfloat distance, jfloat targetY, jfloat fov) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return;
     af::CameraState camera{};
     camera.yawDeg = yaw;
@@ -942,7 +999,8 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
     jfloat exposure, jfloat sunAzimuth, jfloat sunElevation, jfloat sunIntensity, jfloat turbidity,
     jfloat environmentIntensity, jboolean groundPlane, jint msaa,
     jint shadowSize, jint bloomLevels, jfloat shadowSoftness) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return;
     af::RendererOptions options = renderer->options();
     options.quality = af::QualityPreset(quality);
@@ -965,7 +1023,8 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetOverlays(
     JNIEnv*, jobject, jlong r, jboolean skeleton, jboolean flat, jint highlightRegion) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return;
     renderer->setSkeletonVisible(skeleton == JNI_TRUE);
     renderer->setFlatShading(flat == JNI_TRUE);
@@ -974,20 +1033,23 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSe
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSetClip(
     JNIEnv*, jobject, jlong r, jint clip, jfloat speed, jboolean loop) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return;
     renderer->setClip(clip, speed, loop == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererInvalidateMesh(
     JNIEnv*, jobject, jlong r) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (renderer) renderer->invalidateMesh();
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererFrame(
     JNIEnv* env, jobject, jlong r, jfloat deltaSeconds) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return;
     renderer->renderFrame(deltaSeconds);
     const std::string error = renderer->frameError();
@@ -997,13 +1059,15 @@ JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererFr
 }
 
 JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererWaitIdle(JNIEnv*, jobject, jlong r) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (renderer) renderer->waitIdle();
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererInfo(
     JNIEnv* env, jobject, jlong r, jobjectArray outStrings, jintArray outFlags) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return AF_ERR_INVALID_ARG;
     const af::RendererInfo info = renderer->info();
     if (outStrings && env->GetArrayLength(outStrings) >= 4) {
@@ -1025,7 +1089,8 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererIn
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererStats(
     JNIEnv* env, jobject, jlong r, jfloatArray outFloats, jintArray outInts) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return AF_ERR_INVALID_ARG;
     const af::RendererStats stats = renderer->stats();
     if (outFloats && env->GetArrayLength(outFloats) >= 4) {
@@ -1043,12 +1108,14 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererSt
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererCurrentClip(JNIEnv*, jobject, jlong r) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     return renderer ? renderer->currentClip() : -1;
 }
 
 JNIEXPORT jfloat JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererClipTime(JNIEnv*, jobject, jlong r) {
-    af::Renderer* renderer = reinterpret_cast<af::Renderer*>(r);
+    auto rendererHandle = lookupRendererHandle(r);
+    af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     return renderer ? renderer->clipTime() : 0.0f;
 }
 

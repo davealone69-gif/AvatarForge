@@ -233,8 +233,14 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
        is slightly larger than the rib-cage chest because breast tissue sits anteriorly. */
     m.bustSeg   = female ? solveSeg(circ.chest, kDepthBust, 0.004f * H) : m.chest;
     m.underbust = solveSeg(circ.underbust, kDepthBust,   0.006f * H);
-    m.waist     = solveSeg(circ.waist,     kDepthWaist,  0.004f * H);
-    m.hip       = solveSeg(circ.hip,       kDepthHip,    0.004f * H);
+    /* Athletic female waists are relatively narrow side-to-side for the same tape
+       circumference: the lumbar/sagittal depth carries a little more of the ellipse.
+       Keep the circumference exact by changing only the ellipse aspect ratio; this
+       narrows the built silhouette without falsifying a caller's waist measurement.
+       Other sex/build combinations retain the established MRI-derived ratio. */
+    const float waistDepth = (female && m.build == AF_BUILD_ATHLETIC) ? 0.80f : kDepthWaist;
+    m.waist     = solveSeg(circ.waist,     waistDepth,    0.004f * H);
+    m.hip       = solveSeg(circ.hip,       kDepthHip,     0.004f * H);
 
     /* ---------- widths ---------------------------------------------------------------- */
     /* Biacromial breadth is correlated with chest girth; the regression keeps a tall slim

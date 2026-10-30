@@ -99,7 +99,7 @@ The unsigned AAB is compile proof only, not an installable production release. T
 - Production signed AAB/APK: **BLOCKED**, no credentials.
 - The ownership fence (AF-020) is implemented and compiled, but its absence of races is
   **UNVERIFIED** until a device soak runs camera drags + clip playback + expression edits + picking.
-- Diagnostic scene ladder and GPU timestamps (AF-016): **MISSING**.
+- AF-016 remains **PARTIAL**: supported-device Vulkan timestamp recording and ladder metadata have host-tested contracts, but Vulkan device execution is unverified, GLES GPU timing is absent, and no selectable diagnostic scenes/UI exist.
 - `CustomizationSchemas` is loaded but unused (AF-032): integration or deletion is still a decision.
 - Rust crates remain **UNVERIFIED** by compilation (no toolchain here); metadata now matches 0.10.1.
 - Lash geometry, strand-level hair, facial texture smudges and teeth cost (38,965 tris) remain unaddressed; no superiority claim.

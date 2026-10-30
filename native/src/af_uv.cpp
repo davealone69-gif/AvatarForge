@@ -1,5 +1,5 @@
 /*
- * af_uv.cpp -- chart segmentation, planar projection, shelf packing and seam splitting.
+ * af_uv.cpp -- chart segmentation, planar projection, skyline packing and seam splitting.
  */
 #include "af_uv.h"
 #include "af_threads.h"
@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <limits>
 #include <unordered_map>
 
 namespace af {
@@ -357,33 +358,108 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         for (size_t i = 0; i < order.size(); ++i) order[i] = i;
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
             const Vec2 sa = projected[a].bounds.size();
-            return std::max(sa.x, sa.y) > std::max(projected[b].bounds.size().x, projected[b].bounds.size().y);
+            const Vec2 sb = projected[b].bounds.size();
+            const float ma = std::max(sa.x, sa.y), mb = std::max(sb.x, sb.y);
+            return ma != mb ? ma > mb : a < b;
         });
 
-        float shelfX = 0.0f, shelfY = 0.0f, shelfH = 0.0f;
+        /*
+         * A shelf makes every small chart pay the height of the largest chart in its row. That
+         * is especially costly for AF-038's 8,000+ singleton charts: the gutters are real, but
+         * the empty row area is not. Keep a compact skyline (x-coordinate plus filled height)
+         * and place each chart at the lowest valid bottom-left position. Both orientations are
+         * considered; ties prefer the unrotated form, then the leftmost candidate. This is still
+         * deterministic, does not invent a per-chart interior floor, and leaves the density
+         * search as the explicit fit/quality control for both 1024 and 2048 atlases.
+         */
+        struct SkylineNode { float x, height; };
+        std::vector<SkylineNode> skyline{{0.0f, 0.0f}};
+        auto mergeSkyline = [&]() {
+            for (size_t i = 1; i < skyline.size();) {
+                if (std::fabs(skyline[i - 1].height - skyline[i].height) < 1e-7f) {
+                    skyline.erase(skyline.begin() + static_cast<std::ptrdiff_t>(i));
+                } else {
+                    ++i;
+                }
+            }
+        };
+        auto placeOnSkyline = [&](float w, float h, float* outX, float* outY) {
+            float bestY = std::numeric_limits<float>::infinity();
+            float bestWaste = std::numeric_limits<float>::infinity();
+            float bestX = 0.0f;
+            bool found = false;
+            for (size_t start = 0; start < skyline.size(); ++start) {
+                /* A point on an ascending segment cannot beat the preceding valley: it starts
+                   higher and reaches the same or a later skyline boundary. Equal-height runs
+                   are merged, so this keeps all meaningful bottom-left candidates. */
+                if (start > 0 && skyline[start].height > skyline[start - 1].height + 1e-7f) continue;
+                const float x = skyline[start].x;
+                if (x + w > 1.0f + 1e-7f) continue;
+                const float end = x + w;
+                float y = 0.0f, waste = 0.0f;
+                size_t node = start;
+                while (node < skyline.size() && skyline[node].x < end - 1e-7f) {
+                    const float next = node + 1 < skyline.size() ? skyline[node + 1].x : 1.0f;
+                    const float overlap = std::min(next, end) - skyline[node].x;
+                    y = std::max(y, skyline[node].height);
+                    waste += std::max(0.0f, y - skyline[node].height) * overlap;
+                    ++node;
+                }
+                if (y + h > 1.0f + 1e-7f) continue;
+                if (!found || y < bestY - 1e-7f ||
+                    (std::fabs(y - bestY) < 1e-7f &&
+                     (waste < bestWaste - 1e-7f ||
+                      (std::fabs(waste - bestWaste) < 1e-7f && x < bestX)))) {
+                    found = true;
+                    bestY = y;
+                    bestWaste = waste;
+                    bestX = x;
+                }
+            }
+            if (!found) return false;
+            *outX = bestX;
+            *outY = bestY;
+            return true;
+        };
+        auto commitSkyline = [&](float x, float y, float w, float h) {
+            const float end = x + w;
+            size_t first = 0;
+            while (first + 1 < skyline.size() && skyline[first + 1].x <= x + 1e-7f) ++first;
+            if (std::fabs(skyline[first].x - x) > 1e-7f) {
+                skyline.insert(skyline.begin() + static_cast<std::ptrdiff_t>(first + 1),
+                               {x, skyline[first].height});
+                ++first;
+            }
+            size_t last = first;
+            while (last + 1 < skyline.size() && skyline[last + 1].x < end - 1e-7f) ++last;
+            if (last + 1 == skyline.size() || std::fabs(skyline[last + 1].x - end) > 1e-7f) {
+                skyline.insert(skyline.begin() + static_cast<std::ptrdiff_t>(last + 1),
+                               {end, skyline[last].height});
+            }
+            for (size_t i = first; i <= last; ++i) skyline[i].height = y + h;
+            mergeSkyline();
+        };
+
         packed = true;
         for (size_t idx : order) {
             const Vec2 sz = projected[idx].bounds.size();
-            /* `usedDensity` is texels per METRE; the shelf lives in 0..1 UV space, so the size
-               has to be converted through the atlas resolution. (Multiplying metres by a
-               texel/metre figure and treating the result as UV is what made the first revision
-               fail to pack anything - every chart claimed to be a thousand atlases wide.) */
-            float innerW = sz.x * usedDensity / static_cast<float>(texWidth);
-            float innerH = sz.y * usedDensity / static_cast<float>(texHeight);
-            /* (A per-chart minimum interior was tried here and reverted: it needs 136% of a 1024
-               atlas with 14 460 charts, and forcing it down to fit costs a third of the texel
-               density. The fragmentation that motivates it is AF-038, and the fix belongs in the
-               charter/packer, not in a floor bolted onto a shelf packer.) */
-            float w = innerW + gutterUV * 2.0f;
-            float h = innerH + gutterUV * 2.0f;
-            bool rot = false;
-            /* Try the rotated variant when it clearly reduces the shelf height. */
-            if (h > w * 1.6f) { std::swap(w, h); rot = true; }
-            if (shelfX + w > 1.0f) { shelfX = 0.0f; shelfY += shelfH; shelfH = 0.0f; }
-            if (shelfY + h > 1.0f) { packed = false; break; }
-            placement[idx] = {shelfX, shelfY, w, h, rot};
-            shelfX += w;
-            shelfH = std::max(shelfH, h);
+            /* `usedDensity` is texels per METRE; the skyline lives in 0..1 UV space. */
+            const float innerW = sz.x * usedDensity / static_cast<float>(texWidth);
+            const float innerH = sz.y * usedDensity / static_cast<float>(texHeight);
+            const float w0 = innerW + gutterUV * 2.0f;
+            const float h0 = innerH + gutterUV * 2.0f;
+            float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+            const bool fit0 = placeOnSkyline(w0, h0, &x0, &y0);
+            const bool fit1 = placeOnSkyline(h0, w0, &x1, &y1);
+            if (!fit0 && !fit1) { packed = false; break; }
+            bool rot = fit1 && (!fit0 || y1 < y0 - 1e-7f ||
+                                (std::fabs(y1 - y0) < 1e-7f && h0 < w0));
+            const float x = rot ? x1 : x0;
+            const float y = rot ? y1 : y0;
+            const float w = rot ? h0 : w0;
+            const float h = rot ? w0 : h0;
+            placement[idx] = {x, y, w, h, rot};
+            commitSkyline(x, y, w, h);
         }
         if (!packed) usedDensity *= 0.82f;
     }
@@ -406,7 +482,7 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
     nreg.reserve(npos.capacity());
     ncurv.reserve(npos.capacity());
 
-    /* Placement always lands a chart inside its own shelf cell, so any UV outside [0,1] is a
+    /* Placement always lands a chart inside its own packed cell, so any UV outside [0,1] is a
        packing bug. It used to be clamped instead, which silently folded the offending vertices
        onto the atlas border and collapsed their triangles to zero texel area (measured: 10 788
        clamped vertices, 17 271 dead triangles, and the albedo/normal atlases sampling arbitrary
@@ -428,7 +504,7 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         const Vec2 ext = pl.rotated ? Vec2(chartSize.y, chartSize.x) : chartSize;
         const float innerW = pl.w - gutterUV * 2.0f;
         const float innerH = pl.h - gutterUV * 2.0f;
-        /* UV units per metre for this chart: the shelf cell (minus its gutter) divided by the
+        /* UV units per metre for this chart: the packed cell (minus its gutter) divided by the
            chart's projected extent in the orientation it is written in. */
         const float sx = ext.x > 1e-9f ? innerW / ext.x : 0.0f;
         const float sy = ext.y > 1e-9f ? innerH / ext.y : 0.0f;
@@ -473,7 +549,7 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
     }
 
     /*
-     * Fail closed. A chart that leaves its shelf cell cannot be repaired by clamping, and shipping
+     * Fail closed. A chart that leaves its allocated cell cannot be repaired by clamping, and shipping
      * one bakes an atlas whose texels belong to the wrong surface. Return the failure so the caller
      * retries or reports it, instead of producing a broken avatar that looks plausible.
      */

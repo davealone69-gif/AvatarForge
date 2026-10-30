@@ -37,6 +37,7 @@
  *  straightforward dynamic upload of af_engine_vertices() whenever invalidateMesh() is called.
  */
 #include "af_render.h"
+#include "af_diagnostics.h"
 #include "af_avatar_culler.h"
 #include "af_avatar_lod.h"
 #include "af_render_common.h"
@@ -260,6 +261,11 @@ private:
     VkPhysicalDevice phys_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
+    VkQueryPool timestampPool_ = VK_NULL_HANDLE;
+    float timestampPeriodNs_ = 0.0f;
+    bool timestampSupported_ = false;
+    uint32_t timestampQueryCount_ = 0;
+    uint32_t timestampValidBits_ = 0;
     uint32_t queueFamily_ = 0;
     VkPhysicalDeviceMemoryProperties memProps_{};
     uint32_t uboAlignment_ = 256;
@@ -619,6 +625,7 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     VkPhysicalDevice best = VK_NULL_HANDLE;
     int bestScore = -1;
     uint32_t bestFamily = 0;
+    uint32_t bestTimestampValidBits = 0;
     VkResult lastQueueQueryError = VK_SUCCESS;
     VkResult lastExtensionQueryError = VK_SUCCESS;
     for (VkPhysicalDevice dev : devices) {
@@ -656,7 +663,12 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
                viewer wants for hair and the high-contrast eye highlight. */
             const VkSampleCountFlags sc = p.limits.framebufferColorSampleCounts & p.limits.framebufferDepthSampleCounts;
             if (sc & VK_SAMPLE_COUNT_4_BIT) score += 50;
-            if (score > bestScore) { bestScore = score; best = dev; bestFamily = q; }
+            if (score > bestScore) {
+                bestScore = score;
+                best = dev;
+                bestFamily = q;
+                bestTimestampValidBits = queues[q].timestampValidBits;
+            }
             break;
         }
     }
@@ -672,6 +684,7 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     }
     phys_ = best;
     queueFamily_ = bestFamily;
+    timestampValidBits_ = bestTimestampValidBits;
     vkGetPhysicalDeviceMemoryProperties(phys_, &memProps_);
 
     VkPhysicalDeviceProperties properties{};
@@ -784,6 +797,24 @@ bool VulkanRenderer::createDevice(std::string* error) {
         return false;
     }
     vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(phys_, &properties);
+    timestampPeriodNs_ = properties.limits.timestampPeriod;
+    timestampSupported_ = properties.limits.timestampComputeAndGraphics == VK_TRUE &&
+                          timestampPeriodNs_ > 0.0f && timestampValidBits_ > 0;
+    if (timestampSupported_) {
+        timestampQueryCount_ = kFramesInFlight * 2;
+        VkQueryPoolCreateInfo queryInfo{};
+        queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        queryInfo.queryCount = timestampQueryCount_;
+        if (vkCreateQueryPool(device_, &queryInfo, nullptr, &timestampPool_) != VK_SUCCESS) {
+            timestampPool_ = VK_NULL_HANDLE;
+            timestampQueryCount_ = 0;
+            timestampSupported_ = false;
+        }
+    }
+    stats_.gpuTimingSupported = timestampSupported_;
     info_.supportsAnisotropy = supported.samplerAnisotropy == VK_TRUE;
     return true;
 }
@@ -3037,6 +3068,11 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         return false;
     }
 
+    if (timestampSupported_ && timestampPool_ != VK_NULL_HANDLE) {
+        const uint32_t query = frameIndex_ * 2;
+        vkCmdResetQueryPool(cmd, timestampPool_, query, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool_, query);
+    }
     if (!uploadDynamicGeometry(cmd)) return false;
 
     /* 0. Forward+ light culling. The compute shader writes one compact light list per screen tile;
@@ -3139,6 +3175,10 @@ bool VulkanRenderer::recordCommands(VkCommandBuffer cmd, uint32_t imageIndex) {
         ++drawCallsThisFrame_;
     }
 
+    if (timestampSupported_ && timestampPool_ != VK_NULL_HANDLE) {
+        const uint32_t query = frameIndex_ * 2 + 1;
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, query);
+    }
     const VkResult endResult = vkEndCommandBuffer(cmd);
     if (endResult != VK_SUCCESS) {
         lastFrameVkResult_ = endResult;
@@ -3267,6 +3307,20 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
     const VkResult waited = vkWaitForFences(device_, uint32_t(inFlight_.size()), inFlight_.data(),
                                              VK_TRUE, UINT64_MAX);
     if (waited != VK_SUCCESS) { failFatal(waited, "vkWaitForFences"); return; }
+    if (timestampSupported_ && timestampPool_ != VK_NULL_HANDLE) {
+        uint64_t timestamps[2] = {};
+        const VkResult queryResult = vkGetQueryPoolResults(
+            device_, timestampPool_, frameIndex_ * 2, 2, sizeof(timestamps), timestamps,
+            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        float frameMs = -1.0f;
+        if (queryResult == VK_SUCCESS &&
+            gpuTimestampDeltaToMilliseconds(timestamps[0], timestamps[1], timestampValidBits_,
+                                            timestampPeriodNs_, &frameMs)) {
+            stats_.gpuMs = frameMs;
+        } else {
+            stats_.gpuMs = -1.0f;
+        }
+    }
 
     uint32_t imageIndex = 0;
     const VkResult acquired = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
@@ -3666,6 +3720,8 @@ void VulkanRenderer::destroyAll() {
     for (VkSemaphore s : renderFinished_) vkDestroySemaphore(device_, s, nullptr);
     for (VkFence f : inFlight_) vkDestroyFence(device_, f, nullptr);
     if (commandPool_) vkDestroyCommandPool(device_, commandPool_, nullptr);
+    if (timestampPool_) vkDestroyQueryPool(device_, timestampPool_, nullptr);
+    timestampPool_ = VK_NULL_HANDLE;
 
     vkDestroyDevice(device_, nullptr);
     device_ = VK_NULL_HANDLE;

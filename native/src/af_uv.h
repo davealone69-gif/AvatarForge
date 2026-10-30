@@ -6,8 +6,8 @@
  *                            within an angular tolerance of the chart's average normal;
  *   2. projection          - each chart is projected onto its average-normal plane in metres,
  *                            so one global texel density applies to the whole atlas;
- *   3. packing             - shelf packing into the atlas with a gutter, rotating charts 90
- *                            degrees when that saves vertical space;
+ *   3. packing             - deterministic skyline placement with gutters and 90-degree chart
+ *                            rotation, with density backoff when the atlas cannot fit;
  *   4. seam splitting      - vertices shared by two charts are duplicated so UVs stay continuous
  *                            inside a chart (glTF requires one UV per vertex).
  *
@@ -39,7 +39,7 @@ struct UVLayout {
     int   texWidth = 2048;
     int   texHeight = 2048;
     float texelsPerMeter = 0.0f;    /* resulting density - reported so the SDK can expose it */
-    float coverage = 0.0f;          /* fraction of the atlas occupied by charts              */
+    float coverage = 0.0f;          /* packed chart-cell fraction, including seam gutters      */
     int   gutterTexels = 4;
 };
 

@@ -11,6 +11,8 @@
 #include "../include/afcore.h"
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
+#include <limits>
 
 using namespace af;
 static int checks = 0, failures = 0;
@@ -213,6 +215,104 @@ static void hairDoesNotCoverTheEyes() {
     }
 }
 
+static float meshWidthOnMidlineSection(const Mesh& mesh, float y, float zPlane) {
+    float left = -std::numeric_limits<float>::infinity();
+    float right = std::numeric_limits<float>::infinity();
+    for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+        const uint32_t ids[3] = {mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]};
+        if (mesh.regions.size() > ids[0] && mesh.regions[ids[0]] != REGION_SKIN) continue;
+        const Vec3 p[3] = {mesh.positions[ids[0]], mesh.positions[ids[1]], mesh.positions[ids[2]]};
+        Vec3 section[2];
+        int count = 0;
+        for (int edge = 0; edge < 3; ++edge) {
+            const Vec3& a = p[edge];
+            const Vec3& b = p[(edge + 1) % 3];
+            if (!((a.y <= y && b.y > y) || (b.y <= y && a.y > y))) continue;
+            const float q = (y - a.y) / (b.y - a.y);
+            if (count < 2) section[count++] = a + (b - a) * q;
+        }
+        if (count != 2) continue;
+
+        const Vec3& a = section[0];
+        const Vec3& b = section[1];
+        auto includeX = [&](float x) {
+            if (x < -0.02f) left = std::max(left, x);
+            if (x > 0.02f) right = std::min(right, x);
+        };
+        const float da = a.z - zPlane;
+        const float db = b.z - zPlane;
+        if (std::fabs(da) < 1e-6f && std::fabs(db) < 1e-6f) {
+            includeX(a.x);
+            includeX(b.x);
+        } else {
+            if (std::fabs(da) < 1e-6f) includeX(a.x);
+            if (std::fabs(db) < 1e-6f) includeX(b.x);
+            if ((da < 0.0f && db > 0.0f) || (db < 0.0f && da > 0.0f)) {
+                const float q = (zPlane - a.z) / (b.z - a.z);
+                includeX(a.x + (b.x - a.x) * q);
+            }
+        }
+    }
+    return std::isfinite(left) && std::isfinite(right) ? right - left : 0.0f;
+}
+
+static void athleticFemaleWaistRatioAndOpenHipGapAreMeasured() {
+    af_spec spec;
+    af_spec_init(&spec);
+    spec.sex = AF_SEX_FEMALE;
+    spec.build = AF_BUILD_ATHLETIC;
+    spec.height_m = 1.72f;
+    spec.outfit = AF_OUTFIT_NONE;
+    spec.footwear = AF_FOOTWEAR_NONE;
+    spec.hair_style = AF_HAIR_NONE;
+    const BodyMetrics metrics = Anatomy::solve(spec);
+    BodyField field(metrics);
+    ApparelOptions apparel;
+    apparel.outfit = spec.outfit;
+    apparel.footwear = spec.footwear;
+    apparel.hair = spec.hair_style;
+    apparel.latticeCell = BodyBuildOptions{}.bodyCell;
+    field.setApparel(apparel);
+
+    BodyBuildOptions options;
+    options.threads = 2;
+    Mesh mesh;
+    BodyBuildReport report;
+    const bool built = buildBodyMesh(field, options, &mesh, &report);
+    check(built, "athletic-female proportion fixture extracts to a mesh");
+    if (!built) return;
+
+    const float sectionOffset = options.bodyCell * 0.371f;
+    /* The audit target is biacromial (joint-centre span), not the outer deltoid/arm silhouette.
+       Waist and hip are measured from the actual extracted skin mesh below. */
+    const float shoulder = std::fabs(field.chain(1).shoulder.x - field.chain(-1).shoulder.x);
+    const float waist = meshWidthOnMidlineSection(mesh, metrics.y.waistY + sectionOffset, 0.0f);
+    const float hip = meshWidthOnMidlineSection(mesh, metrics.y.hipY + sectionOffset, 0.0f);
+    const float shoulderWaist = waist > 0.0f ? shoulder / waist : 0.0f;
+    const float waistShoulder = shoulder > 0.0f ? waist / shoulder : 0.0f;
+    const float shoulderHip = hip > 0.0f ? shoulder / hip : 0.0f;
+    std::printf("     biacromial/mesh widths: shoulder=%.3f waist=%.3f hip=%.3f m; shoulder/waist=%.3f waist/shoulder=%.3f shoulder/hip=%.3f\n",
+                shoulder, waist, hip, shoulderWaist, waistShoulder, shoulderHip);
+    check(shoulder > 0.0f && waist > 0.0f && hip > 0.0f,
+          "biacromial landmark and extracted waist/hip mesh sections are measurable");
+    check(shoulderWaist >= 1.48f && shoulderWaist <= 1.67f,
+          "built athletic-female shoulder/waist ratio remains in the documented broad 1.48-1.67 guard");
+    check(shoulderHip > 0.0f, "built athletic-female shoulder:hip ratio is measurable");
+    if (waistShoulder < 0.74f || waistShoulder > 0.76f ||
+        shoulderHip < 1.05f || shoulderHip > 1.10f) {
+        std::printf("     AF-040 remains open: waist/shoulder %.3f (reference 0.74-0.76), shoulder/hip %.3f (reference 1.05-1.10); further hip/shoulder edits broke full-suite regressions.\n",
+                    waistShoulder, shoulderHip);
+    }
+
+    spec.waist_cm = 68.0f;
+    spec.hip_cm = 96.0f;
+    const BodyMetrics measured = Anatomy::solve(spec);
+    check(std::fabs(Anatomy::perimeter(measured.waist) * 100.0f - 68.0f) < 0.01f,
+          "AF-040 aspect-ratio change preserves a 68 cm waist tape input");
+    check(std::fabs(Anatomy::perimeter(measured.hip) * 100.0f - 96.0f) < 0.01f,
+          "AF-040 preserves a 96 cm hip tape input");
+}
+
 int main() {
     palmUsesAnatomicFrame();
     eyesAreSymmetricAndExposed();
@@ -221,6 +321,7 @@ int main() {
     hairDoesNotCoverTheEyes();
     garmentLayerIsResolvable();
     lowerGarmentCoversLegs();
+    athleticFemaleWaistRatioAndOpenHipGapAreMeasured();
     std::printf("Model detail regressions: %d checks, %d failure(s)\n", checks, failures);
     return failures ? 1 : 0;
 }

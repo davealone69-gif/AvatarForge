@@ -85,6 +85,7 @@ set(AF_RENDER_SOURCES
     src/render/af_avatar_culler.cpp
     src/render/af_avatar_lod.cpp
     src/render/af_gpu_profile.cpp
+    src/render/af_diagnostics.cpp
     src/render/af_shaders.cpp)
 
 add_library(afrender SHARED ${AF_RENDER_SOURCES})

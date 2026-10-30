@@ -88,7 +88,7 @@ struct RendererStats {
     float frameMs        = -1.0f;  /* -1 = no valid caller delta has been observed             */
     float cpuMs          = -1.0f;  /* -1 = renderFrame() has not yet been timed                */
     float fps            = -1.0f;  /* -1 = no valid frame-loop timing sample                   */
-    float gpuMs          = -1.0f;  /* -1 = unknown; no GPU timestamp query is implemented     */
+    float gpuMs          = -1.0f;  /* -1 = unsupported, unavailable, or no valid query result */
     int   drawCalls      = 0;
     int   triangles      = 0;
     int   vertices       = 0;
@@ -103,6 +103,7 @@ struct RendererStats {
     int   presentRequestsAccepted = 0;
     int   lastVkResult   = 0;      /* exact VkResult for Vulkan only; VK_SUCCESS = 0        */
     bool  frameFatal     = false;  /* Vulkan frame loop stopped after unrecoverable failure */
+    bool gpuTimingSupported = false;
 };
 
 inline void updateFrameLoopTimingEstimate(RendererStats& stats, float deltaSeconds) {

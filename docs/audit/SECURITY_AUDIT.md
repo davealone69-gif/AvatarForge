@@ -21,8 +21,8 @@ Status: **PARTIAL**.
 
 ## Remaining risks
 
-- JNI still trusts raw pointer-valued `jlong` engine/renderer handles. The normal Kotlin wrappers keep these internal and serialize ordinary teardown, but stale/double-destroy values are not checked by a native token registry; this remains an open in-process memory-safety risk.
-- SDK renderer reads and mesh mutations are fenced by `KernelAccess` (AF-020); direct C/JNI callers still have to obey the thread-affine contract, and device stress has not been run.
+- JNI engine/renderer handles now use a synchronized, typed slot-generation token registry. Invalid, wrong-kind, stale and repeated-destroy tokens fail lookup; shared leases keep in-flight JNI calls and renderer-attached engines alive through destruction.
+- This is lifetime/type validation, not operation serialization: SDK renderer reads and mesh mutations remain fenced by `KernelAccess` (AF-020); direct C/JNI callers must obey the thread-affine contract, and Android device stress has not been run.
 - No LICENSE; reuse/redistribution rights are undefined.
 - CI actions are tag-pinned, not SHA-pinned; wrapper checksum authenticity is not CI-verified.
 - No fuzzing campaign was run against the GLB/PNG importer in this environment.

@@ -14,7 +14,7 @@
  *     errors (null arrays, closed handles), so failures here are always real engine failures.
  *   * byte[] style copies are never made implicitly: vertex, index and texture transfers take a
  *     **direct** ByteBuffer, so a 34 MB mesh moves exactly once.
- *   * nothing in here touches the network, the file system or the JVM's global state.
+ *   * native code validates opaque tokens and tracks their lifetimes; Kotlin never treats them as pointers.
  */
 package com.avatarforge.sdk.internal
 

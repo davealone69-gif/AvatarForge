@@ -45,9 +45,12 @@
 #include "../src/af_png_decode.h"
 #include "../src/af_scene.h"
 #include "../src/af_profiler.h"
+#include "../src/android/af_handle_registry.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <iterator>
+#include <thread>
 
 using namespace af;
 
@@ -82,6 +85,79 @@ static af_spec defaultSpec(int sex, int build, float height) {
     s.age_years = 29.0f;
     s.seed = 4242;
     return s;
+}
+
+struct HandleRegistryProbe {
+    HandleRegistryProbe(std::atomic<int>* destroyedCount, int value)
+        : destroyed(destroyedCount), marker(value) {}
+    ~HandleRegistryProbe() { destroyed->fetch_add(1, std::memory_order_relaxed); }
+    std::atomic<int>* destroyed;
+    int marker;
+};
+
+static void testHandleRegistry() {
+    std::printf("[0] JNI opaque handle registry\n");
+    af::jni::HandleRegistry registry;
+    std::atomic<int> destroyed{0};
+    auto first = std::make_shared<HandleRegistryProbe>(&destroyed, 17);
+    const std::int64_t oldToken = registry.insert(af::jni::HandleKind::Engine, first);
+    CHECK(oldToken > 0, "registry issues a positive opaque engine token");
+    CHECK(registry.get<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine) == first,
+          "registry resolves a live token to its object");
+    CHECK(!registry.get<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Renderer) &&
+              !registry.get<HandleRegistryProbe>(0, af::jni::HandleKind::Engine) &&
+              !registry.get<HandleRegistryProbe>(-1, af::jni::HandleKind::Engine),
+          "wrong-type, zero and negative tokens are rejected");
+
+    auto activeLease = registry.get<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine);
+    auto removed = registry.remove<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine);
+    CHECK(removed == first && !registry.get<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine) &&
+              !registry.remove<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine),
+          "destroy invalidates the token and repeated destroy is harmless");
+    removed.reset();
+    first.reset();
+    CHECK(destroyed.load(std::memory_order_relaxed) == 0,
+          "an active call lease keeps a removed object alive");
+    activeLease.reset();
+    CHECK(destroyed.load(std::memory_order_relaxed) == 1,
+          "the object is released after its last active lease ends");
+
+    auto replacement = std::make_shared<HandleRegistryProbe>(&destroyed, 23);
+    const std::int64_t newToken = registry.insert(af::jni::HandleKind::Engine, replacement);
+    CHECK(newToken > 0 && newToken != oldToken &&
+              !registry.get<HandleRegistryProbe>(oldToken, af::jni::HandleKind::Engine) &&
+              registry.get<HandleRegistryProbe>(newToken, af::jni::HandleKind::Engine) == replacement,
+          "reusing a slot advances its generation so stale tokens cannot alias new objects");
+    const std::int64_t rendererToken = registry.insert(af::jni::HandleKind::Renderer, replacement);
+    CHECK(rendererToken > 0 && rendererToken != newToken &&
+              !registry.get<HandleRegistryProbe>(rendererToken, af::jni::HandleKind::Engine),
+          "engine and renderer token kinds remain distinct");
+    (void)registry.remove<HandleRegistryProbe>(rendererToken, af::jni::HandleKind::Renderer);
+    (void)registry.remove<HandleRegistryProbe>(newToken, af::jni::HandleKind::Engine);
+    replacement.reset();
+
+    std::atomic<int> concurrentDestroyed{0};
+    auto concurrentObject = std::make_shared<HandleRegistryProbe>(&concurrentDestroyed, 41);
+    const std::int64_t concurrentToken = registry.insert(af::jni::HandleKind::Engine, concurrentObject);
+    concurrentObject.reset();
+    std::atomic<bool> acquired{false};
+    std::atomic<bool> continueUse{false};
+    std::atomic<bool> accessedAfterRemoval{false};
+    std::thread inFlight([&] {
+        auto lease = registry.get<HandleRegistryProbe>(concurrentToken, af::jni::HandleKind::Engine);
+        acquired.store(bool(lease), std::memory_order_release);
+        while (!continueUse.load(std::memory_order_acquire)) std::this_thread::yield();
+        accessedAfterRemoval.store(lease && lease->marker == 41, std::memory_order_release);
+    });
+    while (!acquired.load(std::memory_order_acquire)) std::this_thread::yield();
+    auto concurrentlyRemoved = registry.remove<HandleRegistryProbe>(concurrentToken, af::jni::HandleKind::Engine);
+    concurrentlyRemoved.reset();
+    const bool aliveDuringCall = concurrentDestroyed.load(std::memory_order_relaxed) == 0;
+    continueUse.store(true, std::memory_order_release);
+    inFlight.join();
+    CHECK(aliveDuringCall && accessedAfterRemoval.load(std::memory_order_acquire) &&
+              concurrentDestroyed.load(std::memory_order_relaxed) == 1,
+          "concurrent destroy invalidates lookup but preserves an in-flight use until it returns");
 }
 
 /* ------------------------------------------------------- 0. image-analysis wire schema ----- */
@@ -997,6 +1073,7 @@ static void testTexturing() {
     spec.seed = 4242; spec.skin_melanin = 0.42f; spec.age_years = 29.0f;
     BuiltAvatar av = buildFullBody(spec, 0.008f, 2);
     CHECK(av.ok, "body built for texturing");
+    Mesh productionResolutionMesh = av.mesh;
 
     UVLayout layout;
     const bool unwrapped = unwrapAtlas(&av.mesh, 1024, 1024, &layout);
@@ -1011,9 +1088,46 @@ static void testTexturing() {
         return;
     }
     CHECK(layout.charts.size() > 0, "charts produced (%zu)", layout.charts.size());
-    CHECK(layout.coverage > 0.40f, "atlas is at least 40%% covered (%.3f)", layout.coverage);
-    CHECK(layout.texelsPerMeter > 150.0f && layout.texelsPerMeter < 4000.0f,
-          "sane texel density (%.0f texels/m)", layout.texelsPerMeter);
+    CHECK(layout.coverage > 0.70f, "1024 atlas packing uses at least 70%% of chart-cell area (%.3f)",
+          layout.coverage);
+    CHECK(layout.texelsPerMeter > 275.0f && layout.texelsPerMeter < 4000.0f,
+          "1024 atlas retains improved usable density (%.0f texels/m)", layout.texelsPerMeter);
+
+    /* The 2048 product-default path must remain usable too; inspect the packed cells before any
+       texture bake so this catches resolution-specific fit/overflow regressions cheaply. */
+    {
+        UVLayout productionLayout;
+        const bool productionUnwrapped = unwrapAtlas(&productionResolutionMesh, 2048, 2048,
+                                                       &productionLayout);
+        CHECK(productionUnwrapped, "2048 production atlas unwrap succeeds");
+        if (productionUnwrapped && !productionLayout.charts.empty()) {
+            CHECK(productionLayout.texWidth == 2048 && productionLayout.texHeight == 2048,
+                  "production atlas reports 2048-square dimensions");
+            CHECK(productionLayout.coverage > 0.72f,
+                  "2048 atlas packing retains at least 72%% chart-cell coverage (%.3f)",
+                  productionLayout.coverage);
+            CHECK(productionLayout.texelsPerMeter > 500.0f && productionLayout.texelsPerMeter < 4000.0f,
+                  "2048 atlas retains high-resolution usable density (%.0f texels/m)",
+                  productionLayout.texelsPerMeter);
+            size_t outOfBounds = 0, subTexelInterior = 0;
+            for (const UVChart& chart : productionLayout.charts) {
+                if (chart.rectMin.x < -1e-6f || chart.rectMin.y < -1e-6f ||
+                    chart.rectMax.x > 1.0f + 1e-6f || chart.rectMax.y > 1.0f + 1e-6f ||
+                    chart.rectMax.x < chart.rectMin.x || chart.rectMax.y < chart.rectMin.y) {
+                    ++outOfBounds;
+                }
+                const float interiorW = (chart.rectMax.x - chart.rectMin.x) * 2048.0f -
+                                        2.0f * productionLayout.gutterTexels;
+                const float interiorH = (chart.rectMax.y - chart.rectMin.y) * 2048.0f -
+                                        2.0f * productionLayout.gutterTexels;
+                if (interiorW < 1.0f || interiorH < 1.0f) ++subTexelInterior;
+            }
+            CHECK(outOfBounds == 0, "all 2048 chart cells remain inside the atlas (%zu outside)",
+                  outOfBounds);
+            std::printf("     2048 chart cells with a sub-texel interior dimension: %zu of %zu\n",
+                        subTexelInterior, productionLayout.charts.size());
+        }
+    }
 
     /* Every vertex carries a UV inside the unit square, and the seams were split. */
     size_t outside = 0, missing = 0;
@@ -2359,12 +2473,14 @@ int main(int argc, char** argv) {
     const bool abiOnly = (argc > 1 && std::strcmp(argv[1], "--abi-only") == 0);
 
     if (abiOnly) {
+        testHandleRegistry();
         testImageAnalysisPacking();
         testAbi();
         std::printf("\n\x1b[1mABI-only %d checks complete: %d failure(s)\x1b[0m\n\n", g_checks, g_failures);
         return g_failures == 0 ? 0 : 1;
     }
 
+    testHandleRegistry();
     testImageAnalysisPacking();
     testAnthropometry();
     testField();

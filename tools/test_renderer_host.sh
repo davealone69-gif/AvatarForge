@@ -18,6 +18,13 @@ mkdir -p "$OUT"
     "$ROOT/native/src/render/af_shaders.cpp"
 "$OUT/renderer_init_tests"
 
+"$CXX" -std=c++17 -O1 -g -Wall -Wextra -Werror \
+    -I"$ROOT/native/src/render" \
+    -o "$OUT/renderer_diagnostic_tests" \
+    "$ROOT/native/tests/render/diagnostic_tests.cpp" \
+    "$ROOT/native/src/render/af_diagnostics.cpp"
+"$OUT/renderer_diagnostic_tests"
+
 NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}"
 if [ -z "$NDK" ]; then
     SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
