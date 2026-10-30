@@ -124,6 +124,8 @@ struct RendererInfo {
     std::string deviceName;   /* e.g. "Adreno (TM) 650"                                  */
     std::string apiVersion;   /* e.g. "OpenGL ES 3.2"                                    */
     std::string driver;       /* actual app graphics API driver, not a capability probe  */
+    std::string shadingLanguageVersion; /* GLES shading-language version; empty for Vulkan */
+    std::string vulkanInitializationWarning; /* complete Vulkan failure when GLES fallback succeeds */
     std::string gpuProfile;   /* Vulkan profile, empty for GLES                           */
     std::string textureCompression; /* Vulkan upload format, if available             */
     bool supportsShadows = false;

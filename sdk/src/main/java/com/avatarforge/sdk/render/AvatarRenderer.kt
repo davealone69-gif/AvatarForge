@@ -35,6 +35,8 @@ data class RendererInfo(
     val supportsMsaa: Boolean,
     val supportsFloatHdr: Boolean,
     val supportsAnisotropy: Boolean,
+    val shadingLanguageVersion: String = "",
+    val vulkanInitializationWarning: String = "",
 ) {
     val isGles: Boolean get() = backend.startsWith("gles", ignoreCase = true)
 }
@@ -164,7 +166,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
     val isValid: Boolean get() = handle != 0L
 
     fun info(): RendererInfo {
-        val strings = arrayOfNulls<String>(4)
+        val strings = arrayOfNulls<String>(6)
         val flags = IntArray(4)
         NativeBridge.rendererInfo(handle, strings, flags)
         return RendererInfo(
@@ -176,6 +178,8 @@ class AvatarRenderer private constructor(private var handle: Long) {
             supportsMsaa = flags[1] != 0,
             supportsFloatHdr = flags[2] != 0,
             supportsAnisotropy = flags[3] != 0,
+            shadingLanguageVersion = strings[4].orEmpty(),
+            vulkanInitializationWarning = strings[5].orEmpty(),
         )
     }
 

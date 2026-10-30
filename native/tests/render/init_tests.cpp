@@ -371,6 +371,8 @@ void angleDriverIsStillGles() {
     check(r && r->info().deviceName == af_test::state.rendererName &&
           r->info().apiVersion == af_test::state.version && r->info().driver == af_test::state.vendorName,
           "the app exposes the actual GL_RENDERER, GL_VERSION and GL_VENDOR from its own context");
+    check(r && r->info().shadingLanguageVersion == af_test::state.shadingLanguageVersion,
+          "the app exposes the GLES shading-language version from its own context");
     check(contains(af_test::state.lastContextLog, "backend=gles31 GL_RENDERER=\"ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)\""),
           "device report can distinguish GLES API from the system's ANGLE/Vulkan implementation");
     if (r) {
@@ -404,6 +406,9 @@ void vulkanSelection() {
     check(af_test_vk::attempts == 1 && r && r->info().backend == "gles31" && error.empty() &&
           af_test::state.contextsCreated == 1,
           "failed Vulkan initialization falls back to a real GLES renderer with actual backend info");
+    check(r && contains(r->info().vulkanInitializationWarning, "vkCreateInstance failed (injected)") &&
+          contains(r->info().vulkanInitializationWarning, "trying OpenGL ES 3.1"),
+          "successful GLES fallback retains the complete Vulkan initialization warning");
     r.reset(); check(resourcesReleased(), "GLES fallback resources are released");
 
     af_test::reset(); af_test_vk::reset();

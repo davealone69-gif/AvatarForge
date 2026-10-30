@@ -17,6 +17,7 @@ struct MockState {
     std::string version = "OpenGL ES 3.1 Mock";
     std::string rendererName = "Host fault-injection GPU";
     std::string vendorName = "AvatarForge tests";
+    std::string shadingLanguageVersion = "OpenGL ES GLSL ES 3.10 Mock";
     std::string extensions = "GL_EXT_color_buffer_float_suffix GL_EXT_texture_filter_anisotropic";
     std::string lastContextLog;
     int legacyExtensionQueries = 0, indexedExtensionQueries = 0, anisotropyWrites = 0;

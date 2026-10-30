@@ -466,6 +466,7 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const char* rendererName = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    const char* shadingLanguageVersion = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
     if (!version) { *error = "glGetString(GL_VERSION) returned null"; return false; }
 
     int major = 0, minor = 0;
@@ -503,6 +504,7 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     info_.deviceName = rendererName ? rendererName : "unknown GPU";
     info_.apiVersion = version;
     info_.driver = vendor ? vendor : "unknown vendor";
+    info_.shadingLanguageVersion = shadingLanguageVersion ? shadingLanguageVersion : "";
     info_.supportsFloatHdr = floatColour;
     info_.supportsMsaa = maxSamples > 1;
     info_.supportsShadows = true;

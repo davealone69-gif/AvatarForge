@@ -64,8 +64,11 @@ int tierForPreset(QualityPreset preset) {
  */
 class BudgetRenderer final : public Renderer {
 public:
-    BudgetRenderer(Renderer* backend, const RendererOptions& requested)
-        : backend_(backend), requested_(requested), tier_(tierForPreset(requested.quality)) {
+    BudgetRenderer(Renderer* backend, const RendererOptions& requested,
+                   std::string vulkanInitializationWarning = {})
+        : backend_(backend), requested_(requested),
+          vulkanInitializationWarning_(vulkanInitializationWarning),
+          tier_(tierForPreset(requested.quality)) {
         applyTier();
     }
 
@@ -87,7 +90,11 @@ public:
     int currentClip() const override { return backend_->currentClip(); }
     float clipTime() const override { return backend_->clipTime(); }
     void waitIdle() override { backend_->waitIdle(); }
-    RendererInfo info() const override { return backend_->info(); }
+    RendererInfo info() const override {
+        RendererInfo result = backend_->info();
+        result.vulkanInitializationWarning = vulkanInitializationWarning_;
+        return result;
+    }
     std::string frameError() const override { return backend_->frameError(); }
 
     RendererOptions options() const override { return requested_; }
@@ -157,6 +164,7 @@ private:
     Renderer* backend_ = nullptr;
     RendererOptions requested_{};
     RendererStats stats_{};
+    std::string vulkanInitializationWarning_;
     int tier_ = 1;
     int slowFrames_ = 0;
     int fastFrames_ = 0;
@@ -177,15 +185,18 @@ Renderer* Renderer::create(ANativeWindow* window, const RendererOptions& options
             if (error) error->clear();
             return new BudgetRenderer(vk, options);
         }
-        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRenderer",
-                            "Native Vulkan initialization failed: %s; trying OpenGL ES 3.1",
-                            vkError.empty() ? "unknown failure" : vkError.c_str());
+        if (vkError.empty()) vkError = "unknown initialization failure";
     }
+    const std::string vkWarning = options.preferVulkan
+        ? "Native Vulkan initialization failed: " + vkError + "; trying OpenGL ES 3.1"
+        : std::string{};
+    if (!vkWarning.empty())
+        __android_log_print(ANDROID_LOG_WARN, "AvatarForgeRenderer", "%s", vkWarning.c_str());
     std::string glError;
     Renderer* gl = createGlRenderer(window, options, &glError);
     if (gl) {
         if (error) error->clear();
-        return new BudgetRenderer(gl, options);
+        return new BudgetRenderer(gl, options, vkWarning);
     }
     if (error) {
         *error = (options.preferVulkan ? "Vulkan: " + vkError + "; " : "") +

@@ -202,7 +202,7 @@ internal object NativeBridge {
     external fun rendererFrame(renderer: Long, deltaSeconds: Float)
     external fun rendererWaitIdle(renderer: Long)
 
-    /** outStrings = [backend, device, apiVersion, driver]; outFlags = [shadows, msaa, hdr, aniso]. */
+    /** outStrings = [backend, device, apiVersion, driver, GLES GLSL version, Vulkan init warning]. */
     external fun rendererInfo(renderer: Long, outStrings: Array<String?>, outFlags: IntArray): Int
 
     /** outFloats = [frameIntervalMs, cpuSubmitMs, fps, textureMiB, gpuMs(-1 unknown)];

@@ -17,7 +17,9 @@
 package com.avatarforge.app
 
 import android.graphics.Bitmap
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -70,12 +72,10 @@ import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.DiagnosticRung
 import com.avatarforge.sdk.render.RenderSurfaceView
 import com.avatarforge.sdk.render.RenderSettings
-import com.avatarforge.sdk.render.RenderThermalPolicy
 import com.avatarforge.sdk.render.RenderedPixelCheck
 import com.avatarforge.sdk.render.SettingsStore
 import com.avatarforge.sdk.render.RendererInfo
 import com.avatarforge.sdk.render.RendererStats
-import com.avatarforge.sdk.recovery.RecoveryAdvisor
 import com.avatarforge.sdk.recovery.RecoveryBackend
 import com.avatarforge.sdk.recovery.RecoveryJournal
 import com.avatarforge.sdk.recovery.RecoveryRecordKind
@@ -183,7 +183,7 @@ class MainActivity : ComponentActivity() {
         var showDiagnostics by remember { mutableStateOf(false) }
         var selectedDiagnosticRung by remember { mutableStateOf(DiagnosticRung.PRODUCTION_AVATAR) }
         val recoveryJournal = remember { RecoveryJournal(context.filesDir) }
-        var recoveryReportToSave by remember { mutableStateOf<String?>(null) }
+        var diagnosticReportToSave by remember { mutableStateOf<String?>(null) }
 
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
@@ -220,10 +220,10 @@ class MainActivity : ComponentActivity() {
                 glbToSave = null
             }
 
-            val recoveryReportLauncher = rememberLauncherForActivityResult(
+            val diagnosticReportLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.CreateDocument("text/plain"),
             ) { uri: Uri? ->
-                val pending = recoveryReportToSave
+                val pending = diagnosticReportToSave
                 if (uri != null && pending != null) {
                     val written = runCatching {
                         context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
@@ -232,11 +232,11 @@ class MainActivity : ComponentActivity() {
                     }
                     Toast.makeText(
                         context,
-                        if (written.isSuccess) "Recovery report saved" else "Export failed: ${written.exceptionOrNull()?.message}",
+                        if (written.isSuccess) "Diagnostic report saved" else "Export failed: ${written.exceptionOrNull()?.message}",
                         Toast.LENGTH_LONG,
                     ).show()
                 }
-                recoveryReportToSave = null
+                diagnosticReportToSave = null
             }
 
             /* The export is 33-40 MB; starting a two-minute build that cannot be written is worse
@@ -597,61 +597,41 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (showDiagnostics) {
-            val info = surfaceViewState?.rendererInfo?.value
-            val frameStats = surfaceViewState?.stats?.value
-            val viewerError = surfaceViewState?.error?.value
             val recoveryStatus = surfaceViewState?.recoveryStatus?.value
             val renderedPixelCheck by (surfaceViewState?.renderedPixelCheck ?: noRenderedPixelCheck)
                 .collectAsStateWithLifecycle()
-            val records = recoveryJournal.recent(20)
-            val report = buildString {
-                append(AvatarForge.deviceReport(context))
-                appendLine()
-                appendLine("Viewer")
-                if (info == null) {
-                    appendLine("Renderer    : not initialised")
-                } else {
-                    appendLine("Backend     : ${info.backend}")
-                    appendLine("GPU         : ${info.deviceName}")
-                    appendLine("API         : ${info.apiVersion}")
-                    appendLine("Driver      : ${info.driver}")
-                    appendLine("HDR / MSAA  : ${info.supportsFloatHdr} / ${info.supportsMsaa}")
-                    appendLine("Anisotropy  : ${info.supportsAnisotropy} (capability; atlas requests up to 4x)")
-                }
-                if (frameStats != null) {
-                    if (frameStats.hasValidFrameTiming) {
-                        appendLine("Frame loop  : %.1f FPS (%.2f ms input-delta EMA; not present-completion timing)".format(
-                            frameStats.fps, frameStats.frameMs))
-                    } else {
-                        appendLine("Frame loop  : not measured (waiting for a valid input-delta sample)")
-                    }
-                    val cpuSubmit = if (frameStats.cpuMs.isFinite() && frameStats.cpuMs >= 0f)
-                        "%.2f ms".format(frameStats.cpuMs) else "not measured"
-                    appendLine("CPU submit  : $cpuSubmit; GPU time: %s".format(
-                        if (frameStats.gpuMs < 0f) "unknown (unsupported, pending, or disjoint query)" else "%.2f ms".format(frameStats.gpuMs)))
-                    appendLine("Frames      : %d attempts, %d submissions, %d accepted presents".format(
-                        frameStats.frameAttempts, frameStats.frameSubmissions, frameStats.presentRequestsAccepted))
-                    appendLine("Submitted   : %d tris, %d draw calls".format(frameStats.triangles, frameStats.drawCalls))
-                    appendLine("Textures    : %.1f MiB".format(frameStats.textureMiB))
-                    appendLine("Quality     : level %d, MSAA %dx, shadow %d, bloom %d".format(
-                        frameStats.qualityLevel, frameStats.msaaSamples, frameStats.shadowMapSize, frameStats.bloomLevels))
-                }
-                appendLine("Last error  : ${viewerError ?: "none"}")
-                appendLine("Settings    : requested backend=${settings.backend}, quality=${settings.quality}")
-                appendLine("Effective   : requested backend=${effectiveSettings.backend}, actual=${info?.backend ?: "not initialised"}, quality=${effectiveSettings.quality}")
-                appendLine("Thermal     : ${RenderThermalPolicy.describe(surfaceViewState?.thermalStatusForDiagnostics)}")
-                appendLine("Diagnostic  : requested=${selectedDiagnosticRung.value} (${selectedDiagnosticRung.displayName}), current=${effectiveDiagnosticRung.value} (${effectiveDiagnosticRung.displayName})")
-                appendLine("Visible pixels: ${renderedPixelCheck?.summary ?: "not checked"}")
-                appendLine("Camera      : yaw %.1f°, pitch %.1f°, distance %.2f m, targetY %.2f m, fov %.1f°".format(
-                    camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg))
-                appendLine()
-                appendLine("Self-improvement path (deterministic, no AI, no network)")
-                appendLine("Recovery    : ${recoveryStatus?.let { "${it.phase}: ${it.message}" } ?: "idle"}")
-                appendLine("Journal     : ${if (recoveryJournal.isAvailable) "available" else "unavailable (${recoveryJournal.lastStorageError})"}")
-                appendLine("Next step   : ${RecoveryAdvisor.recommendation(records)}")
-                appendLine("Recent events:")
-                if (records.isEmpty()) appendLine("  none") else records.takeLast(12).forEach { appendLine("  ${it.toReportLine()}") }
-            }
+            val diagnosticBuild = DiagnosticBuildIdentity(
+                packageName = context.packageName,
+                versionName = BuildConfig.VERSION_NAME,
+                versionCode = BuildConfig.VERSION_CODE.toLong(),
+                abi = "${Build.SUPPORTED_ABIS.joinToString(", ").ifBlank { "unavailable" }} (process ${if (android.os.Process.is64Bit()) "64-bit" else "32-bit"})",
+                sourceCommit = BuildConfig.SOURCE_COMMIT,
+            )
+            val diagnosticDevice = DiagnosticDeviceIdentity(
+                manufacturer = Build.MANUFACTURER,
+                model = Build.MODEL,
+                androidRelease = Build.VERSION.RELEASE,
+                apiLevel = Build.VERSION.SDK_INT,
+            )
+            fun createDiagnosticReportSnapshot(): String = buildDiagnosticReport(
+                build = diagnosticBuild,
+                device = diagnosticDevice,
+                engineVersion = health.engineVersion,
+                engineAbiVersion = health.abiVersion,
+                nativeLibraryLoaded = health.nativeLibraryLoaded,
+                nativeLibraryError = health.problem,
+                nativeEngineInitialized = engine.isNativeEngineInitialized,
+                requestedBackend = settings.backend.name,
+                effectiveBackend = effectiveSettings.backend.name,
+                rendererInfo = surfaceViewState?.rendererInfo?.value ?: noRendererInfo.value,
+                stats = surfaceViewState?.stats?.value ?: noRendererStats.value,
+                diagnosticRung = selectedDiagnosticRung,
+                effectiveDiagnosticRung = surfaceViewState?.effectiveDiagnosticRung?.value
+                    ?: effectiveDiagnosticRung,
+                pixelCheck = surfaceViewState?.renderedPixelCheck?.value ?: noRenderedPixelCheck.value,
+                lastError = surfaceViewState?.error?.value ?: noRendererError.value,
+            )
+            val report = createDiagnosticReportSnapshot()
             DiagnosticsDialog(
                 report = report,
                 recoveryStatus = recoveryStatus?.let { "${it.phase}: ${it.message}" },
@@ -679,8 +659,20 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 onExportReport = {
-                    recoveryReportToSave = report
-                    recoveryReportLauncher.launch("avatarforge-recovery-${System.currentTimeMillis()}.txt")
+                    diagnosticReportToSave = createDiagnosticReportSnapshot()
+                    diagnosticReportLauncher.launch("avatarforge-diagnostics-${System.currentTimeMillis()}.txt")
+                },
+                onShareReport = {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "AvatarForge diagnostic report")
+                        putExtra(Intent.EXTRA_TEXT, createDiagnosticReportSnapshot())
+                    }
+                    runCatching {
+                        startActivity(Intent.createChooser(shareIntent, "Share diagnostics"))
+                    }.onFailure {
+                        Toast.makeText(context, "Unable to open a diagnostics sharing app", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 onClearJournal = {
                     surfaceView?.clearRecoveryJournal() ?: recoveryJournal.clear()

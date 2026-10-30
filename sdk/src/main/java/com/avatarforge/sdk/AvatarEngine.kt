@@ -378,7 +378,10 @@ class AvatarEngine private constructor(private val appContext: Context) {
      *  when the process is going away. */
     private val jobs = mutableListOf<JobHandle>()
 
-    private var handle: Long = 0L
+    @Volatile private var handle: Long = 0L
+
+    /** True only when the native engine already exists; reading diagnostics never creates it. */
+    val isNativeEngineInitialized: Boolean get() = !released && handle != 0L
 
     /** Number of ARKit channels the kernel exposes; resolved once per process. */
     private val blendshapeChannelCount: Int by lazy {

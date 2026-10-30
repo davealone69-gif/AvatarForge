@@ -11,6 +11,15 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val diagnosticSourceCommit = providers.gradleProperty("af.sourceCommit").orNull ?: runCatching {
+    val process = ProcessBuilder("git", "rev-parse", "HEAD")
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+    if (process.waitFor() == 0 && output.matches(Regex("[0-9a-fA-F]{7,40}"))) output else ""
+}.getOrDefault("")
+
 /* Production signing is intentionally not configured. Only the debug variant is installable;
    release-variant outputs are unsigned compile/package checks and must not be distributed. */
 val allowUnsignedRelease = providers.gradleProperty("af.allowUnsignedRelease").orNull == "true"
@@ -26,6 +35,7 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "0.10.1"
+        buildConfigField("String", "SOURCE_COMMIT", "\"$diagnosticSourceCommit\"")
 
         /* Same ABIs as the SDK module; the native libraries arrive through the :sdk dependency. */
         /* Override the ABI list for a low-RAM build machine: -Paf.abIs=arm64-v8a builds one
@@ -53,6 +63,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         /* Pinned to the Kotlin version in the root build file: the Compose compiler is a Kotlin

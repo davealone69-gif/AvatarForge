@@ -1113,10 +1113,11 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererIn
     af::Renderer* renderer = rendererHandle ? rendererHandle->renderer.get() : nullptr;
     if (!renderer) return AF_ERR_INVALID_ARG;
     const af::RendererInfo info = renderer->info();
-    if (outStrings && env->GetArrayLength(outStrings) >= 4) {
-        const char* texts[4] = {info.backend.c_str(), info.deviceName.c_str(), info.apiVersion.c_str(),
-                                info.driver.c_str()};
-        for (int i = 0; i < 4; ++i) {
+    if (outStrings && env->GetArrayLength(outStrings) >= 6) {
+        const char* texts[6] = {info.backend.c_str(), info.deviceName.c_str(), info.apiVersion.c_str(),
+                                info.driver.c_str(), info.shadingLanguageVersion.c_str(),
+                                info.vulkanInitializationWarning.c_str()};
+        for (int i = 0; i < 6; ++i) {
             jstring text = env->NewStringUTF(texts[i]);
             env->SetObjectArrayElement(outStrings, i, text);
             env->DeleteLocalRef(text);

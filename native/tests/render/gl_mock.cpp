@@ -224,6 +224,7 @@ const GLubyte* glGetString(GLenum key) {
     if (key == GL_VERSION) result = state.version.c_str();
     if (key == GL_RENDERER) result = state.rendererName.c_str();
     if (key == GL_VENDOR) result = state.vendorName.c_str();
+    if (key == GL_SHADING_LANGUAGE_VERSION) result = state.shadingLanguageVersion.c_str();
     return reinterpret_cast<const GLubyte*>(result);
 }
 const GLubyte* glGetStringi(GLenum key, GLuint index) {

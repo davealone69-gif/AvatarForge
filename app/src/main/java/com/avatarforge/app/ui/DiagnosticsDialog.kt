@@ -36,6 +36,7 @@ fun DiagnosticsDialog(
     onCheckRenderedPixels: () -> Unit,
     onSafeRecovery: () -> Unit,
     onExportReport: () -> Unit,
+    onShareReport: () -> Unit,
     onClearJournal: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -81,6 +82,7 @@ fun DiagnosticsDialog(
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
                     TextButton(onClick = onCheckRenderedPixels) { Text("Check visible pixels") }
                     TextButton(onClick = onSafeRecovery) { Text("Safe recovery") }
+                    TextButton(onClick = onShareReport) { Text("Share report") }
                     TextButton(onClick = onExportReport) { Text("Export report") }
                     TextButton(onClick = {
                         onClearJournal()

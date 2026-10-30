@@ -91,6 +91,7 @@ typedef signed char GLbyte; typedef unsigned char GLubyte;
 #define GL_NUM_EXTENSIONS 0x821D
 #define GL_RENDERER 0x1F01
 #define GL_VENDOR 0x1F00
+#define GL_SHADING_LANGUAGE_VERSION 0x8B8C
 #ifdef __cplusplus
 extern "C" {
 #endif
