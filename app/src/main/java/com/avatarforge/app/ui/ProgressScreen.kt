@@ -38,7 +38,8 @@ import com.avatarforge.sdk.Stage
 @Composable
 fun ProgressScreen(
     status: JobStatus,
-    onCancel: () -> Unit,
+    hasPreservedCharacter: Boolean,
+    onEmergencyStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -52,6 +53,14 @@ fun ProgressScreen(
         Text(
             "Everything below happens on this device: no server, no upload, no network. You can turn the radio off and it will still finish.",
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            if (hasPreservedCharacter)
+                "Emergency stop discards only this candidate build. Your previously loaded character and renderer remain available."
+            else
+                "Emergency stop discards only this candidate build and its optional reference-image inputs. Generation can be restarted, but it does not resume mid-stage.",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
@@ -91,8 +100,8 @@ fun ProgressScreen(
         }
 
         Spacer(Modifier.weight(1f))
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text(if (status.failed) "Back" else "Cancel")
+        OutlinedButton(onClick = onEmergencyStop, modifier = Modifier.fillMaxWidth()) {
+            Text(if (hasPreservedCharacter) "Emergency Stop · Return to Character" else "Emergency Stop Generation")
         }
     }
 }

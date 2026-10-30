@@ -1,41 +1,9 @@
 /*
  * AvatarForge :: KernelAccess.kt
  *
- * One process-wide fence between the code that *mutates* the kernel mesh and the code that
- * *reads* it.
- *
- * Why this exists
- * ---------------
- * The renderer is zero-copy: `af_renderer_attach_engine` hands it the engine's own vertex, index,
- * material and texture arrays, so the GL upload in `ensureGeometryBuffers()` reads the exact memory
- * that `af_engine_apply_blendshapes()` / `af_engine_apply_clip()` / `af_engine_apply_pose()` write.
- * Those writes arrive from a different thread than the GL thread:
- *
- *   * expression sliders run on the render thread (posting through RenderSurfaceView) but a host
- *     may call the SDK from its own thread;
- *   * clip playback runs on the render thread from inside `renderFrame()`;
- *   * `af_engine_run_all()` (generation, export rebuild, prompt parse) runs on the SDK's engine
- *     dispatcher.
- *
- * Without a shared lock a frame can upload a half-deformed mesh (torn vertices), and a pick on the
- * UI thread can raycast against vertices that the GL thread is rewriting at the same time. Both are
- * data races that a JVM unit test cannot see and that a phone shows as a one-frame band of stretched
- * triangles or a wrong region id - exactly the class of intermittent defect that is impossible to
- * diagnose from a screenshot.
- *
- * What it is not
- * --------------
- * Not a "thread safety" claim about the whole SDK. It is a reentrant mutex, held for the shortest
- * window that touches shared native geometry. Renderer state that only the GL thread reads (camera,
- * options, overlays, clip selection) is deliberately *outside* the lock, so the UI can keep dragging
- * the camera while a generation job holds the mesh.
- *
- * Lock ordering: there is exactly one lock. Nothing acquires another lock while holding it, so it
- * cannot deadlock with itself. Native -> Kotlin callbacks (`onProgress`, `onLog`, `shouldCancel`)
- * never acquire it, which is what keeps a locked `engineRunAll()` from re-entering.
- *
- * The helpers are intentionally not `inline`: a non-inline generic keeps the visibility rules simple
- * and the call sites are JNI-bound, where a single lambda allocation is noise.
+ * Per-engine fences between code that mutates a kernel mesh and code that reads it. A render frame
+ * and its attached engine share one fence; an isolated generation engine uses another, so an
+ * emergency stop can leave the currently displayed character animating while the build unwinds.
  */
 package com.avatarforge.sdk.internal
 
@@ -43,36 +11,77 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 
 internal object KernelAccess {
+    private class FenceEntry {
+        val lock = ReentrantLock()
+        var users = 0
+    }
 
-    private val lock = ReentrantLock()
+    private val registryLock = Any()
+    private val locks = mutableMapOf<Long, FenceEntry>()
 
-    /** Runs [block] while holding the kernel fence, releasing it even when [block] throws. */
-    fun <T> withKernel(block: () -> T): T {
-        lock.lock()
-        try {
-            return block()
-        } finally {
-            lock.unlock()
+    /** Acquires a registry reference before waiting, so an entry cannot be removed under a waiter. */
+    private fun lease(handle: Long): FenceEntry = synchronized(registryLock) {
+        val entry = locks.getOrPut(handle) { FenceEntry() }
+        entry.users++
+        entry
+    }
+
+    private fun release(handle: Long, entry: FenceEntry, unlock: Boolean) {
+        if (unlock) entry.lock.unlock()
+        synchronized(registryLock) {
+            entry.users--
+            if (entry.users == 0 && locks[handle] === entry) locks.remove(handle)
         }
     }
 
+    /** Compatibility fence for operations that do not yet have an engine handle. */
+    fun <T> withKernel(block: () -> T): T = withKernels(0L, block = block)
+
+    /** Runs [block] while holding the fence for [engineHandle]. */
+    fun <T> withKernel(engineHandle: Long, block: () -> T): T =
+        withKernels(engineHandle, block = block)
+
     /**
-     * Bounded variant for callers that must never block a user-visible thread for long (picking a
-     * region from a tap). Returns null when the fence could not be taken in time - a dropped pick is
-     * honest ("nothing picked"), whereas a torn raycast would report a region that is not on screen.
+     * Takes multiple engine fences in stable handle order while a renderer swaps its backing mesh.
+     * Distinct non-zero handles are used; zero is the compatibility fence for handle-free calls.
      */
-    fun <T> tryWithKernel(timeoutMs: Long, block: () -> T): T? {
+    fun <T> withKernels(vararg engineHandles: Long, block: () -> T): T {
+        val handles = engineHandles.filter { it != 0L }.distinct().sorted().ifEmpty { listOf(0L) }
+        val leased = handles.map { it to lease(it) }
+        leased.forEach { (_, entry) -> entry.lock.lock() }
+        try {
+            return block()
+        } finally {
+            leased.asReversed().forEach { (handle, entry) -> release(handle, entry, unlock = true) }
+        }
+    }
+
+    /** Bounded variant for user-visible ray picking; null means the fence was not obtained in time. */
+    fun <T> tryWithKernel(engineHandle: Long, timeoutMs: Long, block: () -> T): T? {
+        val entry = lease(engineHandle)
         val acquired = try {
-            lock.tryLock(timeoutMs, TimeUnit.MILLISECONDS)
+            entry.lock.tryLock(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             false
         }
-        if (!acquired) return null
+        if (!acquired) {
+            release(engineHandle, entry, unlock = false)
+            return null
+        }
         try {
             return block()
         } finally {
-            lock.unlock()
+            release(engineHandle, entry, unlock = true)
+        }
+    }
+
+    /** Removes a fence after its native handle has been destroyed and all users have detached. */
+    fun forget(engineHandle: Long) {
+        if (engineHandle == 0L) return
+        synchronized(registryLock) {
+            val entry = locks[engineHandle] ?: return
+            if (entry.users == 0 && !entry.lock.isLocked) locks.remove(engineHandle)
         }
     }
 }

@@ -177,25 +177,62 @@ data class EngineResult(
  * half-built mesh is never handed to the renderer, because the kernel reports the cancellation and
  * the job releases the handle.
  */
+/** Opaque, one-shot permission to retire the previous engine after its replacement is attached. */
+class EngineRetirement internal constructor(
+    private val engine: AvatarEngine,
+    private val handle: Long,
+) {
+    private val retired = AtomicBoolean(false)
+
+    /** Call only after the render surface has attached the replacement engine. */
+    fun retire() {
+        if (retired.compareAndSet(false, true)) engine.retire(handle)
+    }
+}
+
 class JobHandle internal constructor(
     private val engine: AvatarEngine,
-    private val request: GenerationRequest,
+    request: GenerationRequest,
     private val parentJob: Job,
 ) {
+    @Volatile private var request = request
     private val _status = MutableStateFlow(JobStatus(running = true, stage = Stage.ANALYZE_INPUTS))
     val status: StateFlow<JobStatus> = _status.asStateFlow()
 
     private val cancelRequested = AtomicBoolean(false)
+    private val completionLock = Any()
+    private var terminal = false
+    private val builtEngineHandle = AtomicLong(0L)
     private val completion = CompletableDeferred<EngineResult>()
+
+    init {
+        /* A stop can arrive before the executor starts this job; do not leave await() suspended. */
+        parentJob.invokeOnCompletion { cause ->
+            if (cause is kotlinx.coroutines.CancellationException) synchronized(completionLock) {
+                if (!terminal) {
+                    terminal = true
+                    completion.completeExceptionally(cause)
+                    _status.value = _status.value.copy(running = false, cancelled = true, message = "Cancelled")
+                }
+            }
+        }
+    }
 
     /** Stable id for UI history; also names the exported file. */
     val id: Long = nextJobId.getAndIncrement()
 
     /** Requests cancellation. The kernel polls this at every stage boundary. */
     fun cancel() {
-        cancelRequested.set(true)
-        parentJob.cancel()
+        synchronized(completionLock) {
+            if (terminal) return
+            cancelRequested.set(true)
+            releaseOptionalInputs()
+            parentJob.cancel()
+        }
     }
+
+    /** Emergency stop is cooperative: it discards the isolated build, never the active character. */
+    fun emergencyStop() = cancel()
 
     val isCancelled: Boolean get() = cancelRequested.get()
 
@@ -209,10 +246,43 @@ class JobHandle internal constructor(
     internal fun current(): JobStatus = _status.value
 
     internal val requestSpec: AvatarSpec get() = request.spec
+    internal val generationRequest: GenerationRequest get() = request
+
+    internal fun releaseOptionalInputs() {
+        val current = request
+        if (current.imageA != null || current.imageB != null) {
+            request = current.copy(imageA = null, imageB = null)
+        }
+    }
+
+    internal fun retainBuiltEngine(handle: Long) {
+        check(handle != 0L) { "cannot retain an invalid generation engine" }
+        check(builtEngineHandle.compareAndSet(0L, handle)) { "generation engine already retained" }
+    }
+
+    internal fun takeBuiltEngine(): Long = builtEngineHandle.getAndSet(0L)
 
     internal fun deliver(result: Result<EngineResult>) {
+        synchronized(completionLock) {
+            if (terminal) return
+            terminal = true
+            _status.value = _status.value.copy(running = false)
+            result.fold({ completion.complete(it) }, { completion.completeExceptionally(it) })
+        }
+    }
+
+    /** Atomically transfers the candidate handle to this job before publishing successful completion. */
+    internal fun deliverSuccess(result: EngineResult, handle: Long): Boolean = synchronized(completionLock) {
+        if (terminal || cancelRequested.get() || parentJob.isCancelled) return@synchronized false
+        check(handle != 0L) { "cannot complete with an invalid generation engine" }
+        check(builtEngineHandle.compareAndSet(0L, handle)) { "generation engine already retained" }
+        terminal = true
         _status.value = _status.value.copy(running = false)
-        result.fold({ completion.complete(it) }, { completion.completeExceptionally(it) })
+        completion.complete(result)
+    }
+
+    internal fun markTerminalFailure() {
+        synchronized(completionLock) { terminal = true }
     }
 
     internal fun shouldCancel(): Boolean = cancelRequested.get() || parentJob.isCancelled
@@ -378,7 +448,9 @@ class AvatarEngine private constructor(private val appContext: Context) {
      *  when the process is going away. */
     private val jobs = mutableListOf<JobHandle>()
 
-    private var handle: Long = 0L
+    @Volatile private var handle: Long = 0L
+    private val handleMutex = Any()
+    private val retiredHandles = LinkedHashSet<Long>()
 
     /** Number of ARKit channels the kernel exposes; resolved once per process. */
     private val blendshapeChannelCount: Int by lazy {
@@ -404,34 +476,39 @@ class AvatarEngine private constructor(private val appContext: Context) {
      */
 
     /** Applies local joint rotations (quaternions XYZW, jointCount * 4). */
-    fun applyPose(quats: FloatArray): Boolean = KernelAccess.withKernel {
-        NativeBridge.engineApplyPose(openHandle(), quats) == 0
+    fun applyPose(quats: FloatArray): Boolean {
+        val h = openHandle()
+        return KernelAccess.withKernel(h) { NativeBridge.engineApplyPose(h, quats) == 0 }
     }
 
     /** Fills [out] with the clip's pose at [time] seconds without applying it. */
-    fun sampleClip(clip: Int, time: Float, out: FloatArray): Boolean = KernelAccess.withKernel {
-        NativeBridge.engineSampleClip(openHandle(), clip, time, out) == 0
+    fun sampleClip(clip: Int, time: Float, out: FloatArray): Boolean {
+        val h = openHandle()
+        return KernelAccess.withKernel(h) { NativeBridge.engineSampleClip(h, clip, time, out) == 0 }
     }
 
     /** Applies a clip pose at [time] to the mesh. AF_CLIP_REST re-derives the bind pose. */
-    fun applyClip(clip: Int, time: Float): Boolean = KernelAccess.withKernel {
-        NativeBridge.engineApplyClip(openHandle(), clip, time) == 0
+    fun applyClip(clip: Int, time: Float): Boolean {
+        val h = openHandle()
+        return KernelAccess.withKernel(h) { NativeBridge.engineApplyClip(h, clip, time) == 0 }
     }
 
     /** Applies the ARKit blendshape weights (0..1 each), in [blendshapeNames] order. */
-    fun applyBlendshapes(weights: FloatArray): Boolean = KernelAccess.withKernel {
+    fun applyBlendshapes(weights: FloatArray): Boolean {
+        val h = openHandle()
         /* Cached: this runs on the render thread for every slider frame, and asking the kernel for
            its 52 names each time would allocate a JNI string array per frame. */
         val expected = blendshapeChannelCount
         require(weights.size == expected) { "expected $expected blendshape weights, got ${weights.size}" }
-        NativeBridge.engineApplyBlendshapes(openHandle(), weights) == 0
+        return KernelAccess.withKernel(h) { NativeBridge.engineApplyBlendshapes(h, weights) == 0 }
     }
 
     /** Mesh counters: [vertices, indices, submeshes, joints, materials]. */
-    fun counts(): IntArray = KernelAccess.withKernel {
+    fun counts(): IntArray {
+        val h = openHandle()
         val out = IntArray(5)
-        NativeBridge.engineCounts(openHandle(), out)
-        out
+        KernelAccess.withKernel(h) { NativeBridge.engineCounts(h, out) }
+        return out
     }
 
     /** Human-readable name of an `af_region` id, straight from the kernel's own table. */
@@ -447,8 +524,10 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return -1
     }
 
-    fun clipDuration(clip: Int): Float =
-        KernelAccess.withKernel { NativeBridge.engineClipDuration(openHandle(), clip) }
+    fun clipDuration(clip: Int): Float {
+        val h = openHandle()
+        return KernelAccess.withKernel(h) { NativeBridge.engineClipDuration(h, clip) }
+    }
 
     fun blendshapeNames(): List<String> = NativeBridge.engineBlendshapeNames().toList()
 
@@ -456,7 +535,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
     /* ------------------------------------------------------------------ lifecycle ------------ */
 
-    private fun openHandle(): Long {
+    private fun openHandle(): Long = synchronized(handleMutex) {
         check(!released) { "AvatarEngine has been released" }
         if (handle == 0L) {
             check(NativeBridge.available) {
@@ -470,7 +549,32 @@ class AvatarEngine private constructor(private val appContext: Context) {
             )
             check(handle != 0L) { "the kernel refused to create an engine: ${NativeBridge.engineLastError(0L)}" }
         }
-        return handle
+        handle
+    }
+
+    /** Promotes a completed isolated build and returns an opaque token for deferred old-engine cleanup. */
+    fun activate(job: JobHandle): EngineRetirement? {
+        val completedHandle = job.takeBuiltEngine()
+        check(completedHandle != 0L) { "generation did not retain a completed engine" }
+        synchronized(handleMutex) {
+            check(!released) { "AvatarEngine has been released" }
+            val previous = handle
+            handle = completedHandle
+            if (previous != 0L) retiredHandles += previous
+            return previous.takeIf { it != 0L }?.let { EngineRetirement(this, it) }
+        }
+    }
+
+    /** Releases a former active engine only after the render surface has attached its replacement. */
+    internal fun retire(handleToRetire: Long) {
+        if (handleToRetire == 0L) return
+        val shouldDestroy = synchronized(handleMutex) {
+            handleToRetire != handle && retiredHandles.remove(handleToRetire)
+        }
+        if (shouldDestroy) {
+            KernelAccess.withKernel(handleToRetire) { NativeBridge.engineDestroy(handleToRetire) }
+            KernelAccess.forget(handleToRetire)
+        }
     }
 
     fun release() {
@@ -482,14 +586,17 @@ class AvatarEngine private constructor(private val appContext: Context) {
            handle while engineRunAll/export is still reading it is a use-after-free. */
         scope.launch {
             snapshot.forEach { runCatching { it.await() } }
-            /* Destroying the handle frees the arrays the renderer may still be uploading, so the
-               fence is taken here too: a frame in flight either finishes first or sees a 0 handle. */
-            KernelAccess.withKernel {
-                if (handle != 0L) {
-                    NativeBridge.engineDestroy(handle)
+            val unclaimed = snapshot.mapNotNull { it.takeBuiltEngine().takeIf { h -> h != 0L } }
+            val owned = synchronized(handleMutex) {
+                (listOf(handle) + retiredHandles + unclaimed).filter { it != 0L }.distinct().also {
                     handle = 0L
+                    retiredHandles.clear()
                 }
             }
+            KernelAccess.withKernels(*owned.toLongArray()) {
+                owned.forEach(NativeBridge::engineDestroy)
+            }
+            owned.forEach(KernelAccess::forget)
             engineDispatcher.close()
         }
     }
@@ -541,11 +648,11 @@ class AvatarEngine private constructor(private val appContext: Context) {
         require(images.isNotEmpty() && images.size <= 4) { "1 to 4 reference images are supported" }
         /* Analysis writes measured colours/stature into the kernel's spec state; fence it so a
            concurrent frame cannot read a half-updated spec. */
-        return KernelAccess.withKernel { analyseImagesLocked(images) }
+        val h = openHandle()
+        return KernelAccess.withKernel(h) { analyseImagesLocked(h, images) }
     }
 
-    private fun analyseImagesLocked(images: List<ImageReference>): List<ImageReference> {
-        val h = openHandle()
+    private fun analyseImagesLocked(h: Long, images: List<ImageReference>): List<ImageReference> {
         val n = images.size
         val widths = IntArray(n) { images[it].width }
         val heights = IntArray(n) { images[it].height }
@@ -610,13 +717,15 @@ class AvatarEngine private constructor(private val appContext: Context) {
     }
 
     /** Runs the prompt parser only, and returns the resolved spec plus the match count. */
-    fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec =
-        KernelAccess.withKernel { parsePromptLocked(prompt, base) }
-
-    private fun parsePromptLocked(prompt: String, base: AvatarSpec): AvatarSpec {
-        val h = openHandle()
+    fun parsePrompt(prompt: String, base: AvatarSpec = AvatarSpec()): AvatarSpec {
         val resolvedBase = if (base.heightM.isFinite() && base.heightM > 0f) base
                            else base.copy(heightM = AvatarSpec.DEFAULT_HEIGHT_M)
+        return withTemporaryHandle(resolvedBase) { h ->
+            KernelAccess.withKernel(h) { parsePromptLocked(h, prompt, resolvedBase) }
+        }
+    }
+
+    private fun parsePromptLocked(h: Long, prompt: String, resolvedBase: AvatarSpec): AvatarSpec {
         /* Prompt analysis mutates the native handle. Reset first so a previous generation cannot
            leak its stature or measurements into this parse. */
         val resetRc = NativeBridge.engineReset(
@@ -634,32 +743,53 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return mergePrompted(resolvedBase, spec)
     }
 
+    private fun <T> withTemporaryHandle(spec: AvatarSpec, block: (Long) -> T): T {
+        check(!released) { "AvatarEngine has been released" }
+        check(NativeBridge.available) {
+            "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
+        }
+        val temporary = NativeBridge.engineCreate(spec.packInts(), spec.packFloats(), spec.prompt, null)
+        check(temporary != 0L) {
+            "the kernel refused a temporary engine: ${NativeBridge.engineLastError(0L)}"
+        }
+        try {
+            return block(temporary)
+        } finally {
+            KernelAccess.withKernel(temporary) { NativeBridge.engineDestroy(temporary) }
+            KernelAccess.forget(temporary)
+        }
+    }
+
     /* ------------------------------------------------------------------ export ---------------- */
 
     /** Writes the current result to [destination] (app-scoped storage) and returns the file. */
-    fun exportGlb(source: EngineResult, destination: File): File = KernelAccess.withKernel {
+    fun exportGlb(source: EngineResult, destination: File): File {
         val h = openHandle()
-        requery(h, source.spec)
-        destination.parentFile?.mkdirs()
-        val rc = NativeBridge.engineExportGlb(h, destination.absolutePath)
-        check(rc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
-        destination
+        return KernelAccess.withKernel(h) {
+            requery(h, source.spec)
+            destination.parentFile?.mkdirs()
+            val rc = NativeBridge.engineExportGlb(h, destination.absolutePath)
+            check(rc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
+            destination
+        }
     }
 
     /** Exports the same .glb to memory: the SDK contract offers both, and callers embedding the
      *  model in another container need the bytes without a second file. */
-    fun exportGlbBytes(source: EngineResult): ByteArray = KernelAccess.withKernel {
+    fun exportGlbBytes(source: EngineResult): ByteArray {
         val h = openHandle()
-        requery(h, source.spec)
-        val size = NativeBridge.engineExportGlbBytes(h, null)
-        check(size > 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
-        val buffer = ByteBuffer.allocateDirect(size.toInt()).order(ByteOrder.nativeOrder())
-        val written = NativeBridge.engineExportGlbBytes(h, buffer)
-        check(written == size) { "GLB export produced $written bytes, expected $size" }
-        val out = ByteArray(size.toInt())
-        buffer.rewind()
-        buffer.get(out)
-        out
+        return KernelAccess.withKernel(h) {
+            requery(h, source.spec)
+            val size = NativeBridge.engineExportGlbBytes(h, null)
+            check(size > 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
+            val buffer = ByteBuffer.allocateDirect(size.toInt()).order(ByteOrder.nativeOrder())
+            val written = NativeBridge.engineExportGlbBytes(h, buffer)
+            check(written == size) { "GLB export produced $written bytes, expected $size" }
+            val out = ByteArray(size.toInt())
+            buffer.rewind()
+            buffer.get(out)
+            out
+        }
     }
 
     /* ------------------------------------------------------------------ internals ------------- */
@@ -689,33 +819,41 @@ class AvatarEngine private constructor(private val appContext: Context) {
             lastProgressMs = 0L
             logLines.clear()
             val timings = LinkedHashMap<Stage, Float>()
+            var buildHandle = 0L
             try {
-                request.spec.requireGeneratable(request.prompt)
+                var buildRequest = handleObj.generationRequest
+                buildRequest.spec.requireGeneratable(buildRequest.prompt)
                 check(NativeBridge.available) {
                     "AvatarForge native library is not loaded: ${NativeBridge.loadError ?: "unknown reason"}"
                 }
-                val h = openHandle()
-                NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
-                val resetRc = KernelAccess.withKernel {
+                buildHandle = NativeBridge.engineCreate(
+                    buildRequest.spec.packInts(), buildRequest.spec.packFloats(), buildRequest.prompt, callbackBridge,
+                )
+                check(buildHandle != 0L) {
+                    "the kernel refused a generation engine: ${NativeBridge.engineLastError(0L)}"
+                }
+                val h = buildHandle
+                NativeBridge.engineSetMemoryBudget(h, buildRequest.memoryBudgetBytes)
+                val resetRc = KernelAccess.withKernel(h) {
                     NativeBridge.engineReset(
-                        h, request.spec.packInts(), request.spec.packFloats(), request.prompt,
+                        h, buildRequest.spec.packInts(), buildRequest.spec.packFloats(), buildRequest.prompt,
                     )
                 }
                 check(resetRc == 0) { "generation setup failed: ${NativeBridge.engineLastError(h)}" }
 
                 /* Images go in before the prompt so the prompt can override what the photo implied:
-                   the user typed the prompt last, so it wins. */
-                if (request.imageA != null || request.imageB != null) {
-                    val list = listOfNotNull(request.imageA, request.imageB)
-                    analyseImages(list)
+                   the user typed the prompt last, so it wins. Release their buffers after analysis. */
+                if (buildRequest.imageA != null || buildRequest.imageB != null) {
+                    val list = listOfNotNull(buildRequest.imageA, buildRequest.imageB)
+                    analyseImagesLocked(h, list)
+                    buildRequest = buildRequest.copy(imageA = null, imageB = null)
+                    handleObj.releaseOptionalInputs()
                 }
 
                 currentStage = handleObj
-                /* The whole build rewrites the kernel's vertex/index/texture arrays. Holding the
-                   fence for its duration means a renderer attached in another window cannot upload
-                   a half-built mesh; nothing else on the render thread blocks on this lock except
-                   the frame upload itself. */
-                val rc = KernelAccess.withKernel { NativeBridge.engineRunAll(h) }
+                /* The candidate mesh has its own fence; the active renderer continues using its
+                   unchanged engine and can keep drawing while this build runs or is cancelled. */
+                val rc = KernelAccess.withKernel(h) { NativeBridge.engineRunAll(h) }
                 currentStage = null
                 if (rc != 0) {
                     if (rc == CANCELLED) {
@@ -729,18 +867,18 @@ class AvatarEngine private constructor(private val appContext: Context) {
                 /* Collect the statistics the result reports. */
                 val statsFloats = FloatArray(9)
                 val statsLongs = LongArray(11)
-                NativeBridge.engineStats(h, statsFloats, statsLongs)
+                KernelAccess.withKernel(h) { NativeBridge.engineStats(h, statsFloats, statsLongs) }
 
                 val regions = (0 until REGION_COUNT).map { NativeBridge.engineRegionName(it) }
                 val file = File(engineOutputDir(appContext), "avatar-${handleObj.id}.glb")
                 file.parentFile?.mkdirs()
-                val exportRc = KernelAccess.withKernel {
+                val exportRc = KernelAccess.withKernel(h) {
                     NativeBridge.engineExportGlb(h, file.absolutePath)
                 }
                 check(exportRc == 0) { "GLB export failed: ${NativeBridge.engineLastError(h)}" }
 
                 val counters = IntArray(5)
-                NativeBridge.engineCounts(h, counters)
+                KernelAccess.withKernel(h) { NativeBridge.engineCounts(h, counters) }
 
                 timings[Stage.FIT_ANATOMY] = statsFloats[0]
                 timings[Stage.GEOMETRY] = statsFloats[1] + statsFloats[2]
@@ -751,7 +889,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
 
                 val result = EngineResult(
                     glbFile = file,
-                    spec = request.spec,
+                    spec = buildRequest.spec,
                     vertexCount = counters[0],
                     triangleCount = counters[1] / 3,
                     submeshCount = counters[2],
@@ -771,6 +909,8 @@ class AvatarEngine private constructor(private val appContext: Context) {
                         elapsedMs = System.currentTimeMillis() - started,
                     )
                 )
+                handleObj.retainBuiltEngine(h)
+                buildHandle = 0L
                 handleObj.deliver(Result.success(result))
             } catch (t: Throwable) {
                 currentStage = null
@@ -786,6 +926,13 @@ class AvatarEngine private constructor(private val appContext: Context) {
                     )
                 )
                 handleObj.deliver(Result.failure(t))
+            } finally {
+                currentStage = null
+                handleObj.releaseOptionalInputs()
+                if (buildHandle != 0L) {
+                    KernelAccess.withKernel(buildHandle) { NativeBridge.engineDestroy(buildHandle) }
+                    KernelAccess.forget(buildHandle)
+                }
             }
         }
         return handleObj
@@ -854,11 +1001,11 @@ class AvatarEngine private constructor(private val appContext: Context) {
         /* Exporting a result other than the one currently in the engine means rebuilding it: the
            engine is a single-slot pipeline, and pretending otherwise would export the wrong avatar. */
         spec.requireGeneratable()
-        val resetRc = KernelAccess.withKernel {
+        val resetRc = KernelAccess.withKernel(h) {
             NativeBridge.engineReset(h, spec.packInts(), spec.packFloats(), spec.prompt)
         }
         check(resetRc == 0) { "rebuild setup failed: ${NativeBridge.engineLastError(h)}" }
-        val rc = KernelAccess.withKernel { NativeBridge.engineRunAll(h) }
+        val rc = KernelAccess.withKernel(h) { NativeBridge.engineRunAll(h) }
         check(rc == 0) { "rebuild for export failed: ${NativeBridge.engineLastError(h)}" }
     }
 

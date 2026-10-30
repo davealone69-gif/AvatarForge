@@ -14,14 +14,15 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              Native Vulkan (default) / GLES fallback ◀──┤
+                              GLES primary / Vulkan optional ◀──────────┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
 ## Status, in one paragraph
 
-The default renderer is **native Vulkan**, with **OpenGL ES 3.1 fallback** if Vulkan startup or runtime
-recovery fails. AvatarForge now gates that path on loader and physical-device Vulkan API 1.3 and
+The default renderer is **OpenGL ES 3.1**; **native Vulkan is optional** and remains unverified on the
+Samsung target phone. When explicitly selected, Vulkan startup can fall back to GLES. AvatarForge
+gates the Vulkan path on loader and physical-device Vulkan API 1.3 and
 compiles/validates shaders for `vulkan1.3`. The requested target label `1.3.304` is logged separately;
 `VkApplicationInfo` uses the standard `VK_API_VERSION_1_3` encoding (patch zero, since Vulkan ignores
 that field). The pinned NDK 26.1.10909125 headers are revision 1.3.237, not 1.3.304. The supplied
@@ -29,9 +30,11 @@ SM-S921B checker report is separate capability evidence, not proof that AvatarFo
 or produced visible pixels. The Vulkan path is **unverified in the app on a Samsung GPU**; see
 `docs/audit/VULKAN_TARGET_AUDIT.md` and `DEVICE.md` for current evidence and the on-device gate.
 Host regressions cover UV-atlas overflow, skinning cost, image bounds and frame-timing validity.
-Visible pixels and sustained performance/thermal behaviour remain unverified. Production signing is
-intentionally not provided; only a debug test APK and explicitly unsigned compile-only AAB/AAR artifacts
-are produced. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
+Visible pixels and sustained performance/thermal behaviour remain unverified. Resource profiles are
+qualitative starting points, not measured performance guarantees; the generated PBR atlas remains
+fixed-resolution. Emergency Stop discards an isolated candidate build while preserving the previous
+character and its renderer. Production signing is intentionally not provided; only a debug test APK
+and explicitly unsigned compile-only AAB/AAR artifacts are produced. See `DEVICE.md`.
 
 ## Repository layout
 
@@ -39,7 +42,7 @@ are produced. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Native Vulkan-default renderer with GLES 3.1 startup/recovery fallback; no game engine |
+| `native/src/render/` | GLES-primary renderer with optional native Vulkan and GLES recovery fallback; no game engine |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
 | `rust/af-sys/`, `rust/af/` | Raw FFI bindings and the safe Rust wrapper |
@@ -111,8 +114,8 @@ bash tools/test_renderer_host.sh      # renderer fault-injection regressions
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** Native Vulkan is the default, with GLES 3.1 as explicit
-  choice and bounded fallback; no third-party engine is linked.
+* **The custom renderer stays custom.** GLES 3.1 is primary; native Vulkan is an optional explicit
+  choice with bounded GLES fallback; no third-party engine is linked.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
 
 ## Licence

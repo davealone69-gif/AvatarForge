@@ -324,6 +324,27 @@ pub extern "C" fn af_engine_set_memory_budget(engine: *mut c_void, bytes: u64) -
 }
 
 #[no_mangle]
+pub extern "C" fn af_engine_set_gpu_hint(engine: *mut c_void, hint: *const c_char) -> i32 {
+    let e = match unsafe { as_engine(engine) } {
+        Some(e) => e,
+        None => return AF_ERR_INVALID_ARG,
+    };
+    if hint.is_null() {
+        return AF_ERR_INVALID_ARG;
+    }
+
+    /* Match snprintf(stats.gpu_hint, 64, "%s", hint): copy at most 63 bytes, write
+    one terminator, and leave bytes after that terminator untouched. */
+    let bytes = unsafe { std::ffi::CStr::from_ptr(hint) }.to_bytes();
+    let copied = bytes.len().min(63);
+    for (dst, src) in e.stats.gpu_hint[..copied].iter_mut().zip(&bytes[..copied]) {
+        *dst = *src as c_char;
+    }
+    e.stats.gpu_hint[copied] = 0;
+    AF_OK
+}
+
+#[no_mangle]
 pub extern "C" fn af_engine_fit_anatomy(engine: *mut c_void) -> i32 {
     let e = match unsafe { as_engine(engine) } {
         Some(e) => e,
@@ -518,9 +539,62 @@ mod tests {
         assert_eq!(af_engine_reset(core::ptr::null_mut(), core::ptr::null()), AF_ERR_INVALID_ARG);
         assert_eq!(af_engine_fit_anatomy(core::ptr::null_mut()), AF_ERR_INVALID_ARG);
         assert_eq!(af_engine_set_memory_budget(core::ptr::null_mut(), 1 << 30), AF_ERR_INVALID_ARG);
+        assert_eq!(af_engine_set_gpu_hint(core::ptr::null_mut(), core::ptr::null()), AF_ERR_INVALID_ARG);
         assert_eq!(af_engine_stats(core::ptr::null(), core::ptr::null_mut()), AF_ERR_INVALID_ARG);
         af_engine_destroy(core::ptr::null_mut());   /* must be a no-op, not a crash */
         assert_eq!(af_engine_last_error(core::ptr::null()), af_engine_last_error(core::ptr::null()));
+    }
+
+    #[test]
+    fn gpu_hint_matches_native_bounded_snprintf_behavior() {
+        let (h, _spec) = create();
+        {
+            let e = unsafe { as_engine(h).unwrap() };
+            e.stats.vertex_count = 17;
+            e.stats.texture_bytes = 1234;
+            e.stats.fit_anatomy_ms = 3.5;
+        }
+        let long = std::ffi::CString::new("x".repeat(80)).unwrap();
+        assert_eq!(af_engine_set_gpu_hint(h, long.as_ptr()), AF_OK);
+
+        let mut first = AfStats::zeroed();
+        assert_eq!(af_engine_stats(h, &mut first), AF_OK);
+        assert_eq!(first.vertex_count, 17);
+        assert_eq!(first.texture_bytes, 1234);
+        assert_eq!(first.fit_anatomy_ms, 3.5);
+        assert_eq!(&first.gpu_hint[..63], &[b'x' as c_char; 63]);
+        assert_eq!(first.gpu_hint[63], 0);
+
+        let short = std::ffi::CString::new("vk").unwrap();
+        assert_eq!(af_engine_set_gpu_hint(h, short.as_ptr()), AF_OK);
+        let mut second = AfStats::zeroed();
+        assert_eq!(af_engine_stats(h, &mut second), AF_OK);
+        assert_eq!(&second.gpu_hint[..3], &[b'v' as c_char, b'k' as c_char, 0]);
+        assert_eq!(&second.gpu_hint[3..], &first.gpu_hint[3..]);
+
+        /* C strings stop at the first NUL; snprintf leaves the remaining array bytes unchanged. */
+        let embedded_nul = [b'g' as c_char, 0, b'X' as c_char, 0];
+        assert_eq!(af_engine_set_gpu_hint(h, embedded_nul.as_ptr()), AF_OK);
+        let mut third = AfStats::zeroed();
+        assert_eq!(af_engine_stats(h, &mut third), AF_OK);
+        assert_eq!(&third.gpu_hint[..2], &[b'g' as c_char, 0]);
+        assert_eq!(&third.gpu_hint[2..], &second.gpu_hint[2..]);
+
+        let empty = std::ffi::CString::new("").unwrap();
+        assert_eq!(af_engine_set_gpu_hint(h, empty.as_ptr()), AF_OK);
+        let mut fourth = AfStats::zeroed();
+        assert_eq!(af_engine_stats(h, &mut fourth), AF_OK);
+        assert_eq!(fourth.gpu_hint[0], 0);
+        assert_eq!(&fourth.gpu_hint[1..], &third.gpu_hint[1..]);
+
+        assert_eq!(af_engine_set_gpu_hint(h, core::ptr::null()), AF_ERR_INVALID_ARG);
+        let mut after_error = AfStats::zeroed();
+        assert_eq!(af_engine_stats(h, &mut after_error), AF_OK);
+        assert_eq!(after_error.gpu_hint, fourth.gpu_hint);
+        assert_eq!(after_error.vertex_count, 17);
+        assert_eq!(after_error.texture_bytes, 1234);
+        assert_eq!(after_error.fit_anatomy_ms, 3.5);
+        af_engine_destroy(h);
     }
 
     #[test]

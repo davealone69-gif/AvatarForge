@@ -21,7 +21,7 @@ pub enum Error {
     Unsupported(String),
     /// A prerequisite stage has not run yet (e.g. rigging before geometry).
     NotReady(String),
-    /// Reading or writing a file failed (export targets only).
+    /// Reading or writing a file failed.
     Io(String),
     /// `cancel()` was requested through the callbacks and the kernel stopped at a safe point.
     Cancelled,

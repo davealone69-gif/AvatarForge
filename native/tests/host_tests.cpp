@@ -2356,6 +2356,46 @@ static void testScene() {
  *  submeshes, regions and materials replaced wholesale, generated state (rig, field, atlas)
  *  invalidated rather than left stale, and a rejected file leaving the engine exactly as it was.
  * ============================================================================================== */
+static std::vector<uint8_t> makeExternalTextureFixtureGlb() {
+    const std::string json =
+        "{\"asset\":{\"version\":\"2.0\"},"
+        "\"buffers\":[{\"byteLength\":36}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}],"
+        "\"materials\":[{\"name\":\"fixture\",\"pbrMetallicRoughness\":{"
+        "\"baseColorFactor\":[0.25,0.5,0.75,1],\"metallicFactor\":0.2,\"roughnessFactor\":0.6,"
+        "\"baseColorTexture\":{\"index\":0}}}],"
+        "\"textures\":[{\"source\":0}],\"images\":[{\"uri\":\"fixture.png\"}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+        "\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+
+    std::vector<uint8_t> paddedJson(json.begin(), json.end());
+    while ((paddedJson.size() & 3u) != 0) paddedJson.push_back(' ');
+    std::vector<uint8_t> bytes;
+    auto appendU32 = [&bytes](uint32_t value) {
+        bytes.push_back(static_cast<uint8_t>(value));
+        bytes.push_back(static_cast<uint8_t>(value >> 8));
+        bytes.push_back(static_cast<uint8_t>(value >> 16));
+        bytes.push_back(static_cast<uint8_t>(value >> 24));
+    };
+    const uint32_t total = static_cast<uint32_t>(12 + 8 + paddedJson.size() + 8 + 36);
+    appendU32(0x46546C67u); /* glTF */
+    appendU32(2);
+    appendU32(total);
+    appendU32(static_cast<uint32_t>(paddedJson.size()));
+    appendU32(0x4E4F534Au); /* JSON */
+    bytes.insert(bytes.end(), paddedJson.begin(), paddedJson.end());
+    appendU32(36);
+    appendU32(0x004E4942u); /* BIN */
+    const float positions[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    for (float position : positions) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &position, sizeof(bits));
+        appendU32(bits);
+    }
+    return bytes;
+}
+
 static void testEngineImport() {
     std::printf("\n\x1b[1m[16] GLB import into a live engine (ABI)\x1b[0m\n");
 
@@ -2369,6 +2409,18 @@ static void testEngineImport() {
     const int32_t generatedVerts = af_engine_vertex_count(e);
     const int32_t generatedTris = af_engine_index_count(e) / 3;
     CHECK(generatedVerts > 100000, "import: the generated model has geometry (%d vertices)", generatedVerts);
+    std::vector<af_material> generatedMaterials;
+    if (af_engine_material_count(e) > 0) {
+        const af_material* source = af_engine_materials(e);
+        generatedMaterials.assign(source, source + af_engine_material_count(e));
+    }
+    af_texture generatedTextures[AF_TEX_COUNT]{};
+    int32_t generatedTextureResults[AF_TEX_COUNT]{};
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        generatedTextureResults[slot] = af_engine_texture(e, slot, &generatedTextures[slot]);
+    }
+    af_stats generatedStats{};
+    af_engine_stats(e, &generatedStats);
 
     uint8_t* bytes = nullptr;
     size_t byteCount = 0;
@@ -2386,6 +2438,40 @@ static void testEngineImport() {
         CHECK(af_engine_index_count(e) / 3 == generatedTris, "import: a rejected file leaves the triangles alone");
         CHECK(af_engine_joint_count(e) == 71, "import: a rejected file leaves the rig alone (%d joints)",
               af_engine_joint_count(e));
+        CHECK(af_engine_material_count(e) == static_cast<int32_t>(generatedMaterials.size()),
+              "import: a rejected file leaves the material table alone");
+        bool materialsUnchanged = true;
+        if (!generatedMaterials.empty()) {
+            const af_material* after = af_engine_materials(e);
+            for (size_t i = 0; i < generatedMaterials.size(); ++i) {
+                if (std::memcmp(&after[i], &generatedMaterials[i], sizeof(af_material)) != 0) {
+                    materialsUnchanged = false;
+                    break;
+                }
+            }
+        }
+        CHECK(materialsUnchanged, "import: a rejected file preserves material factors and texture flags");
+        bool texturesUnchanged = true;
+        for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+            af_texture after{};
+            const int32_t afterRc = af_engine_texture(e, slot, &after);
+            if (afterRc != generatedTextureResults[slot] ||
+                (afterRc == AF_OK && (after.data != generatedTextures[slot].data ||
+                                      after.byte_size != generatedTextures[slot].byte_size ||
+                                      after.width != generatedTextures[slot].width ||
+                                      after.height != generatedTextures[slot].height))) {
+                texturesUnchanged = false;
+                break;
+            }
+        }
+        CHECK(texturesUnchanged, "import: a rejected file preserves all texture slots");
+        af_stats afterStats{};
+        af_engine_stats(e, &afterStats);
+        CHECK(afterStats.geometry_bytes == generatedStats.geometry_bytes &&
+                  afterStats.texture_bytes == generatedStats.texture_bytes &&
+                  afterStats.vertex_count == generatedStats.vertex_count &&
+                  afterStats.blendshape_count == generatedStats.blendshape_count,
+              "import: a rejected file preserves engine statistics");
     }
 
     /* ---- (b) importing our own export into a fresh engine ---- */
@@ -2407,6 +2493,74 @@ static void testEngineImport() {
                       af_engine_submesh_count(fresh));
                 CHECK(af_engine_material_count(fresh) >= 4, "import: materials were rebuilt (%d)",
                       af_engine_material_count(fresh));
+
+                const af_material* importedMaterials = af_engine_materials(fresh);
+                bool materialMapsMatch = importedMaterials != nullptr;
+                for (int32_t i = 0; i < af_engine_material_count(fresh); ++i) {
+                    const af_material& m = importedMaterials[i];
+                    if (!m.has_base_color_tex || !m.has_normal_tex || !m.has_mr_tex || !m.has_ao_tex) {
+                        materialMapsMatch = false;
+                        break;
+                    }
+                }
+                CHECK(materialMapsMatch,
+                      "import: material flags match the decoded base-colour, normal, MR and AO maps");
+
+                const int expectedChannels[AF_TEX_COUNT] = {4, 4, 4, 1, 4};
+                bool allTextureSlots = true;
+                uint64_t importedTextureBytes = 0;
+                int32_t importedTextureWidth = 0, importedTextureHeight = 0;
+                for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+                    af_texture texture{};
+                    if (af_engine_texture(fresh, slot, &texture) != AF_OK || !texture.data ||
+                        texture.channels != expectedChannels[slot] || texture.width <= 0 || texture.height <= 0) {
+                        allTextureSlots = false;
+                        continue;
+                    }
+                    if (importedTextureWidth == 0) {
+                        importedTextureWidth = texture.width;
+                        importedTextureHeight = texture.height;
+                    }
+                    if (texture.width != importedTextureWidth || texture.height != importedTextureHeight) {
+                        allTextureSlots = false;
+                    }
+                    importedTextureBytes += texture.byte_size;
+                }
+                CHECK(allTextureSlots, "import: each embedded texture slot has valid dimensions and channel count");
+                af_stats importedStats{};
+                af_engine_stats(fresh, &importedStats);
+                CHECK(importedStats.texture_bytes == importedTextureBytes && importedTextureBytes > 0,
+                      "import: texture statistics account for the adopted maps");
+
+                /* The writer may apply a uniform ground-to-zero Y translation; all other geometry
+                   attributes and relative positions must survive exactly. */
+                const af_vertex* sourceVertices = af_engine_vertices(e);
+                const af_vertex* importedVertices = af_engine_vertices(fresh);
+                bool geometryPreserved = sourceVertices && importedVertices && v == generatedVerts;
+                if (geometryPreserved) {
+                    const size_t samples[] = {0, static_cast<size_t>(v / 2), static_cast<size_t>(v - 1)};
+                    const float groundShift = importedVertices[0].pos[1] - sourceVertices[0].pos[1];
+                    for (size_t index : samples) {
+                        const af_vertex& a = sourceVertices[index];
+                        const af_vertex& b = importedVertices[index];
+                        if (std::fabs((b.pos[1] - a.pos[1]) - groundShift) > 1e-5f) geometryPreserved = false;
+                        for (int c = 0; c < 3; ++c) {
+                            if (c != 1 && std::fabs(b.pos[c] - a.pos[c]) > 1e-5f) geometryPreserved = false;
+                            if (std::fabs(b.normal[c] - a.normal[c]) > 1e-5f) geometryPreserved = false;
+                        }
+                        for (int c = 0; c < 2; ++c) {
+                            if (std::fabs(b.uv[c] - a.uv[c]) > 1e-5f) geometryPreserved = false;
+                        }
+                        for (int c = 0; c < 4; ++c) {
+                            if (std::fabs(b.color[c] - a.color[c]) > 1e-5f ||
+                                std::fabs(b.weights[c] - a.weights[c]) > 1e-5f || b.joints[c] != a.joints[c]) {
+                                geometryPreserved = false;
+                            }
+                        }
+                    }
+                }
+                CHECK(geometryPreserved,
+                      "import: sampled positions, normals, UVs, colours and skin attributes are preserved");
 
                 /* Regions must survive the round trip: the exporter names materials after regions,
                    so an engine-made file comes back with the same region set. */
@@ -2461,6 +2615,55 @@ static void testEngineImport() {
     {
         CHECK(af_engine_import_glb_from_memory(e, bytes, byteCount) == AF_OK, "import: live engine adopts the file");
         CHECK(af_engine_vertex_count(e) == generatedVerts, "import: the live engine's buffers were replaced");
+
+        const std::vector<uint8_t> fixture = makeExternalTextureFixtureGlb();
+        const int32_t fixtureRc = af_engine_import_glb_from_memory(e, fixture.data(), fixture.size());
+        CHECK(fixtureRc == AF_OK, "import: an external-texture fixture loads without network access (%s)",
+              af_engine_last_error(e));
+        if (fixtureRc == AF_OK) {
+            CHECK(af_engine_vertex_count(e) == 3 && af_engine_index_count(e) == 3,
+                  "import: fixture geometry is retained as one triangle");
+            const af_vertex* fixtureVertices = af_engine_vertices(e);
+            const float expectedPositions[9] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+            bool fixtureGeometryPreserved = fixtureVertices != nullptr;
+            if (fixtureGeometryPreserved) {
+                for (size_t i = 0; i < 3; ++i) {
+                    for (int c = 0; c < 3; ++c) {
+                        if (fixtureVertices[i].pos[c] != expectedPositions[i * 3 + static_cast<size_t>(c)]) {
+                            fixtureGeometryPreserved = false;
+                        }
+                    }
+                }
+            }
+            CHECK(fixtureGeometryPreserved, "import: fixture positions survive exactly");
+
+            const af_material* fixtureMaterials = af_engine_materials(e);
+            CHECK(af_engine_material_count(e) == 1 && fixtureMaterials != nullptr,
+                  "import: fixture material was adopted");
+            if (fixtureMaterials && af_engine_material_count(e) == 1) {
+                CHECK(std::fabs(fixtureMaterials[0].base_color_factor[0] - 0.25f) < 1e-6f &&
+                          std::fabs(fixtureMaterials[0].base_color_factor[1] - 0.5f) < 1e-6f &&
+                          std::fabs(fixtureMaterials[0].base_color_factor[2] - 0.75f) < 1e-6f &&
+                          std::fabs(fixtureMaterials[0].metallic - 0.2f) < 1e-6f &&
+                          std::fabs(fixtureMaterials[0].roughness - 0.6f) < 1e-6f,
+                      "import: fixture PBR factors survive");
+                CHECK(!fixtureMaterials[0].has_base_color_tex && !fixtureMaterials[0].has_normal_tex &&
+                          !fixtureMaterials[0].has_mr_tex && !fixtureMaterials[0].has_ao_tex,
+                      "import: an external, undecoded image does not enable texture flags");
+            }
+
+            bool staleSlotsCleared = true;
+            for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+                af_texture texture{};
+                if (af_engine_texture(e, slot, &texture) != AF_ERR_NOT_READY) staleSlotsCleared = false;
+            }
+            CHECK(staleSlotsCleared, "import: textureless import clears all previously generated texture slots");
+            af_stats fixtureStats{};
+            af_engine_stats(e, &fixtureStats);
+            CHECK(fixtureStats.texture_bytes == 0 && fixtureStats.blendshape_count == 0,
+                  "import: texture and blendshape statistics do not leak from the previous avatar");
+        }
+
         const int32_t resetRc = af_engine_reset(e, &spec);
         CHECK(resetRc == AF_OK, "import: the engine resets cleanly after an import (%s)", af_engine_last_error(e));
         CHECK(af_engine_vertex_count(e) == 0, "import: reset clears the imported geometry");

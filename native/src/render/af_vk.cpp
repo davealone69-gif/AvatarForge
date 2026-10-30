@@ -7,8 +7,8 @@
  *  instance/device setup, the swapchain, every render pass, every pipeline, the descriptor
  *  management, the shadow map, the bloom chain and the composite pass are here. Its shaders
  *  live separately in shaders_vk/ and are compiled to SPIR-V by tools/embed_vulkan_shaders.py.
- *  Vulkan is the default backend; the separate GLES path is retained as a native initialization
- *  and recovery fallback and does not share shader binaries with this backend.
+ *  Vulkan is the explicit optional backend; GLES is the primary native path and remains the
+ *  initialization/recovery fallback for explicitly requested Vulkan. Shader binaries are separate.
  *
  *  API target: Vulkan 1.3 (requested target label 1.3.304). VkApplicationInfo uses the standard
  *  1.3.0 encoding because Vulkan ignores its patch field. The renderer currently uses only

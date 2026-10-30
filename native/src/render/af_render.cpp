@@ -5,8 +5,8 @@
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() tries native Vulkan by default and falls back to GLES if Vulkan
- *      initialization fails. Callers may explicitly request GLES. Generation and export remain
+ *   1. Renderer::create() uses GLES as the primary path. Callers may explicitly request native
+ *      Vulkan, which falls back to GLES if initialization fails. Generation and export remain
  *      available when neither API initializes; no software success is invented.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range

@@ -23,6 +23,11 @@ use crate::error::{Error, Result};
 use crate::job::{CallbackBridge, JobHandle, Progress, Status};
 use crate::spec::Spec;
 
+const MAX_REFERENCE_IMAGES: usize = 4;
+const MAX_IMAGE_DIMENSION: i32 = 16_384;
+const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_GLB_BYTES: usize = 128 * 1024 * 1024;
+
 /// The eleven pipeline stages, in order. `Stage::ALL` is what a progress list in a UI iterates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -81,16 +86,13 @@ impl<'a> ImageRef<'a> {
     }
 
     fn as_raw(&self) -> Result<sys::af_image> {
-        if self.width <= 0 || self.height <= 0 {
-            return Err(Error::InvalidArgument("image has no pixels".into()));
-        }
-        if self.channels != 3 && self.channels != 4 {
+        if !(sys::AF_IMAGE_IDENTITY..=sys::AF_IMAGE_EXTRA_VIEW).contains(&self.role) {
             return Err(Error::InvalidArgument(format!(
-                "image channels must be 3 or 4, got {}",
-                self.channels
+                "image role is outside the af_image_role range: {}",
+                self.role
             )));
         }
-        let expected = (self.width as usize) * (self.height as usize) * (self.channels as usize);
+        let expected = packed_image_byte_count(self.width, self.height, self.channels)?;
         if self.pixels.len() < expected {
             return Err(Error::InvalidArgument(format!(
                 "image buffer holds {} bytes, {expected} are required for {}x{}x{}",
@@ -108,6 +110,60 @@ impl<'a> ImageRef<'a> {
             pixels: self.pixels.as_ptr(),
         })
     }
+}
+
+fn packed_image_byte_count(width: i32, height: i32, channels: i32) -> Result<usize> {
+    if width <= 0 || height <= 0 {
+        return Err(Error::InvalidArgument("image has no pixels".into()));
+    }
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(Error::InvalidArgument(format!(
+            "image dimensions must not exceed {MAX_IMAGE_DIMENSION} pixels"
+        )));
+    }
+    if channels != 3 && channels != 4 {
+        return Err(Error::InvalidArgument(format!(
+            "image channels must be 3 or 4, got {channels}"
+        )));
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(channels as usize))
+        .ok_or_else(|| Error::InvalidArgument("image byte count overflows this platform".into()))?;
+    if expected > MAX_IMAGE_BYTES {
+        return Err(Error::InvalidArgument(
+            "image exceeds the 64 MiB RGB/RGBA input limit".into(),
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_image_count(count: usize) -> Result<()> {
+    if !(1..=MAX_REFERENCE_IMAGES).contains(&count) {
+        return Err(Error::InvalidArgument(format!(
+            "analyze_images accepts 1..={MAX_REFERENCE_IMAGES} images, got {count}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_glb_size(size: usize) -> Result<()> {
+    if size == 0 {
+        return Err(Error::InvalidArgument("GLB input is empty".into()));
+    }
+    if size > MAX_GLB_BYTES {
+        return Err(Error::InvalidArgument(
+            "GLB input exceeds the 128 MiB import limit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn glb_path_cstring(path: &str) -> Result<CString> {
+    if path.is_empty() {
+        return Err(Error::InvalidArgument("GLB path is empty".into()));
+    }
+    CString::new(path).map_err(|_| Error::InvalidArgument("path contains a NUL".into()))
 }
 
 /// What a ray hit: which region of the body, how far away, and where.
@@ -320,9 +376,7 @@ impl Engine {
     /// Analyses one or more reference images (A = identity, B = clothing/equipment). Purely
     /// observational: it returns what the kernel measured, and the app decides what to do with it.
     pub fn analyze_images(&mut self, images: &[ImageRef<'_>]) -> Result<Vec<sys::af_image_analysis>> {
-        if images.is_empty() {
-            return Err(Error::InvalidArgument("analyze_images needs at least one image".into()));
-        }
+        validate_image_count(images.len())?;
         let mut raws = Vec::with_capacity(images.len());
         for image in images {
             raws.push(image.as_raw()?);
@@ -525,6 +579,29 @@ impl Engine {
         self.check(code, "af_engine_apply_blendshapes")
     }
 
+    /* ---------------------------------------------------------------- import ----------------- */
+
+    /// Imports a binary glTF file from a filesystem path. The native importer enforces its 128 MiB
+    /// file limit and remains authoritative for GLB structure, supported features, and vertex caps.
+    /// The imported file's own skin and animation are not adopted by the native contract.
+    pub fn import_glb(&mut self, path: &str) -> Result<()> {
+        let text = glb_path_cstring(path)?;
+        let code = unsafe { sys::af_engine_import_glb(self.handle, text.as_ptr()) };
+        self.check(code, "af_engine_import_glb")
+    }
+
+    /// Imports a binary glTF buffer synchronously. The slice is borrowed only for this call; the
+    /// native reader validates GLB v2 and its supported subset, and rejected imports leave the
+    /// current engine state unchanged. This wrapper checks the native empty-input and 128 MiB caps
+    /// without duplicating the parser or importer.
+    pub fn import_glb_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        validate_glb_size(bytes.len())?;
+        let code = unsafe {
+            sys::af_engine_import_glb_from_memory(self.handle, bytes.as_ptr(), bytes.len())
+        };
+        self.check(code, "af_engine_import_glb_from_memory")
+    }
+
     /* ---------------------------------------------------------------- export ----------------- */
 
     /// Writes a self-contained .glb (mesh + skin + morph targets + clips + textures) to a path.
@@ -684,5 +761,98 @@ fn ray_triangle(origin: [f32; 3], direction: [f32; 3], a: [f32; 3], b: [f32; 3],
         Some(t)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod input_validation_tests {
+    use super::*;
+
+    #[test]
+    fn image_layout_matches_native_dimension_channel_and_byte_limits() {
+        assert_eq!(packed_image_byte_count(1, 1, 3).unwrap(), 3);
+        assert_eq!(packed_image_byte_count(1, 1, 4).unwrap(), 4);
+        assert_eq!(packed_image_byte_count(16_384, 1, 4).unwrap(), 65_536);
+        assert_eq!(
+            packed_image_byte_count(16_384, 1_024, 4).unwrap(),
+            MAX_IMAGE_BYTES
+        );
+        assert!(packed_image_byte_count(0, 1, 3).is_err());
+        assert!(packed_image_byte_count(-1, 1, 3).is_err());
+        assert!(packed_image_byte_count(16_385, 1, 3).is_err());
+        assert!(packed_image_byte_count(1, 1, 2).is_err());
+        assert!(packed_image_byte_count(1, 1, 5).is_err());
+        assert!(packed_image_byte_count(16_384, 1_025, 4).is_err());
+    }
+
+    #[test]
+    fn image_ref_rejects_a_short_pixel_slice() {
+        let pixels = [0_u8; 2];
+        let image = ImageRef::identity(1, 1, 3, &pixels);
+        assert!(matches!(image.as_raw(), Err(Error::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn image_ref_accepts_valid_roles_and_extra_pixel_bytes() {
+        let pixels = [0_u8; 4];
+        for role in sys::AF_IMAGE_IDENTITY..=sys::AF_IMAGE_EXTRA_VIEW {
+            let image = ImageRef {
+                width: 1,
+                height: 1,
+                channels: 3,
+                role,
+                pixels: &pixels,
+            };
+            let raw = image.as_raw().unwrap();
+            assert_eq!(raw.role, role);
+            assert_eq!(raw.pixels, pixels.as_ptr());
+        }
+    }
+
+    #[test]
+    fn image_ref_rejects_a_role_outside_the_native_enum() {
+        let pixels = [0_u8; 3];
+        for role in [sys::AF_IMAGE_IDENTITY - 1, sys::AF_IMAGE_EXTRA_VIEW + 1] {
+            let image = ImageRef {
+                width: 1,
+                height: 1,
+                channels: 3,
+                role,
+                pixels: &pixels,
+            };
+            assert!(matches!(image.as_raw(), Err(Error::InvalidArgument(_))));
+        }
+    }
+
+    #[test]
+    fn image_list_count_matches_native_one_to_four_contract() {
+        assert!(validate_image_count(1).is_ok());
+        assert!(validate_image_count(MAX_REFERENCE_IMAGES).is_ok());
+        assert!(validate_image_count(0).is_err());
+        assert!(validate_image_count(MAX_REFERENCE_IMAGES + 1).is_err());
+    }
+
+    #[test]
+    fn glb_memory_limit_matches_native_import_cap() {
+        assert!(validate_glb_size(0).is_err());
+        assert!(validate_glb_size(1).is_ok());
+        assert!(validate_glb_size(MAX_GLB_BYTES).is_ok());
+        assert!(validate_glb_size(MAX_GLB_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn glb_path_rejects_empty_and_interior_nul_strings() {
+        assert!(matches!(
+            glb_path_cstring(""),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            glb_path_cstring("models\0avatar.glb"),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert_eq!(
+            glb_path_cstring("models/avatar.glb").unwrap().to_bytes(),
+            b"models/avatar.glb"
+        );
     }
 }

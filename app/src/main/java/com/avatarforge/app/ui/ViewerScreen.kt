@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.EngineResult
+import com.avatarforge.sdk.ResourceProfile
 import com.avatarforge.sdk.summary
 import com.avatarforge.sdk.render.CameraGesture
 import com.avatarforge.sdk.render.CameraSettings
@@ -79,6 +80,9 @@ fun ViewerScreen(
     onCamera: (CameraSettings) -> Unit,
     settings: RenderSettings,
     onSettings: (RenderSettings) -> Unit,
+    resourceProfile: ResourceProfile,
+    resourceProfileNote: String,
+    onResourceProfile: (ResourceProfile) -> Unit,
     onRetryRenderer: (RenderSettings) -> Unit,
     panel: ViewerPanel,
     onPanel: (ViewerPanel) -> Unit,
@@ -194,7 +198,10 @@ fun ViewerScreen(
                     ViewerPanel.FACE -> FacePanel(expressionNames, expressionWeights, onExpression, onResetExpressions)
                     ViewerPanel.INSPECT -> InspectPanel(result, pickedRegion, onPickRegion, engine)
                     ViewerPanel.EXPORT -> ExportPanel(onExport, onShare, onExportTo, result, engine)
-                    ViewerPanel.RENDER -> RenderPanel(settings, onSettings, stats, rendererInfo)
+                    ViewerPanel.RENDER -> RenderPanel(
+                        settings, onSettings, stats, rendererInfo,
+                        resourceProfile, resourceProfileNote, onResourceProfile,
+                    )
                 }
             }
         }
@@ -441,8 +448,27 @@ private fun ExportPanel(
 }
 
 @Composable
-private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -> Unit, stats: RendererStats, info: RendererInfo?) {
+private fun RenderPanel(
+    settings: RenderSettings,
+    onSettings: (RenderSettings) -> Unit,
+    stats: RendererStats,
+    info: RendererInfo?,
+    resourceProfile: ResourceProfile,
+    resourceProfileNote: String,
+    onResourceProfile: (ResourceProfile) -> Unit,
+) {
     Text("Renderer", style = MaterialTheme.typography.titleSmall)
+    Text("Resource profile", style = MaterialTheme.typography.labelLarge)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ResourceProfile.entries.forEach { profile ->
+            FilterChip(
+                selected = resourceProfile == profile,
+                onClick = { onResourceProfile(profile) },
+                label = { Text(profile.title) },
+            )
+        }
+    }
+    Text(resourceProfileNote, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     info?.let {
         Text(
             "%s · %s · %s · %s".format(it.backend, it.deviceName, it.apiVersion, it.driver),

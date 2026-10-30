@@ -87,6 +87,8 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Geometry and playback/inspection state restored on a backend or surface restart. */
     @Volatile private var pendingEngineHandle: Long = 0L
+    private val pendingAttachCallbacks = mutableListOf<() -> Unit>()
+    private val pendingAttachCallbacksLock = Any()
     private data class RequestedClip(val clip: Int, val speed: Float, val loop: Boolean)
     private data class RequestedOverlays(val skeleton: Boolean, val flat: Boolean, val region: Int)
     @Volatile private var requestedClip: RequestedClip? = null
@@ -211,10 +213,20 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     /** Attaches a freshly generated engine so the viewer shows it. */
-    fun attachEngine(engineHandle: Long) {
+    fun attachEngine(engineHandle: Long, onAttached: (() -> Unit)? = null) {
         attachedEngineHandle = engineHandle
         pendingEngineHandle = engineHandle
-        onRenderThread { it.renderer?.attachEngine(engineHandle) }
+        if (onAttached != null) synchronized(pendingAttachCallbacksLock) {
+            pendingAttachCallbacks += onAttached
+        }
+        onRenderThread { view ->
+            val current = view.renderer ?: return@onRenderThread
+            val pending = view.pendingEngineHandle
+            if (pending != 0L) {
+                current.attachEngine(pending)
+                view.completePendingAttach(pending)
+            }
+        }
     }
 
     /** Tells the renderer the engine's geometry changed (new pose, blendshapes, clip frame). */
@@ -423,6 +435,17 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
+    /** Runs deferred engine-retirement callbacks only after the pending mesh pointer is installed. */
+    private fun completePendingAttach(attachedHandle: Long) {
+        if (pendingEngineHandle != attachedHandle) return
+        val callbacks = synchronized(pendingAttachCallbacksLock) {
+            pendingAttachCallbacks.toList().also { pendingAttachCallbacks.clear() }
+        }
+        callbacks.forEach { callback ->
+            runCatching(callback).onFailure { Log.e(RENDER_LOG_TAG, "engine attach completion failed", it) }
+        }
+    }
+
     private fun destroyRenderer() {
         try {
             renderer?.destroy()
@@ -460,7 +483,10 @@ class RenderSurfaceView @JvmOverloads constructor(
                 )
             }
             created.setCamera(camera)
-            if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            if (pendingEngineHandle != 0L) {
+                created.attachEngine(pendingEngineHandle)
+                completePendingAttach(pendingEngineHandle)
+            }
             /* Reapply after engine attachment so a recreated renderer cannot silently return to
                production output and so the selected rung is authoritative for the next frame. */
             created.setDiagnosticRung(_requestedDiagnosticRung.value.value)

@@ -1369,6 +1369,87 @@ int32_t regionForMaterialName(const char* name) {
     return REGION_SKIN;
 }
 
+int importedTextureForSlot(const ImportedMaterial& material, int slot) {
+    switch (slot) {
+        case AF_TEX_BASE_COLOR: return material.baseColorTexture;
+        case AF_TEX_NORMAL: return material.normalTexture;
+        case AF_TEX_METALLIC_ROUGHNESS: return material.metallicRoughnessTexture;
+        case AF_TEX_OCCLUSION: return material.occlusionTexture;
+        case AF_TEX_SUBSURFACE: return material.subsurfaceTexture;
+        default: return -1;
+    }
+}
+
+bool hasDecodedPixels(const ImportedTexture& texture) {
+    if (texture.width <= 0 || texture.height <= 0) return false;
+    const uint64_t expected = static_cast<uint64_t>(texture.width) *
+                              static_cast<uint64_t>(texture.height) * 4u;
+    return expected <= texture.rgba.max_size() && texture.rgba.size() == static_cast<size_t>(expected);
+}
+
+/* The engine ABI has one texture per semantic slot (rather than glTF's per-material references).
+   Stage the first referenced, decoded image for each slot, requiring a shared size because the ABI
+   exposes one width/height pair. Material flags are enabled only for the image actually selected. */
+void stageImportedTextures(const GlbAsset& asset, TextureSet* textures,
+                           int selectedImages[AF_TEX_COUNT], bool* incomplete) {
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) selectedImages[slot] = -1;
+    if (incomplete) *incomplete = false;
+
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        for (const ImportedMaterial& material : asset.materials) {
+            const int imageIndex = importedTextureForSlot(material, slot);
+            if (imageIndex < 0) continue;
+            if (static_cast<size_t>(imageIndex) >= asset.textures.size() ||
+                !hasDecodedPixels(asset.textures[static_cast<size_t>(imageIndex)])) {
+                if (incomplete) *incomplete = true;
+                continue;
+            }
+            if (selectedImages[slot] < 0) selectedImages[slot] = imageIndex;
+            else if (selectedImages[slot] != imageIndex && incomplete) *incomplete = true;
+        }
+    }
+
+    int width = 0, height = 0;
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        const int imageIndex = selectedImages[slot];
+        if (imageIndex < 0) continue;
+        const ImportedTexture& image = asset.textures[static_cast<size_t>(imageIndex)];
+        if (width == 0) {
+            width = image.width;
+            height = image.height;
+        } else if (image.width != width || image.height != height) {
+            selectedImages[slot] = -1;
+            if (incomplete) *incomplete = true;
+        }
+    }
+    if (width == 0) return;
+
+    textures->width = width;
+    textures->height = height;
+    for (int slot = 0; slot < AF_TEX_COUNT; ++slot) {
+        const int imageIndex = selectedImages[slot];
+        if (imageIndex < 0) continue;
+        const std::vector<uint8_t>& rgba = asset.textures[static_cast<size_t>(imageIndex)].rgba;
+        switch (slot) {
+            case AF_TEX_BASE_COLOR: textures->baseColor = rgba; break;
+            case AF_TEX_NORMAL: textures->normal = rgba; break;
+            case AF_TEX_METALLIC_ROUGHNESS: textures->metallicRoughness = rgba; break;
+            case AF_TEX_OCCLUSION: {
+                const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+                textures->occlusion.resize(pixels);
+                for (size_t i = 0; i < pixels; ++i) textures->occlusion[i] = rgba[i * 4];
+                break;
+            }
+            case AF_TEX_SUBSURFACE: textures->subsurface = rgba; break;
+            default: break;
+        }
+    }
+}
+
+bool selectedTextureMatches(const int selectedImages[AF_TEX_COUNT], int slot, int materialImage) {
+    return materialImage >= 0 && selectedImages[slot] >= 0 && selectedImages[slot] == materialImage;
+}
+
 int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     if (!bytes || size == 0) {
         e->lastError = "import: no data";
@@ -1445,6 +1526,11 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
         return static_cast<int32_t>(AF_ERR_UNSUPPORTED);
     }
 
+    TextureSet importedTextures;
+    int importedTextureImages[AF_TEX_COUNT];
+    bool textureImportIncomplete = false;
+    stageImportedTextures(asset, &importedTextures, importedTextureImages, &textureImportIncomplete);
+
     /* ---- materials ---- */
     std::vector<af_material> materials;
     for (const auto& m : asset.materials) {
@@ -1454,10 +1540,14 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
         am.metallic = m.metallic;
         am.roughness = m.roughness;
         am.ior = 1.4f;
-        am.has_base_color_tex = m.baseColorTexture >= 0 ? 1 : 0;
-        am.has_normal_tex = m.normalTexture >= 0 ? 1 : 0;
-        am.has_mr_tex = m.metallicRoughnessTexture >= 0 ? 1 : 0;
-        am.has_ao_tex = 0;
+        am.has_base_color_tex = selectedTextureMatches(importedTextureImages, AF_TEX_BASE_COLOR,
+                                                       m.baseColorTexture) ? 1 : 0;
+        am.has_normal_tex = selectedTextureMatches(importedTextureImages, AF_TEX_NORMAL,
+                                                   m.normalTexture) ? 1 : 0;
+        am.has_mr_tex = selectedTextureMatches(importedTextureImages, AF_TEX_METALLIC_ROUGHNESS,
+                                               m.metallicRoughnessTexture) ? 1 : 0;
+        am.has_ao_tex = selectedTextureMatches(importedTextureImages, AF_TEX_OCCLUSION,
+                                               m.occlusionTexture) ? 1 : 0;
         materials.push_back(am);
     }
     if (materials.empty()) {
@@ -1501,12 +1591,16 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
         submeshes.push_back(sm);
     }
 
-    /* ---- swap in ---- */
+    /* Any allocation needed for the new live state must finish before the first swap. */
+    std::vector<af_vertex> restVerts = verts;
+
+    /* ---- commit ---- */
     e->verts.swap(verts);
-    e->vertsRest = e->verts;      /* imported geometry is already in its bind pose */
+    e->vertsRest.swap(restVerts); /* imported geometry is already in its bind pose */
     e->indices.swap(indices);
     e->submeshes.swap(submeshes);
     e->materials.swap(materials);
+    e->textures = std::move(importedTextures);
 
     /* The generated state that no longer describes this geometry. Cleared rather than left stale:
        a rig built for a different mesh would skin the new one with nonsense weights. */
@@ -1521,40 +1615,16 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     e->clipCache.clear();
     e->clipFrameCount.clear();
     e->deformed.clear();
+    e->glbBytes.clear();
     e->field.reset();
     e->metrics = BodyMetrics();
+    e->stats.blendshape_count = 0;
     e->geometryReady = true;
     e->stage = AF_STAGE_DONE;
     e->dirty = 0;
     e->peakFieldBytes = 0;
-    e->tFit = e->tGeometry = e->tUv = e->tTex = e->tRig = 0.0;
-
-    /* Textures: base colour only, and only when the file embedded one that decoded. The other
-       slots keep the generated set if there is one - they belong to the engine's own bake. */
-    for (size_t i = 0; i < asset.textures.size(); ++i) {
-        const ImportedTexture& t = asset.textures[i];
-        if (t.rgba.empty() || t.width <= 0) continue;
-        bool used = false;
-        for (const auto& m : asset.materials) {
-            if (m.baseColorTexture == static_cast<int>(i)) { used = true; break; }
-        }
-        if (!used) continue;
-        e->textures.width = t.width;
-        e->textures.height = t.height;
-        e->textures.baseColor = t.rgba;
-        break;
-    }
-    if (e->textures.width > 0 && !e->textures.baseColor.empty()) {
-        af_texture tex{};
-        tex.width = e->textures.width;
-        tex.height = e->textures.height;
-        tex.channels = 4;
-        tex.mip_levels = 1;
-        tex.byte_size = e->textures.baseColor.size();
-        tex.data = e->textures.baseColor.data();
-        e->texViews[AF_TEX_BASE_COLOR] = tex;
-        e->texValid[AF_TEX_BASE_COLOR] = true;
-    }
+    e->tFit = e->tGeometry = e->tUv = e->tTex = e->tRig = e->tExport = 0.0;
+    refreshTextures(e);
 
     /* What the file carried that this import does not adopt - said out loud, every time. */
     if (!asset.skins.empty()) {
@@ -1568,6 +1638,10 @@ int32_t importIntoEngine(af_engine* e, const uint8_t* bytes, size_t size) {
     if (!asset.warnings.empty()) {
         e->log(AF_LOG_WARN, std::string("import: ") + asset.warnings.front().what + " - " +
                                 asset.warnings.front().detail);
+    }
+    if (textureImportIncomplete) {
+        e->log(AF_LOG_WARN, "import: one or more referenced textures were unavailable or could not be "
+                            "represented by the engine's single shared texture slot");
     }
     {
         char msg[256];

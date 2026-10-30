@@ -153,7 +153,7 @@ object RecoveryAdvisor {
             return if (fallback != null) {
                 "Native Vulkan startup fell back to OpenGL ES. Check the actual backend and driver in Self diagnostics; frame submission does not prove visible pixels."
             } else {
-                "No renderer fault is recorded. Native Vulkan is requested by default; GLES is the fallback. Check the actual backend and visible output."
+                "No renderer fault is recorded. GLES is the primary backend; Vulkan is optional until verified on the target phone. Check the actual backend and visible output."
             }
         }
         val lastStable = records.lastOrNull { it.kind == RecoveryRecordKind.FRAME_SUBMISSION_STABLE }

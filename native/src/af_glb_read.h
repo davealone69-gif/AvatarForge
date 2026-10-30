@@ -75,7 +75,9 @@ struct ImportedMaterial {
     int baseColorTexture = -1;   /* index into GlbAsset::textures, -1 when absent */
     int metallicRoughnessTexture = -1;
     int normalTexture = -1;
+    int occlusionTexture = -1;
     int emissiveTexture = -1;
+    int subsurfaceTexture = -1;  /* AvatarForge AF_subsurface extension, when present */
 };
 
 struct ImportedTexture {

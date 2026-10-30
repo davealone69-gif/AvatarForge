@@ -724,7 +724,9 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         mat.baseColorTexture = texIndex(pbr["baseColorTexture"]);
         mat.metallicRoughnessTexture = texIndex(pbr["metallicRoughnessTexture"]);
         mat.normalTexture = texIndex(m["normalTexture"]);
+        mat.occlusionTexture = texIndex(m["occlusionTexture"]);
         mat.emissiveTexture = texIndex(m["emissiveTexture"]);
+        mat.subsurfaceTexture = texIndex(m["extensions"]["AF_subsurface"]["subsurfaceTexture"]);
         out->materials.push_back(std::move(mat));
     }
 

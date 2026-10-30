@@ -1,8 +1,8 @@
 /*
  * AvatarForge :: AvatarRenderer.kt
  *
- * Kotlin wrapper over the JNI renderer bridge. Native C++ implements Vulkan by default and GLES 3.1
- * without a game engine; see native/src/render/af_render.h for backend selection.
+ * Kotlin wrapper over the JNI renderer bridge. GLES 3.1 is primary; native Vulkan remains an explicit
+ * option until verified on the target phone. See native/src/render/af_render.h for backend selection.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
  * that with RenderSurfaceView's dedicated render thread. Calling any method here
@@ -71,7 +71,7 @@ enum class RenderBackend { GLES, VULKAN }
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
-    val backend: RenderBackend = RenderBackend.VULKAN,
+    val backend: RenderBackend = RenderBackend.GLES,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -98,12 +98,13 @@ data class CameraSettings(
 )
 
 class AvatarRenderer private constructor(private var handle: Long) {
+    @Volatile private var attachedEngineHandle: Long = 0L
 
     companion object {
         /**
-         * Creates the selected native renderer for a live Surface. Vulkan is the default; if its
-         * initialization fails, the native factory tries GLES 3.1 and exposes the actual backend
-         * in info(). Neither API ever falls back to a software success.
+         * Creates the selected native renderer for a live Surface. GLES is the default; when Vulkan
+         * is explicitly selected and fails, the native factory tries GLES 3.1 and exposes the actual
+         * backend in info(). Neither API ever falls back to a software success.
          */
         fun create(surface: Surface, settings: RenderSettings = RenderSettings()): AvatarRenderer {
             check(NativeBridge.available) { "the native library is not loaded" }
@@ -171,12 +172,17 @@ class AvatarRenderer private constructor(private var handle: Long) {
     fun attachEngine(engineHandle: Long, invalidate: Boolean = true) {
         /* The renderer keeps a pointer to the engine's arrays, so the pointer swap is fenced:
            otherwise a generation job could free the old mesh between attach and the first upload. */
-        val rc = KernelAccess.withKernel { NativeBridge.rendererAttachEngine(handle, engineHandle) }
+        val rc = KernelAccess.withKernels(attachedEngineHandle, engineHandle) {
+            NativeBridge.rendererAttachEngine(handle, engineHandle)
+        }
         check(rc == 0) { "renderer refused the engine (${NativeBridge.engineLastError(engineHandle)})" }
+        attachedEngineHandle = engineHandle
         if (invalidate) invalidateMesh()
     }
 
-    fun invalidateMesh() = KernelAccess.withKernel { NativeBridge.rendererInvalidateMesh(handle) }
+    fun invalidateMesh() = KernelAccess.withKernel(attachedEngineHandle) {
+        NativeBridge.rendererInvalidateMesh(handle)
+    }
 
     fun setCamera(camera: CameraSettings) =
         NativeBridge.rendererSetCamera(handle, camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg)
@@ -224,7 +230,9 @@ class AvatarRenderer private constructor(private var handle: Long) {
      * engine's own vertex buffer: without it, an expression slider on the UI thread could be writing
      * vertices while the upload reads them.
      */
-    fun frame(deltaSeconds: Float) = KernelAccess.withKernel { NativeBridge.rendererFrame(handle, deltaSeconds) }
+    fun frame(deltaSeconds: Float) = KernelAccess.withKernel(attachedEngineHandle) {
+        NativeBridge.rendererFrame(handle, deltaSeconds)
+    }
 
     /** Blocks until the GPU is idle; used before destroying the renderer. */
     fun waitIdle() = NativeBridge.rendererWaitIdle(handle)
@@ -254,7 +262,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
         /* Raycast against the live vertex array, which the GL thread rewrites every animated frame.
            Bounded wait: a tap that cannot get the fence in 250 ms reports "nothing picked" rather
            than intersecting a mesh that is mid-upload. */
-        val region = KernelAccess.tryWithKernel(250L) {
+        val region = KernelAccess.tryWithKernel(engineHandle, 250L) {
             NativeBridge.enginePickRegion(
                 engineHandle,
                 camera.yawDeg, camera.pitchDeg, camera.distance, camera.targetY, camera.fovDeg,

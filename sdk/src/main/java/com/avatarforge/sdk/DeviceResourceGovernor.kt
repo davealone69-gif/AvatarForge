@@ -37,13 +37,21 @@ data class DeviceResourceSnapshot(
 }
 
 /**
- * Android resource governor adapted from the Aaa avatar SDK.
+ * Android resource governor.
  *
- * It deliberately does not claim to unload GPU/model memory itself. It reports current OS
- * measurements so the engine can choose a conservative render tier and refuse/defer expensive
- * work when the phone is under pressure.
+ * Snapshot values are observations, not guarantees. Emergency stop cooperatively cancels the
+ * isolated candidate build and releases its optional image references; it never destroys or
+ * detaches the active character or renderer. AvatarForge has no optional neural model bundle to
+ * unload, and active character textures are required for continued rendering.
  */
 class DeviceResourceGovernor(private val context: Context) {
+    /** Requests a cooperative stop for the current build; false means there was no running job. */
+    fun emergencyStop(job: JobHandle?): Boolean {
+        if (job == null || !job.status.value.running) return false
+        job.emergencyStop()
+        return true
+    }
+
     fun snapshot(): DeviceResourceSnapshot {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memory = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)

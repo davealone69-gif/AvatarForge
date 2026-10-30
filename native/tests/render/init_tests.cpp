@@ -316,8 +316,8 @@ void renderAbi() {
     af_render_options_defaults(&o);
     check(sizeof(o) == 64 && o.quality == 0 && o.msaa_samples == 4, "render options ABI remains layout-compatible");
     void* handle = af_renderer_create(window(), &o);
-    check(handle != nullptr && af_test_vk::attempts == 1 && af_test::state.contextsCreated == 1,
-          "C ABI defaults to Vulkan and falls back to GLES when Vulkan initialization fails");
+    check(handle != nullptr && af_test_vk::attempts == 0 && af_test::state.contextsCreated == 1,
+          "C ABI defaults to the primary GLES backend without attempting optional Vulkan");
     af_render_stats stats{};
     check(af_renderer_stats(handle, &stats) == AF_OK && sizeof(stats) == 72 && stats.gpu_ms == -1.0f &&
           stats.frame_ms < 0.0f && stats.fps < 0.0f && stats.cpu_ms < 0.0f,
@@ -353,9 +353,9 @@ void defaultBackendSelection() {
     std::string error;
     const af::RendererOptions defaults{};
     std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), defaults, &error));
-    check(defaults.preferVulkan && r && r->info().backend == "vulkan" && error.empty() &&
-          af_test_vk::attempts == 1 && af_test::state.contextsCreated == 0,
-          "native RendererOptions defaults to Vulkan without creating a GLES context");
+    check(!defaults.preferVulkan && r && r->info().backend == "gles31" && error.empty() &&
+          af_test_vk::attempts == 0 && af_test::state.contextsCreated == 1,
+          "native RendererOptions defaults to GLES without attempting optional Vulkan");
     r.reset();
     af_test::reset(); af_test_vk::reset();
 }

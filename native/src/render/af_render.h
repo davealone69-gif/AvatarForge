@@ -3,8 +3,8 @@
  *  AvatarForge :: af_render.h -- native GLES 3.1 and Vulkan renderers
  * ============================================================================================
  *
- * Native Vulkan (af_vk.cpp) is the default backend. Initialization failures fall back to GLES
- * (af_gl.cpp); callers can explicitly request GLES. There is no software
+ * GLES (af_gl.cpp) is the primary backend. Native Vulkan (af_vk.cpp) is an optional explicit choice.
+ * When requested, Vulkan initialization failures fall back to GLES. There is no software
  * renderer. An OS GLES translation layer such as ANGLE-on-Vulkan is not an app Vulkan backend.
  *
  *  Lighting model
@@ -51,7 +51,7 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
-    bool  preferVulkan         = true;   /* default native backend; failed initialization falls back to GLES */
+    bool  preferVulkan         = false;  /* GLES primary; Vulkan is opt-in and falls back to GLES */
     int   effectiveQualityLevel = 1;    /* budget tier for LOD/culling in the Vulkan backend */
     bool  enableShadows        = true;
     bool  enableBloom          = false;

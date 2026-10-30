@@ -58,39 +58,30 @@ object AvatarForge {
     }
 
     /**
-     * Chooses a render preset from the device's RAM.
+     * Chooses a suggested render preset from current OS-reported resource state.
      *
-     * 6 GB and up: HIGH (2048 shadow map, 4x MSAA, 5 bloom levels).
-     * 4 GB:        MEDIUM (2048/2x/4).
-     * below 4 GB:  LOW (1024/no MSAA/3) - the kernel also gets a smaller texture atlas in that case
-     *              (see AvatarEngine's memory budget).
-     *
-     * The thresholds are where they are because the *engine* peaks near 1.5 GB during a build and
-     * the renderer holds a 2048^2 RGBA8 atlas set (~68 MB) plus MSAA targets; a device with 4 GB
-     * has ~1.8-2.2 GB available to a foreground app, so that is the tier where 2048 maps stop being
-     * safe alongside the build.
+     * This is a qualitative starting point, not a measured performance limit or FPS promise. It
+     * uses Android's low-RAM/low-memory reports and the governor's existing thermal/storage state;
+     * the renderer can still adjust quality from its observed frame timing. The generated PBR atlas
+     * remains at the native pipeline's fixed resolution in every preset.
      */
     fun recommendedSettings(context: Context): RenderSettings {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val info = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(info)
         val resources = DeviceResourceGovernor(context).snapshot()
-        val gb = info.totalMem / (1024.0 * 1024.0 * 1024.0)
         val lowRam = activityManager.isLowRamDevice
         val thermal = resources.thermalStatus
-        val severeThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_SEVERE
         val moderateThermal = thermal != null && thermal >= PowerManager.THERMAL_STATUS_MODERATE
         val preset = when {
-            lowRam || gb < 4.0 || info.lowMemory ||
-                resources.availableRamBytes < 1536L * 1024 * 1024 ||
-                resources.state == DeviceResourceState.LOW_STORAGE || severeThermal -> Quality.LOW
-            gb < 6.0 || resources.availableRamBytes < 2L * 1024 * 1024 * 1024 ||
-                moderateThermal -> Quality.MEDIUM
+            lowRam || resources.lowMemory ||
+                resources.state == DeviceResourceState.LOW_MEMORY ||
+                resources.state == DeviceResourceState.LOW_STORAGE ||
+                resources.state == DeviceResourceState.THERMAL_LIMIT -> Quality.LOW
+            moderateThermal -> Quality.MEDIUM
             else -> Quality.HIGH
         }
         return RenderSettings(
             quality = preset,
-            backend = com.avatarforge.sdk.render.RenderBackend.VULKAN,
+            backend = com.avatarforge.sdk.render.RenderBackend.GLES,
             msaa = if (preset == Quality.HIGH) 4 else if (preset == Quality.MEDIUM) 2 else 1,
             shadowMapSize = if (preset == Quality.HIGH) 2048 else if (preset == Quality.MEDIUM) 2048 else 1024,
             bloomLevels = if (preset == Quality.HIGH) 5 else if (preset == Quality.MEDIUM) 4 else 3,

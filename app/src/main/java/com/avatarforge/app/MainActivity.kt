@@ -61,11 +61,15 @@ import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.AvatarForge
 import com.avatarforge.sdk.AvatarSpec
 import com.avatarforge.sdk.EngineResult
+import com.avatarforge.sdk.EngineRetirement
 import com.avatarforge.sdk.GenerationRequest
 import com.avatarforge.sdk.ImageReference
 import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.JobHandle
 import com.avatarforge.sdk.JobStatus
+import com.avatarforge.sdk.DeviceResourceGovernor
+import com.avatarforge.sdk.ResourceProfile
+import com.avatarforge.sdk.ResourceProfilePolicy
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.DiagnosticRung
 import com.avatarforge.sdk.render.RenderSurfaceView
@@ -155,10 +159,19 @@ class MainActivity : ComponentActivity() {
         var job by remember { mutableStateOf<JobHandle?>(null) }
         var status by remember { mutableStateOf(JobStatus()) }
         var result by remember { mutableStateOf<EngineResult?>(null) }
+        var retirementsPendingAttach by remember { mutableStateOf<List<EngineRetirement>>(emptyList()) }
 
         var camera by remember { mutableStateOf(CameraSettings()) }
         val settingsStore = remember { SettingsStore(context) }
-        var settings by remember { mutableStateOf(settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context)) }
+        val resourceGovernor = remember { DeviceResourceGovernor(context) }
+        var resourceSnapshot by remember { mutableStateOf(resourceGovernor.snapshot()) }
+        val initialSettings = remember { settingsStore.loadRenderSettings() ?: AvatarForge.recommendedSettings(context) }
+        val initialProfile = remember {
+            ResourceProfilePolicy.apply(ResourceProfilePolicy.infer(initialSettings), initialSettings, resourceSnapshot)
+        }
+        var settings by remember { mutableStateOf(initialProfile.settings) }
+        var resourceProfile by remember { mutableStateOf(initialProfile.profile) }
+        var resourceProfileNote by remember { mutableStateOf(initialProfile.message) }
         var effectiveSettings by remember { mutableStateOf(settings) }
         var effectiveDiagnosticRung by remember { mutableStateOf(DiagnosticRung.PRODUCTION_AVATAR) }
         var panel by remember { mutableStateOf(ViewerPanel.CAMERA) }
@@ -172,14 +185,27 @@ class MainActivity : ComponentActivity() {
         val recoveryJournal = remember { RecoveryJournal(context.filesDir) }
         var recoveryReportToSave by remember { mutableStateOf<String?>(null) }
 
+        val emergencyStop: () -> Unit = {
+            val stopped = resourceGovernor.emergencyStop(job)
+            analysisRequestGuard.begin()
+            imageAnalysisInProgress = false
+            screen = if (result != null) Screen.VIEWER else Screen.INPUT
+            if (result != null) surfaceView?.attachEngine(engine.nativeHandle)
+            if (stopped) {
+                Toast.makeText(
+                    context,
+                    if (result != null) "Generation stopping. Your previous character and renderer are preserved."
+                    else "Generation stopping. Optional reference inputs will be released.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
                 when (screen) {
                     Screen.VIEWER -> screen = Screen.INPUT
-                    Screen.PROGRESS -> {
-                        job?.cancel()
-                        screen = Screen.INPUT
-                    }
+                    Screen.PROGRESS -> emergencyStop()
                     Screen.INPUT -> Unit
                 }
             }
@@ -238,25 +264,65 @@ class MainActivity : ComponentActivity() {
                 return false
             }
 
+            fun generationResourcesReady(): Boolean {
+                if (job?.status?.value?.running == true) {
+                    Toast.makeText(
+                        context,
+                        "The previous generation is still stopping. Wait for it to finish before starting another build.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return false
+                }
+                val current = resourceGovernor.snapshot()
+                resourceSnapshot = current
+                if (!current.generationShouldBeDeferred) return true
+                Toast.makeText(
+                    context,
+                    "Generation deferred: the device currently reports ${current.state}. Your current character and rendering are unchanged.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return false
+            }
+
+            fun applyResourceProfile(requested: ResourceProfile) {
+                val current = resourceGovernor.snapshot()
+                resourceSnapshot = current
+                val applied = ResourceProfilePolicy.apply(requested, settings, current)
+                resourceProfile = applied.profile
+                resourceProfileNote = applied.message
+                settings = applied.settings
+                settingsStore.saveRenderSettings(applied.settings)
+                surfaceView?.applySettings(applied.settings)
+            }
+
             fun begin(started: JobHandle) {
                 job = started
                 screen = Screen.PROGRESS
                 scope.launch {
                     val outcome = runCatching { started.await() }
-                    outcome.onSuccess {
-                        result = it
+                    outcome.onSuccess { generated ->
+                        val retirement = engine.activate(started)
+                        result = generated
                         /* A new avatar starts with a neutral face; the previous channel weights
                            belong to the previous mesh. */
                         expressionWeights = FloatArray(expressionNames.size)
-                        surfaceView?.attachEngine(engine.nativeHandle)
+                        if (retirement != null) retirementsPendingAttach = retirementsPendingAttach + retirement
                         screen = Screen.VIEWER
                     }.onFailure { error ->
-                        Toast.makeText(
-                            context,
-                            "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        screen = Screen.INPUT
+                        val cancelled = error is kotlinx.coroutines.CancellationException || started.isCancelled
+                        if (cancelled) {
+                            if (screen == Screen.PROGRESS) {
+                                screen = if (result != null) Screen.VIEWER else Screen.INPUT
+                                if (result != null) surfaceView?.attachEngine(engine.nativeHandle)
+                            }
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            if (screen == Screen.PROGRESS) screen = if (result != null) Screen.VIEWER else Screen.INPUT
+                        }
                     }
                 }
             }
@@ -326,7 +392,7 @@ class MainActivity : ComponentActivity() {
                 analysisNote = analysisNote,
                 enabled = health.usable,
                 onGeneratePrompt = {
-                    if (hasStorageForExport()) {
+                    if (hasStorageForExport() && generationResourcesReady()) {
                         analysisRequestGuard.begin()
                         imageAnalysisInProgress = false
                         /* The prompt parser is run first so the spec the user sees is the spec that
@@ -340,7 +406,7 @@ class MainActivity : ComponentActivity() {
                     val a = imageA
                     if (a == null) {
                         Toast.makeText(context, "Choose Image A first.", Toast.LENGTH_SHORT).show()
-                    } else if (hasStorageForExport()) {
+                    } else if (hasStorageForExport() && generationResourcesReady()) {
                         val request = analysisRequestGuard.begin()
                         val selectedB = imageB
                         val cachedAnalysis = analysedImages
@@ -380,10 +446,8 @@ class MainActivity : ComponentActivity() {
 
             Screen.PROGRESS -> ProgressScreen(
                 status = status,
-                onCancel = {
-                    job?.cancel()
-                    screen = Screen.INPUT
-                },
+                hasPreservedCharacter = result != null,
+                onEmergencyStop = emergencyStop,
             )
 
             Screen.VIEWER -> {
@@ -412,6 +476,9 @@ class MainActivity : ComponentActivity() {
                         onCamera = { camera = it; surfaceView?.applyCamera(it) },
                         settings = settings,
                         onSettings = { settings = it; settingsStore.saveRenderSettings(it); surfaceView?.applySettings(it) },
+                        resourceProfile = resourceProfile,
+                        resourceProfileNote = resourceProfileNote,
+                        onResourceProfile = ::applyResourceProfile,
                         onRetryRenderer = { requested ->
                             settings = requested
                             settingsStore.saveRenderSettings(requested)
@@ -501,7 +568,11 @@ class MainActivity : ComponentActivity() {
                                         surfaceView = view
                                         surfaceViewState = view
                                         view.bind(engine)
-                                        view.attachEngine(engine.nativeHandle)
+                                        val retirements = retirementsPendingAttach
+                                        view.attachEngine(engine.nativeHandle) {
+                                            retirements.forEach { it.retire() }
+                                        }
+                                        retirementsPendingAttach = emptyList()
                                         view.setDiagnosticRung(selectedDiagnosticRung.value)
                                         view.applySettings(settings)
                                         view.applyCamera(camera)
