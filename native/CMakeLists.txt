@@ -9,7 +9,7 @@
 #                        beyond zlib and the C++ runtime, which is why the identical sources build
 #                        and pass their test harness on a desktop.
 #
-#     libafrender.so     native GLES 3.1 and opt-in Vulkan 1.0 renderers. Links system
+#     libafrender.so     Vulkan 1.3 target with native GLES 3.1 fallback. Links system
 #                        libEGL/libGLESv3/libvulkan (never bundles a Vulkan loader).
 #
 #     libavatarforge.so  the JNI bridge, which is the only place Kotlin meets C++.

@@ -25,10 +25,12 @@
 #include <android/native_window_jni.h>
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "../../include/afcore.h"
+#include "../af_image.h"
 #include "../af_image_pack.h"
 #include "../render/af_render.h"
 #include "../render/af_render_common.h"   /* screenRay / pickRegion */
@@ -347,8 +349,9 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
     }
 
     const jsize count = env->GetArrayLength(widths);
-    if (count < 1 || count > 4) {
-        throwIllegalArgument(env, "1 to 4 reference images are supported per call");
+    if (count < 1 || count > AF_MAX_REFERENCE_IMAGES) {
+        throwIllegalArgument(env, "1 to " + std::to_string(AF_MAX_REFERENCE_IMAGES) +
+                                     " reference images are supported per call");
         return AF_ERR_INVALID_ARG;
     }
     if (env->GetArrayLength(heights) != count || env->GetArrayLength(channels) != count ||
@@ -367,14 +370,16 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
     }
 
     std::vector<af_image> images(static_cast<size_t>(count));
-    jint w[4]{}, ht[4]{}, ch[4]{}, rl[4]{};
+    jint w[AF_MAX_REFERENCE_IMAGES]{}, ht[AF_MAX_REFERENCE_IMAGES]{},
+         ch[AF_MAX_REFERENCE_IMAGES]{}, rl[AF_MAX_REFERENCE_IMAGES]{};
     env->GetIntArrayRegion(widths, 0, count, w);
     env->GetIntArrayRegion(heights, 0, count, ht);
     env->GetIntArrayRegion(channels, 0, count, ch);
     env->GetIntArrayRegion(roles, 0, count, rl);
     for (jsize i = 0; i < count; ++i) {
-        if (w[i] <= 0 || ht[i] <= 0 || (ch[i] != 3 && ch[i] != 4)) {
-            throwIllegalArgument(env, "each image needs positive dimensions and 3 RGB or 4 RGBA channels");
+        uint64_t required = 0;
+        if (!af::checkedImageByteCount(w[i], ht[i], ch[i], &required)) {
+            throwIllegalArgument(env, "each image must be within the supported dimensions and 64 MiB RGB/RGBA input limit");
             return AF_ERR_INVALID_ARG;
         }
         if (rl[i] < AF_IMAGE_IDENTITY || rl[i] > AF_IMAGE_EXTRA_VIEW) {
@@ -385,8 +390,6 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineAnal
         jobject buffer = env->GetObjectArrayElement(pixels, i);
         void* address = buffer ? env->GetDirectBufferAddress(buffer) : nullptr;
         const jlong capacity = buffer ? env->GetDirectBufferCapacity(buffer) : -1;
-        const uint64_t required = static_cast<uint64_t>(w[i]) * static_cast<uint64_t>(ht[i]) *
-                                  static_cast<uint64_t>(ch[i]);
         if (!address || capacity < 0 || static_cast<uint64_t>(capacity) < required) {
             if (buffer) env->DeleteLocalRef(buffer);
             throwIllegalArgument(env, "each image must use a sufficiently large direct ByteBuffer");
@@ -791,6 +794,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExp
     g_tlsEnv = env;
     const af_result rc = af_result(af_engine_export_glb_to_memory(handle->engine, &bytes, &size));
     g_tlsEnv = nullptr;
+    std::unique_ptr<uint8_t, decltype(&af_arena_free)> bytesOwner(bytes, &af_arena_free);
     if (rc != AF_OK) {
         throwIllegalState(env, "af_engine_export_glb_to_memory", rc, af_engine_last_error(handle->engine));
         return 0;
@@ -801,8 +805,7 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExp
         throwIllegalArgument(env, "destination buffer is too small for the .glb");
         return 0;
     }
-    std::memcpy(target, bytes, size);
-    af_arena_free(bytes);
+    std::memcpy(target, bytesOwner.get(), size);
     return jlong(size);
 }
 

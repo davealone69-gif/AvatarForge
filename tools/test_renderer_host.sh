@@ -16,4 +16,20 @@ mkdir -p "$OUT"
     "$ROOT/native/src/render/af_gl.cpp" \
     "$ROOT/native/src/render/af_render.cpp" \
     "$ROOT/native/src/render/af_shaders.cpp"
-exec "$OUT/renderer_init_tests"
+"$OUT/renderer_init_tests"
+
+NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}"
+if [ -z "$NDK" ]; then
+    SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+    if [ -n "$SDK" ]; then NDK="$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"; fi
+fi
+VULKAN_HEADERS="${NDK:+$NDK/sources/third_party/vulkan/src/include}"
+if [ -n "$VULKAN_HEADERS" ] && [ -f "$VULKAN_HEADERS/vulkan/vulkan.h" ]; then
+    "$CXX" -std=c++17 -O1 -g -Wall -Wextra -Werror \
+        -I"$ROOT/native/src/render" -I"$VULKAN_HEADERS" \
+        -o "$OUT/vulkan_version_tests" \
+        "$ROOT/native/tests/render/vulkan_version_tests.cpp"
+    "$OUT/vulkan_version_tests"
+else
+    echo "SKIP Vulkan version helper unit test (pinned NDK Vulkan headers not found)"
+fi

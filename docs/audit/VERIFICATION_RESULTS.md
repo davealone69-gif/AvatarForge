@@ -63,3 +63,40 @@ was skipped (no credentials).
 - New eye/hair/chest/hand/garment/header fixes: **UNVERIFIED on device** until the next CI APK is installed and captured.
 
 Production signed release remains **BLOCKED**: the signed-release job requires production secrets on a tag.
+
+## Exact fix-branch verification — 2026-10-30
+
+The local source branch is `fix/verify-clean-checkout-output-dir`. This record is separate from the historical CI/device checkpoints above; it does not claim a physical-device or shipped-release pass.
+
+### Post-fix host verification
+
+The complete post-fix verifier was run with the Android NDK 26.1.10909125 shader tools explicitly set:
+
+```bash
+export ANDROID_HOME=/home/ubuntu/Android/Sdk
+export ANDROID_SDK_ROOT=/home/ubuntu/Android/Sdk
+export ANDROID_NDK_HOME=/home/ubuntu/Android/Sdk/ndk/26.1.10909125
+export AF_GLSLC=/home/ubuntu/Android/Sdk/ndk/26.1.10909125/shader-tools/linux-x86_64/glslc
+export AF_SPIRV_VAL=/home/ubuntu/Android/Sdk/ndk/26.1.10909125/shader-tools/linux-x86_64/spirv-val
+bash tools/verify.sh
+```
+
+The command exited **0** and ended with “All host-side checks passed. Device pass: see DEVICE.md.” Results: the kernel harness passed **423/423** checks; renderer fault-injection passed **87/87** and the Vulkan API-version helper **7/7**; model-detail regressions passed **33/33**; the release-workflow contract passed, including `fix/**` triggers and separation of Vulkan API, shader and header provenance. The device-report check used mock ADB only and explicitly reported no physical device.
+
+All **12 GLES stages** compiled and the embedded table matched. All **13 Vulkan shader sources** compiled for `vulkan1.3`, and each embedded module passed `spirv-val`; the six shader provenance regressions passed. The validator records the pinned source/table history hash `76fdebab`; newer NDK `glslc` output can differ in optimized bytes without changing the pinned-source/module validation contract. The produced GLB passed structural validation: 280,138 vertices, 394,016 triangles, 71 joints, 52 blendshapes and 15 clips. The ABI manifest was fresh at 47 symbols, 11 structs and 12 enums; C++ parity passed 47/47, Rust currently implements 15/47 (32 remain unported), and prompt parity passed 72/72. The default Rust workspace passed 37 tests; two full-avatar integration tests remain intentionally ignored unless explicitly requested.
+
+The verifier’s final repository-artifact scan **skipped** `artifacts/avatarforge-debug-arm64.apk`, `artifacts/avatarforge-release-arm64.apk` and `artifacts/avatarforge-sdk-arm64.aar` because none was staged in that directory. This is not a failure of the separate compile-only Gradle build, and it is not evidence of a signed release.
+
+### Rust renderer safety gate and Android build
+
+After the optional `renderer` feature exposed a duplicate `Camera::default` implementation and a missing crate-private engine-handle accessor, those defects were fixed. `cargo test --offline -p af --features renderer --lib` passed **7/7**. The documentation test passed **1/1** with `compile_fail,E0505`; the compiler specifically rejects moving/dropping the engine while the attached renderer is used. The API now consumes an unbound renderer and returns a renderer whose type retains the engine borrow. The host test type-checks this lifetime contract; it does not link or execute `libafrender.so`.
+
+A final default Rust release build and `cargo test --workspace --offline` passed: 37 passed, 0 failed, with the same two ignored full-avatar tests. The earlier task-local Android validation passed 3 app JVM tests and 38 SDK JVM tests, the ARM64 native build and compile-only APK/AAB/AAR generation. None of these outputs has been installed or exercised on an SM-S921B.
+
+`git diff --check` passed. `cargo fmt --all -- --check` did **not** pass: it reports broad rustfmt diffs across the Rust workspace (168 diff hunks in that check). No mass formatting rewrite was applied because it would reformat unrelated code; this remains a style-cleanup item, not a passing gate.
+
+### What the evidence does not establish
+
+The target label **Vulkan 1.3.304** is not treated as an API, header, loader or driver version. The app requests the standard Vulkan 1.3 API level; the installed NDK headers are revision 1.3.237. The shader target, compiled Vulkan headers, runtime loader, device-reported API, extensions/features, queue support, formats and limits are distinct evidence fields. The host tests and shader validator do not query the SM-S921B or execute Vulkan commands, present pixels, verify visual quality, test GLES recovery on device, or demonstrate thermal/stress behaviour. Those device gates remain open in `DEVICE.md`.
+
+The remote `arena/c87f5c50-avatarforge` tip was `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62`, two commits past the local branch’s common base. No rebase, merge or direct push to the arena branch was performed. Publication is authorized only to a new `fix/verify-clean-checkout-output-dir` branch; exact-head CI and artifact provenance must be checked separately after that push. Production signing remains blocked without release credentials.

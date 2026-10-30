@@ -472,15 +472,14 @@ int32_t af_engine_abi_version(void) { return AF_ABI_VERSION; }
 int32_t af_engine_create(const af_spec* spec, const af_callbacks* callbacks, af_engine** out_engine) {
     if (!out_engine) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
     *out_engine = nullptr;
+    if (spec && spec->struct_size <= 0) return static_cast<int32_t>(AF_ERR_ABI_MISMATCH);
     af_engine* e = new (std::nothrow) af_engine();
     if (!e) return static_cast<int32_t>(AF_ERR_OUT_OF_MEMORY);
     af_spec_init(&e->spec);
     if (spec) {
         /* Copy field by field: a caller built against ABI 1 may pass a smaller struct, and
            struct_size says how much of it is real. */
-        const size_t n = static_cast<size_t>(spec->struct_size > 0)
-                             ? std::min(sizeof(af_spec), static_cast<size_t>(spec->struct_size))
-                             : sizeof(af_spec);
+        const size_t n = std::min(sizeof(af_spec), static_cast<size_t>(spec->struct_size));
         std::memcpy(&e->spec, spec, n);
         e->spec.struct_size = static_cast<int32_t>(sizeof(af_spec));
     }
@@ -502,12 +501,14 @@ void af_engine_destroy(af_engine* engine) {
 
 int32_t af_engine_reset(af_engine* engine, const af_spec* spec) {
     return guard(engine, "reset", [&]() {
+        if (spec && spec->struct_size <= 0) {
+            engine->lastError = "reset: af_spec.struct_size must be positive";
+            return static_cast<int32_t>(AF_ERR_ABI_MISMATCH);
+        }
         af_spec fresh;
         af_spec_init(&fresh);
         if (spec) {
-            const size_t n = static_cast<size_t>(spec->struct_size > 0)
-                                 ? std::min(sizeof(af_spec), static_cast<size_t>(spec->struct_size))
-                                 : sizeof(af_spec);
+            const size_t n = std::min(sizeof(af_spec), static_cast<size_t>(spec->struct_size));
             std::memcpy(&fresh, spec, n);
             fresh.struct_size = static_cast<int32_t>(sizeof(af_spec));
         }
@@ -603,12 +604,14 @@ int32_t af_engine_analyze_prompt(af_engine* engine, const char* prompt, af_spec*
 int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int32_t image_count,
                                  af_image_analysis* out_analyses, int32_t max_analyses) {
     return guard(engine, "analyze_images", [&]() {
-        if (!images || image_count <= 0) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
+        if (!images || image_count <= 0 || image_count > AF_MAX_REFERENCE_IMAGES ||
+            max_analyses < 0 || (max_analyses > 0 && !out_analyses))
+            return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         engine->stage = AF_STAGE_ANALYZE_INPUTS;
         engine->analysisCount = 0;
-        const af_image_analysis* analysisForInput[4]{};
+        const af_image_analysis* analysisForInput[AF_MAX_REFERENCE_IMAGES]{};
         int32_t produced = 0;
-        for (int32_t i = 0; i < image_count && i < 4; ++i) {
+        for (int32_t i = 0; i < image_count; ++i) {
             if (engine->cancelled()) return static_cast<int32_t>(AF_ERR_CANCELLED);
             engine->progress(AF_STAGE_ANALYZE_INPUTS, static_cast<float>(i) / image_count,
                              "analysing reference image");
@@ -629,7 +632,7 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
            present, because that is the image the user pointed at for the outfit. */
         const af_image_analysis* identity = &engine->analyses[0];
         const af_image_analysis* clothing = nullptr;
-        for (int32_t i = 0; i < image_count && i < 4; ++i) {
+        for (int32_t i = 0; i < image_count; ++i) {
             if (!analysisForInput[i]) continue;
             if (images[i].role == AF_IMAGE_CLOTHING) clothing = analysisForInput[i];
             if (images[i].role == AF_IMAGE_IDENTITY) identity = analysisForInput[i];

@@ -134,8 +134,7 @@ class RecoveryFrameProbe(
 
     fun observe(stats: RendererStats): RecoveryProbeOutcome? {
         total++
-        val valid = stats.fps.isFinite() && stats.fps > 0f &&
-            stats.frameMs.isFinite() && stats.frameMs > 0f &&
+        val valid = stats.hasValidFrameTiming &&
             stats.triangles > 0 && stats.drawCalls > 0
         consecutive = if (valid) consecutive + 1 else 0
         return when {
@@ -154,7 +153,7 @@ object RecoveryAdvisor {
             return if (fallback != null) {
                 "Native Vulkan startup fell back to OpenGL ES. Check the actual backend and driver in Self diagnostics; frame submission does not prove visible pixels."
             } else {
-                "No renderer fault is recorded. GLES is the default; native Vulkan is an opt-in comparison. Check the actual backend and visible output."
+                "No renderer fault is recorded. Native Vulkan is requested by default; GLES is the fallback. Check the actual backend and visible output."
             }
         }
         val lastStable = records.lastOrNull { it.kind == RecoveryRecordKind.FRAME_SUBMISSION_STABLE }

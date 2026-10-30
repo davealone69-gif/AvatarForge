@@ -3,8 +3,8 @@
  *  AvatarForge :: af_render.h -- native GLES 3.1 and Vulkan renderers
  * ============================================================================================
  *
- * GLES is the default backend (af_gl.cpp). Explicitly requesting Vulkan selects the separate
- * native af_vk.cpp path; initialization failures fall back to GLES. There is no software
+ * Native Vulkan (af_vk.cpp) is the default backend. Initialization failures fall back to GLES
+ * (af_gl.cpp); callers can explicitly request GLES. There is no software
  * renderer. An OS GLES translation layer such as ANGLE-on-Vulkan is not an app Vulkan backend.
  *
  *  Lighting model
@@ -31,6 +31,7 @@
 #ifndef AF_RENDER_H
 #define AF_RENDER_H
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -50,7 +51,7 @@ enum class QualityPreset { AUTO = 0, LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct RendererOptions {
     QualityPreset quality      = QualityPreset::AUTO;
-    bool  preferVulkan         = false;  /* explicit opt-in; GLES remains the tested default */
+    bool  preferVulkan         = true;   /* default native backend; failed initialization falls back to GLES */
     int   effectiveQualityLevel = 1;    /* budget tier for LOD/culling in the Vulkan backend */
     bool  enableShadows        = true;
     bool  enableBloom          = false;
@@ -81,11 +82,12 @@ struct CameraState {
     float rollDeg   = 0.0f;
 };
 
-/* Per-frame timing the UI shows in the stats drawer, and the budget controller reads. */
+/* Timing estimates the UI shows in the stats drawer. `frameMs` is the caller-supplied render-loop
+   delta EMA for accepted present requests, not GPU time or compositor/present-completion timing. */
 struct RendererStats {
-    float frameMs        = 0.0f;   /* presented-frame interval EMA, not a GPU timestamp       */
-    float cpuMs          = 0.0f;   /* CPU wall time inside renderFrame()                      */
-    float fps            = 0.0f;
+    float frameMs        = -1.0f;  /* -1 = no valid caller delta has been observed             */
+    float cpuMs          = -1.0f;  /* -1 = renderFrame() has not yet been timed                */
+    float fps            = -1.0f;  /* -1 = no valid frame-loop timing sample                   */
     float gpuMs          = -1.0f;  /* -1 = unknown; no GPU timestamp query is implemented     */
     int   drawCalls      = 0;
     int   triangles      = 0;
@@ -102,6 +104,19 @@ struct RendererStats {
     int   lastVkResult   = 0;      /* exact VkResult for Vulkan only; VK_SUCCESS = 0        */
     bool  frameFatal     = false;  /* Vulkan frame loop stopped after unrecoverable failure */
 };
+
+inline void updateFrameLoopTimingEstimate(RendererStats& stats, float deltaSeconds) {
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f || deltaSeconds >= 1.0f) return;
+    const float sampleMs = deltaSeconds * 1000.0f;
+    constexpr float alpha = 0.06f;
+    if (!std::isfinite(stats.frameMs) || stats.frameMs <= 0.0f) {
+        stats.frameMs = sampleMs;
+    } else {
+        stats.frameMs = stats.frameMs * (1.0f - alpha) + sampleMs * alpha;
+    }
+    stats.fps = stats.frameMs > 0.0f && std::isfinite(stats.frameMs)
+        ? 1000.0f / stats.frameMs : -1.0f;
+}
 
 struct RendererInfo {
     std::string backend;      /* "gles31" | "vulkan"                                     */

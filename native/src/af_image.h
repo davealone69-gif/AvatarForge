@@ -25,12 +25,20 @@
 #ifndef AF_IMAGE_H
 #define AF_IMAGE_H
 
+#include <cstdint>
+
 #include "../include/afcore.h"
 
 namespace af {
 
 /** Working resolution cap for analysis (the long edge). */
 constexpr int kAnalysisMaxSide = 256;
+constexpr int32_t kAnalysisMaxDimension = 16384;
+constexpr std::uint64_t kAnalysisMaxInputBytes = 64ull * 1024ull * 1024ull;
+
+/** Validates dimensions/channels and computes the packed RGB/RGBA byte count without overflow. */
+bool checkedImageByteCount(int32_t width, int32_t height, int32_t channels,
+                           std::uint64_t* outBytes);
 
 /**
  * Analyses one decoded image. `out` is filled with the report described in afcore.h.

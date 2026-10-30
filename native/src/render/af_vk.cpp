@@ -1,18 +1,24 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_vk.cpp  --  opt-in native Vulkan 1.0 renderer
+ *  AvatarForge :: af_vk.cpp  --  native Vulkan 1.3-target renderer
  * ============================================================================================
  *
  *  Written against the raw Vulkan API. Nothing here comes from a rendering framework: the
  *  instance/device setup, the swapchain, every render pass, every pipeline, the descriptor
  *  management, the shadow map, the bloom chain and the composite pass are here. Its shaders
  *  live separately in shaders_vk/ and are compiled to SPIR-V by tools/embed_vulkan_shaders.py.
- *  GLES remains the default and does not share shader binaries with this backend.
+ *  Vulkan is the default backend; the separate GLES path is retained as a native initialization
+ *  and recovery fallback and does not share shader binaries with this backend.
+ *
+ *  API target: Vulkan 1.3 (requested target label 1.3.304). VkApplicationInfo uses the standard
+ *  1.3.0 encoding because Vulkan ignores its patch field. The renderer currently uses only
+ *  Vulkan-1.0-compatible commands/features plus VK_KHR_swapchain; the Vulkan path is gated on
+ *  loader and device API 1.3, with the native GLES backend retained as fallback for older devices.
  *
  *  What the backend guarantees regardless of device:
- *      * Vulkan 1.0 core only - no dynamic rendering, no maintenance1, no KHR swapchain beyond
- *        the one extension every Android driver has. Negative viewport height is NOT used (the
- *        Y flip lives in the vertex shader) so this runs on 1.0 drivers too.
+ *      * no optional Vulkan 1.3 feature is assumed; required feature bits/extensions, queues,
+ *        formats and limits are queried and only supported device features are enabled.
+ *        Negative viewport height is NOT used (the Y flip lives in the vertex shader).
  *      * MSAA is optional: the sample count is clamped to what the device reports for both
  *        colour and depth, so a device that only supports 1x still renders correctly.
  *      * HDR: RGBA16F if it can be used as a colour attachment and sampled, else R11G11B10F,
@@ -37,6 +43,7 @@
 #include "af_environment.h"
 #include "af_shaders.h"
 #include "af_gpu_profile.h"
+#include "af_vk_version.h"
 
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
@@ -79,6 +86,30 @@ void setError(std::string* error, const char* what, VkResult result) {
     char buf[256];
     std::snprintf(buf, sizeof(buf), "%s failed (VkResult %d)", what, int(result));
     *error = buf;
+}
+
+std::string apiVersionString(uint32_t version) {
+    char buffer[48];
+    std::snprintf(buffer, sizeof(buffer), "%u.%u.%u",
+                  VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version),
+                  VK_API_VERSION_PATCH(version));
+    return buffer;
+}
+
+bool deviceHasExtension(VkPhysicalDevice device, const char* name, VkResult* queryResult) {
+    uint32_t count = 0;
+    VkResult result = vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+    if (queryResult) *queryResult = result;
+    if (result != VK_SUCCESS) return false;
+    std::vector<VkExtensionProperties> extensions(count);
+    if (count != 0) {
+        result = vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data());
+        if (queryResult) *queryResult = result;
+        if (result != VK_SUCCESS) return false;
+    }
+    return std::any_of(extensions.begin(), extensions.end(), [name](const VkExtensionProperties& extension) {
+        return std::strcmp(extension.extensionName, name) == 0;
+    });
 }
 
 uint32_t findMemoryType(VkPhysicalDevice phys, uint32_t typeBits, VkMemoryPropertyFlags props) {
@@ -223,6 +254,7 @@ private:
     bool frameFatal_ = false;
     VkResult lastFrameVkResult_ = VK_SUCCESS;
     VkInstance instance_ = VK_NULL_HANDLE;
+    uint32_t loaderApiVersion_ = VK_API_VERSION_1_0;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkPhysicalDevice phys_ = VK_NULL_HANDLE;
@@ -255,7 +287,7 @@ private:
     bool framebufferResized_ = false;
 
     /* targets */
-    VkFormat depthFormat_ = VK_FORMAT_D32_SFLOAT;
+    VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
     VkFormat hdrFormat_ = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkImage depthImage_ = VK_NULL_HANDLE;      VkDeviceMemory depthMem_ = VK_NULL_HANDLE;
     VkImageView depthView_ = VK_NULL_HANDLE;
@@ -461,12 +493,18 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
     info_.deviceName = props.deviceName;
     char apiBuf[96];
     std::snprintf(apiBuf, sizeof(apiBuf), "Vulkan %u.%u.%u",
-                  VK_VERSION_MAJOR(props.apiVersion), VK_VERSION_MINOR(props.apiVersion),
-                  VK_VERSION_PATCH(props.apiVersion));
+                  VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
+                  VK_API_VERSION_PATCH(props.apiVersion));
     info_.apiVersion = apiBuf;
     char drvBuf[96];
     std::snprintf(drvBuf, sizeof(drvBuf), "driver %u (%s)", props.driverVersion, vkDeviceTypeName(props.deviceType));
     info_.driver = drvBuf;
+    std::fprintf(stderr,
+                 "AF_VK_CONTEXT requested_target=%s app_api=%s header_revision=%u loader_api=%s "
+                 "physical_device_api=%s device=\"%s\"\n",
+                 vk::kRequestedTargetLabel, apiVersionString(vk::kApplicationApiVersion).c_str(),
+                 uint32_t(VK_HEADER_VERSION), apiVersionString(loaderApiVersion_).c_str(),
+                 apiVersionString(props.apiVersion).c_str(), props.deviceName);
     info_.gpuProfile = gpuProfile_.name;
     info_.textureCompression = "uncompressed";
     info_.supportsShadows = shadowImage_ != VK_NULL_HANDLE;
@@ -479,23 +517,66 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
 }
 
 bool VulkanRenderer::createInstance(std::string* error) {
+    loaderApiVersion_ = VK_API_VERSION_1_0;
+    const auto enumerateVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+        vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceVersion"));
+    if (enumerateVersion) {
+        const VkResult versionResult = enumerateVersion(&loaderApiVersion_);
+        if (versionResult != VK_SUCCESS) {
+            setError(error, "vkEnumerateInstanceVersion", versionResult);
+            return false;
+        }
+    }
+    if (!vk::supportsRequiredApi(loaderApiVersion_)) {
+        if (error) {
+            *error = "Vulkan target " + std::string(vk::kRequestedTargetLabel) +
+                     " requires loader API 1.3+, detected " + apiVersionString(loaderApiVersion_);
+        }
+        return false;
+    }
+
+    const char* extensions[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME};
+    uint32_t extensionCount = 0;
+    VkResult r = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+    if (r != VK_SUCCESS) {
+        setError(error, "vkEnumerateInstanceExtensionProperties", r);
+        return false;
+    }
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    if (extensionCount != 0) {
+        r = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, availableExtensions.data());
+        if (r != VK_SUCCESS) {
+            setError(error, "vkEnumerateInstanceExtensionProperties", r);
+            return false;
+        }
+    }
+    for (const char* required : extensions) {
+        const bool found = std::any_of(availableExtensions.begin(), availableExtensions.end(),
+            [required](const VkExtensionProperties& extension) {
+                return std::strcmp(extension.extensionName, required) == 0;
+            });
+        if (!found) {
+            if (error) *error = std::string("required Vulkan instance extension unavailable: ") + required;
+            return false;
+        }
+    }
+
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "AvatarForge";
     app.applicationVersion = 1;
     app.pEngineName = "AvatarForge";
     app.engineVersion = 1;
-    app.apiVersion = VK_API_VERSION_1_0;   /* 1.0 core only: every Android Vulkan driver qualifies */
+    app.apiVersion = vk::kApplicationApiVersion; /* Vulkan 1.3.0 encoding; API patch is ignored. */
 
-    const char* extensions[] = {"VK_KHR_surface", "VK_KHR_android_surface"};
     VkInstanceCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ci.pApplicationInfo = &app;
-    ci.enabledExtensionCount = 2;
+    ci.enabledExtensionCount = uint32_t(sizeof(extensions) / sizeof(extensions[0]));
     ci.ppEnabledExtensionNames = extensions;
     /* No validation layers are requested: the app ships without the layer binaries, and the
        layer list is a debug-time concern. Release builds stay silent. */
-    const VkResult r = vkCreateInstance(&ci, nullptr, &instance_);
+    r = vkCreateInstance(&ci, nullptr, &instance_);
     if (r != VK_SUCCESS) {
         setError(error, "vkCreateInstance", r);
         return false;
@@ -519,18 +600,38 @@ bool VulkanRenderer::createSurface(ANativeWindow* window, std::string* error) {
 
 bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     uint32_t count = 0;
-    vkEnumeratePhysicalDevices(instance_, &count, nullptr);
+    VkResult enumerationResult = vkEnumeratePhysicalDevices(instance_, &count, nullptr);
+    if (enumerationResult != VK_SUCCESS) {
+        setError(error, "vkEnumeratePhysicalDevices", enumerationResult);
+        return false;
+    }
     if (count == 0) {
-        *error = "no Vulkan device present";
+        if (error) *error = "no Vulkan 1.3 device present";
         return false;
     }
     std::vector<VkPhysicalDevice> devices(count);
-    vkEnumeratePhysicalDevices(instance_, &count, devices.data());
+    enumerationResult = vkEnumeratePhysicalDevices(instance_, &count, devices.data());
+    if (enumerationResult != VK_SUCCESS) {
+        setError(error, "vkEnumeratePhysicalDevices", enumerationResult);
+        return false;
+    }
 
     VkPhysicalDevice best = VK_NULL_HANDLE;
     int bestScore = -1;
     uint32_t bestFamily = 0;
+    VkResult lastQueueQueryError = VK_SUCCESS;
+    VkResult lastExtensionQueryError = VK_SUCCESS;
     for (VkPhysicalDevice dev : devices) {
+        VkPhysicalDeviceProperties p{};
+        vkGetPhysicalDeviceProperties(dev, &p);
+        if (!vk::supportsRequiredApi(p.apiVersion)) continue;
+
+        VkResult extensionResult = VK_SUCCESS;
+        if (!deviceHasExtension(dev, VK_KHR_SWAPCHAIN_EXTENSION_NAME, &extensionResult)) {
+            if (extensionResult != VK_SUCCESS) lastExtensionQueryError = extensionResult;
+            continue;
+        }
+
         uint32_t qcount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(dev, &qcount, nullptr);
         std::vector<VkQueueFamilyProperties> queues(qcount);
@@ -538,10 +639,12 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
         for (uint32_t q = 0; q < qcount; ++q) {
             if (!(queues[q].queueFlags & VK_QUEUE_GRAPHICS_BIT)) continue;
             VkBool32 present = VK_FALSE;
-            vkGetPhysicalDeviceSurfaceSupportKHR(dev, q, surface_, &present);
+            const VkResult supportResult = vkGetPhysicalDeviceSurfaceSupportKHR(dev, q, surface_, &present);
+            if (supportResult != VK_SUCCESS) {
+                lastQueueQueryError = supportResult;
+                continue;
+            }
             if (!present) continue;
-            VkPhysicalDeviceProperties p{};
-            vkGetPhysicalDeviceProperties(dev, &p);
             int score = 0;
             switch (p.deviceType) {
                 case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   score = 400; break;
@@ -558,7 +661,13 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
         }
     }
     if (best == VK_NULL_HANDLE) {
-        *error = "no Vulkan device with a graphics+present queue for this surface";
+        if (lastQueueQueryError != VK_SUCCESS) {
+            setError(error, "vkGetPhysicalDeviceSurfaceSupportKHR", lastQueueQueryError);
+        } else if (lastExtensionQueryError != VK_SUCCESS) {
+            setError(error, "vkEnumerateDeviceExtensionProperties", lastExtensionQueryError);
+        } else if (error) {
+            *error = "no Vulkan 1.3 device with VK_KHR_swapchain and a graphics+present queue for this surface";
+        }
         return false;
     }
     phys_ = best;
@@ -569,15 +678,51 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     VkPhysicalDeviceFeatures features{};
     vkGetPhysicalDeviceProperties(phys_, &properties);
     vkGetPhysicalDeviceFeatures(phys_, &features);
+
+    const VkFormat depthCandidates[] = {
+        VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM};
+    const VkFormatFeatureFlags depthFeatures = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    VkImageFormatProperties depthAttachmentProperties{};
+    VkImageFormatProperties shadowImageProperties{};
+    for (VkFormat candidate : depthCandidates) {
+        VkFormatProperties formatProperties{};
+        vkGetPhysicalDeviceFormatProperties(phys_, candidate, &formatProperties);
+        if ((formatProperties.optimalTilingFeatures & depthFeatures) != depthFeatures) continue;
+        VkImageFormatProperties attachmentProperties{};
+        VkImageFormatProperties sampledProperties{};
+        const VkResult attachmentResult = vkGetPhysicalDeviceImageFormatProperties(
+            phys_, candidate, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &attachmentProperties);
+        if (attachmentResult != VK_SUCCESS) continue;
+        const VkResult sampledResult = vkGetPhysicalDeviceImageFormatProperties(
+            phys_, candidate, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0,
+            &sampledProperties);
+        if (sampledResult != VK_SUCCESS) continue;
+        depthFormat_ = candidate;
+        depthAttachmentProperties = attachmentProperties;
+        shadowImageProperties = sampledProperties;
+        break;
+    }
+    if (depthFormat_ == VK_FORMAT_UNDEFINED) {
+        if (error) *error = "no depth format supports depth attachment and linearly filtered sampling";
+        return false;
+    }
+    if (shadowImageProperties.maxExtent.width < 512 || shadowImageProperties.maxExtent.height < 512) {
+        if (error) *error = "selected depth format cannot support the minimum 512x512 shadow target";
+        return false;
+    }
     gpuCaps_.backend = "vulkan";
     gpuCaps_.vendorId = properties.vendorID;
     gpuCaps_.deviceId = properties.deviceID;
     gpuCaps_.vendorName = std::to_string(properties.vendorID);
     gpuCaps_.deviceName = properties.deviceName;
     gpuCaps_.driver = std::to_string(properties.driverVersion);
-    gpuCaps_.maxTextureDimension2D = properties.limits.maxImageDimension2D;
+    gpuCaps_.maxTextureDimension2D = std::min(properties.limits.maxImageDimension2D,
+        std::min(shadowImageProperties.maxExtent.width, shadowImageProperties.maxExtent.height));
     gpuCaps_.maxColorSamples = maxSampleCount(properties.limits.framebufferColorSampleCounts &
-                                               properties.limits.framebufferDepthSampleCounts);
+        properties.limits.framebufferDepthSampleCounts & depthAttachmentProperties.sampleCounts);
     gpuCaps_.softwareRenderer = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
     gpuCaps_.supportsAstcLdr = features.textureCompressionASTC_LDR &&
         vkFormatSupportsLinearSampling(phys_, VK_FORMAT_ASTC_6x6_UNORM_BLOCK) &&
@@ -597,6 +742,16 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
 }
 
 bool VulkanRenderer::createDevice(std::string* error) {
+    VkResult extensionResult = VK_SUCCESS;
+    if (!deviceHasExtension(phys_, VK_KHR_SWAPCHAIN_EXTENSION_NAME, &extensionResult)) {
+        if (extensionResult != VK_SUCCESS) {
+            setError(error, "vkEnumerateDeviceExtensionProperties", extensionResult);
+        } else if (error) {
+            *error = "required Vulkan device extension unavailable: " VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        }
+        return false;
+    }
+
     float priority = 1.0f;
     VkDeviceQueueCreateInfo qi{};
     qi.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -607,6 +762,7 @@ bool VulkanRenderer::createDevice(std::string* error) {
     VkPhysicalDeviceFeatures supported{};
     vkGetPhysicalDeviceFeatures(phys_, &supported);
     VkPhysicalDeviceFeatures features{};
+    /* No optional Vulkan 1.3 feature is used. Query core features and enable only supported bits. */
     features.samplerAnisotropy = supported.samplerAnisotropy;
     features.depthClamp = supported.depthClamp;
     features.textureCompressionETC2 = supported.textureCompressionETC2;
@@ -651,14 +807,29 @@ VkShaderModule VulkanRenderer::makeModule(const AfShaderVk* blob) {
 bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) {
     VkSurfaceCapabilitiesKHR caps{};
     AF_VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys_, surface_, &caps));
+    if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
+        if (error) *error = "surface does not support color-attachment swapchain images";
+        return false;
+    }
 
     uint32_t formatCount = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, nullptr);
-    std::vector<VkSurfaceFormatKHR> formats(formatCount ? formatCount : 1);
-    if (formatCount) vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, formats.data());
-    else formats[0] = {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+    AF_VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, nullptr));
+    if (formatCount == 0) {
+        if (error) *error = "surface reports no swapchain formats";
+        return false;
+    }
+    std::vector<VkSurfaceFormatKHR> formats(formatCount);
+    AF_VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(phys_, surface_, &formatCount, formats.data()));
+    if (formatCount == 0) {
+        if (error) *error = "surface format list became empty during enumeration";
+        return false;
+    }
+    formats.resize(formatCount);
 
     VkSurfaceFormatKHR chosen = formats[0];
+    if (formatCount == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
+        chosen = {VK_FORMAT_B8G8R8A8_SRGB, formats[0].colorSpace};
+    }
     for (const VkSurfaceFormatKHR& f : formats) {
         const bool srgb = (f.format == VK_FORMAT_R8G8B8A8_SRGB || f.format == VK_FORMAT_B8G8R8A8_SRGB);
         if (srgb && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { chosen = f; break; }
@@ -667,10 +838,20 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     swapColorSpace_ = chosen.colorSpace;
 
     uint32_t modeCount = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, nullptr);
-    std::vector<VkPresentModeKHR> modes(modeCount ? modeCount : 1);
-    if (modeCount) vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, modes.data());
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;   /* always available, vsync'd */
+    AF_VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, nullptr));
+    if (modeCount == 0) {
+        if (error) *error = "surface reports no present modes";
+        return false;
+    }
+    std::vector<VkPresentModeKHR> modes(modeCount);
+    AF_VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &modeCount, modes.data()));
+    modes.resize(modeCount);
+    const bool fifoAvailable = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_FIFO_KHR) != modes.end();
+    if (!fifoAvailable) {
+        if (error) *error = "surface does not report the required FIFO present mode";
+        return false;
+    }
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
     for (VkPresentModeKHR m : modes) {
         if (m == VK_PRESENT_MODE_MAILBOX_KHR) { presentMode = m; break; }   /* lowest latency */
     }
@@ -685,16 +866,27 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     }
     swapExtent_ = extent;
 
+    if (caps.minImageCount == 0 || caps.minImageCount == UINT32_MAX ||
+        (caps.maxImageCount != 0 && caps.maxImageCount < caps.minImageCount)) {
+        if (error) *error = "surface reports an invalid minimum swapchain image count";
+        return false;
+    }
     uint32_t imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
 
     VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & alpha)) {
+        bool foundAlpha = false;
         const VkCompositeAlphaFlagBitsKHR fallbacks[3] = {
             VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
             VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR};
-        for (VkCompositeAlphaFlagBitsKHR f : fallbacks)
-            if (caps.supportedCompositeAlpha & f) { alpha = f; break; }
+        for (VkCompositeAlphaFlagBitsKHR f : fallbacks) {
+            if (caps.supportedCompositeAlpha & f) { alpha = f; foundAlpha = true; break; }
+        }
+        if (!foundAlpha) {
+            if (error) *error = "surface reports no supported composite alpha mode";
+            return false;
+        }
     }
 
     VkSwapchainCreateInfoKHR ci{};
@@ -716,9 +908,13 @@ bool VulkanRenderer::createSwapchain(std::string* error, int width, int height) 
     if (ci.oldSwapchain != VK_NULL_HANDLE) vkDestroySwapchainKHR(device_, ci.oldSwapchain, nullptr);
 
     uint32_t n = 0;
-    vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr);
+    AF_VK_CHECK(vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr));
+    if (n == 0) {
+        if (error) *error = "vkGetSwapchainImagesKHR returned no images";
+        return false;
+    }
     swapImages_.resize(n);
-    vkGetSwapchainImagesKHR(device_, swapchain_, &n, swapImages_.data());
+    AF_VK_CHECK(vkGetSwapchainImagesKHR(device_, swapchain_, &n, swapImages_.data()));
 
     swapViews_.resize(n, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < n; ++i)
@@ -907,13 +1103,26 @@ VkFormat VulkanRenderer::pickHdrFormat() const {
     for (VkFormat f : candidates) {
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(phys_, f, &fp);
-        if ((fp.optimalTilingFeatures & need) == need) return f;
+        if ((fp.optimalTilingFeatures & need) != need) continue;
+        VkImageFormatProperties imageProperties{};
+        const VkResult result = vkGetPhysicalDeviceImageFormatProperties(
+            phys_, f, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0,
+            &imageProperties);
+        if (result != VK_SUCCESS) continue;
+        if (imageProperties.maxExtent.width < swapExtent_.width ||
+            imageProperties.maxExtent.height < swapExtent_.height) continue;
+        return f;
     }
-    return VK_FORMAT_R8G8B8A8_UNORM;
+    return VK_FORMAT_UNDEFINED;
 }
 
 bool VulkanRenderer::createHdrTargets(std::string* error) {
     hdrFormat_ = pickHdrFormat();
+    if (hdrFormat_ == VK_FORMAT_UNDEFINED) {
+        if (error) *error = "no HDR format supports required color/sample usage at swapchain extent";
+        return false;
+    }
     const uint32_t w = swapExtent_.width, h = swapExtent_.height;
     VkSampleCountFlagBits samples = VkSampleCountFlagBits(options_.msaaSamples < 1 ? 1 : options_.msaaSamples);
 
@@ -3162,11 +3371,7 @@ void VulkanRenderer::renderFrame(float deltaSeconds) {
         stats_.drawCalls = drawCallsThisFrame_;
         stats_.triangles = trianglesThisFrame_;
         stats_.vertices = vertexCount_;
-        if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-            const float alpha = 0.06f;
-            stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-            stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-        }
+        updateFrameLoopTimingEstimate(stats_, deltaSeconds);
     }
 
     frameIndex_ = (frameIndex_ + 1) % kFramesInFlight;

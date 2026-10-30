@@ -15,11 +15,15 @@ Compose BOM 2024.06.00, activity-compose 1.9.0, core-ktx 1.13.1, exifinterface 1
 
 ## Native
 
-Custom C++17 kernel/renderer. zlib is used for PNG; Android links the platform zlib. The default GLES renderer needs Khronos EGL/GLES headers; the opt-in native Vulkan backend additionally needs NDK Vulkan headers and links Android's **system** `libvulkan.so` (no bundled loader). Shader-table generation uses NDK `glslc`/`spirv-val`. No Filament/bgfx/Lugdunum runtime dependency is present.
+Custom C++17 kernel/renderer. zlib is used for PNG; Android links the platform zlib. The default native Vulkan renderer uses NDK Vulkan headers and Android's **system** `libvulkan.so`; GLES 3.1 remains the startup/recovery fallback and uses Khronos EGL/GLES headers (no bundled Vulkan loader). Shader-table generation uses NDK `glslc`/`spirv-val`. No Filament/bgfx/Lugdunum runtime dependency is present.
 
 ## Rust
 
-Workspace is dependency-free by manifest, version 0.9.0, rust-version 1.70, `panic=abort`. Repository URL is `https://example.invalid/avatarforge`. Not built in this environment.
+Workspace is dependency-free by manifest, version 0.10.1, rust-version 1.70, `panic=abort`, with the real GitHub repository URL. The default workspace tests passed locally against the explicit C++ `build-host/libafcore.so` preload; the optional renderer feature has separate compile/doc-test coverage because its native GPU symbols are not part of the default host kernel build.
+
+## Vulkan target distinction
+
+The requested target label is Vulkan `1.3.304`; `VkApplicationInfo` uses the standards-compliant `VK_API_VERSION_1_3` encoding (patch zero, ignored by Vulkan), and the source gates the loader and selected physical device at API 1.3. Vulkan SPIR-V is compiled/validated for `vulkan1.3`. The pinned NDK 26.1.10909125 headers identify `VK_HEADER_VERSION 237` (header revision 1.3.237); this is not the target label or a runtime version. The supplied SM-S921B checker report remains separate capability evidence, not proof of AvatarForge initialization. Local ARM64 compilation/link and source/shader tests pass; runtime loader/device values are unobserved until the exact app runs on a phone. See [the target audit](VULKAN_TARGET_AUDIT.md).
 
 ## Supply-chain risks
 

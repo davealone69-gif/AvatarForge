@@ -254,7 +254,11 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
                 )
                 TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
             }
-            val performance = if (failed) "GPU unavailable" else "%.0f FPS (%.1f ms)".format(stats.fps, stats.frameMs)
+            val performance = when {
+                failed -> "GPU unavailable"
+                !stats.hasValidFrameTiming -> "Warming up · timing not measured"
+                else -> "%.0f FPS (%.1f ms frame-loop delta)".format(stats.fps, stats.frameMs)
+            }
             val backendLabel = when (info?.backend) {
                 "vulkan" -> "Native Vulkan"
                 "gles31" -> "OpenGL ES 3.1"
@@ -263,8 +267,8 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
             Text(
                 "$backendLabel · $performance",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (!failed && stats.meetsTarget) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.error,
+                color = if (!failed && (!stats.hasValidFrameTiming || stats.meetsTarget))
+                    MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
             )
             if (details) {
                 Text(result.summary(), style = MaterialTheme.typography.bodySmall)
@@ -279,7 +283,7 @@ private fun Header(result: EngineResult, info: RendererInfo?, stats: RendererSta
                     // it is not an AvatarForge backend selection.
                     Text("Reported driver: ${it.deviceName} · ${it.apiVersion} · ${it.driver}", style = MaterialTheme.typography.labelSmall)
                 }
-                if (!failed && !stats.meetsTarget) {
+                if (!failed && stats.hasValidFrameTiming && !stats.meetsTarget) {
                     Text("Below 30 FPS: automatic quality reduction is active.", style = MaterialTheme.typography.labelSmall)
                 }
             }

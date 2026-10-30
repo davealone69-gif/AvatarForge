@@ -1,7 +1,7 @@
 /*
  * AvatarForge :: AvatarRenderer.kt
  *
- * Kotlin wrapper over the JNI renderer bridge. Native C++ implements GLES 3.1 and opt-in Vulkan,
+ * Kotlin wrapper over the JNI renderer bridge. Native C++ implements Vulkan by default and GLES 3.1
  * without a game engine; see native/src/render/af_render.h for backend selection.
  *
  * Ownership rule: one renderer per Surface, created/used/destroyed on ONE thread. The app satisfies
@@ -58,7 +58,11 @@ data class RendererStats(
     val frameSubmissions: Int = 0,
     val presentRequestsAccepted: Int = 0,
 ) {
-    val meetsTarget: Boolean get() = fps >= 30f
+    /** True only after a finite, positive caller-supplied frame-loop delta has been observed. */
+    val hasValidFrameTiming: Boolean
+        get() = frameMs.isFinite() && frameMs > 0f && fps.isFinite() && fps > 0f
+
+    val meetsTarget: Boolean get() = hasValidFrameTiming && fps >= 30f
 }
 
 /** App-level graphics API; GLES through ANGLE still counts as GLES, not native Vulkan. */
@@ -67,7 +71,7 @@ enum class RenderBackend { GLES, VULKAN }
 /** Everything the viewer's settings panel can change. Defaults match RendererOptions in C++. */
 data class RenderSettings(
     val quality: Quality = Quality.AUTO,
-    val backend: RenderBackend = RenderBackend.GLES,
+    val backend: RenderBackend = RenderBackend.VULKAN,
     val shadows: Boolean = true,
     val bloom: Boolean = false,
     val sss: Boolean = true,
@@ -97,7 +101,7 @@ class AvatarRenderer private constructor(private var handle: Long) {
 
     companion object {
         /**
-         * Creates the selected native renderer for a live Surface. Vulkan is opt-in; if its
+         * Creates the selected native renderer for a live Surface. Vulkan is the default; if its
          * initialization fails, the native factory tries GLES 3.1 and exposes the actual backend
          * in info(). Neither API ever falls back to a software success.
          */

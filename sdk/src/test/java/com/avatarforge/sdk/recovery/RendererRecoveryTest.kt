@@ -13,7 +13,7 @@ import org.junit.Test
 
 class RendererRecoveryTest {
     private fun stats(fps: Float = 60f, tris: Int = 100, draws: Int = 3) = RendererStats(
-        frameMs = if (fps > 0f) 1000f / fps else 0f,
+        frameMs = if (fps > 0f) 1000f / fps else -1f,
         cpuMs = 1f,
         fps = fps,
         textureMiB = 1f,
@@ -88,6 +88,14 @@ class RendererRecoveryTest {
     fun `probe requires consecutive non-empty frames and does not claim visibility`() {
         val probe = RecoveryFrameProbe(requiredFrames = 3, timeoutFrames = 5)
         assertNull(probe.observe(stats()))
+        assertNull(probe.observe(stats()))
+        assertEquals(RecoveryProbeOutcome.FRAME_SUBMISSION_STABLE, probe.observe(stats()))
+    }
+
+    @Test
+    fun `probe does not count an unmeasured timing sample`() {
+        val probe = RecoveryFrameProbe(requiredFrames = 2, timeoutFrames = 4)
+        assertNull(probe.observe(stats(fps = 0f)))
         assertNull(probe.observe(stats()))
         assertEquals(RecoveryProbeOutcome.FRAME_SUBMISSION_STABLE, probe.observe(stats()))
     }

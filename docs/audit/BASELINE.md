@@ -68,3 +68,22 @@ GitHub compare API results were collected for all **19 non-main remote branch ti
 ## Preservation and next action
 
 No user changes were discarded. No protected branch, release or signing secret was altered. The next action is a severity-ranked trace of actual execution paths, followed by small tested fixes. [PROJECT_STATUS.md](../../PROJECT_STATUS.md) is the current-state entry point; the findings and verification records distinguish source proof, CI proof and device proof.
+
+
+## Current working-tree continuation — 2026-10-30
+
+This addendum records the separate environment and Git snapshot used for the Vulkan-restoration pass; it does not rewrite the historical `/home/user/AvatarForge` baseline above.
+
+| Item | Current observation |
+|---|---|
+| Working directory | `/workspace/AvatarForge` |
+| Branch / initial task HEAD | `fix/verify-clean-checkout-output-dir` / `187fa25` |
+| Task-start working tree | Clean; the three pre-existing local commits were preserved before this pass made changes |
+| Remote base | `origin/arena/c87f5c50-avatarforge`, refreshed to `f82287b`; common ancestor with this fix branch `1dfcf40` |
+| Divergence at last read-only check | Local branch was 3 commits ahead / 2 behind the refreshed arena base; no merge, rebase, reset or force-push was performed |
+| New branch target | Same-name `origin/fix/verify-clean-checkout-output-dir` was absent at the last read-only check; confirm again immediately before pushing |
+| Android toolchain | Android SDK `/home/ubuntu/Android/Sdk`; NDK `26.1.10909125`; NDK `glslc` and `spirv-val` available |
+| Other toolchains | Linux x86_64, GCC/G++, Python 3, JDK/Gradle and Rust/Cargo available for this pass |
+| Device | `adb devices -l` returned no attached phone or emulator; physical-device verification remains unavailable |
+
+The refreshed remote tip and divergence are intentionally recorded separately from the original checkout. The authorized publication target is a new fix branch only; the arena base branch is not a push target.

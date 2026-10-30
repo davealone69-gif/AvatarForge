@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the narrowly pinned pre-removal Vulkan SPIR-V snapshot."""
+"""Regression tests for the Vulkan 1.3 target and pinned pre-removal SPIR-V snapshot."""
 import subprocess
 import unittest
 from pathlib import Path
@@ -16,6 +16,7 @@ class VulkanShaderSnapshotTests(unittest.TestCase):
         cls.header = vk.OUTPUT.read_text(encoding="utf-8")
 
     def test_snapshot_matches_exact_old_sources_and_header(self):
+        self.assertEqual("vulkan1.3", vk.TARGET_ENV)
         self.assertEqual(vk.LEGACY_SOURCE_SHA256, vk.source_digest(self.stages))
         entries = vk.historical_entries(self.stages, self.header)
         self.assertIsNotNone(entries)
@@ -53,7 +54,7 @@ class VulkanShaderSnapshotTests(unittest.TestCase):
         with patch.object(vk.subprocess, "run", return_value=ok) as run:
             self.assertTrue(vk.validate_historical_table(self.stages, self.header, Path("/bin/true")))
             self.assertEqual(13, run.call_count)
-            self.assertTrue(all(call.args[0][1:3] == ["--target-env", "vulkan1.0"]
+            self.assertTrue(all(call.args[0][1:3] == ["--target-env", "vulkan1.3"]
                                 for call in run.call_args_list))
 
 

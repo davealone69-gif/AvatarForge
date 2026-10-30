@@ -111,7 +111,7 @@ typedef enum af_footwear { AF_FOOTWEAR_NONE = 0, AF_FOOTWEAR_SNEAKER = 1, AF_FOO
                            AF_FOOTWEAR_SABATON = 3, AF_FOOTWEAR_HEEL = 4 } af_footwear;
 
 typedef struct af_spec {
-    int32_t   struct_size;      /* = sizeof(af_spec); forwards-compatible struct growth    */
+    int32_t   struct_size;      /* positive byte size; zero is AF_ERR_ABI_MISMATCH; supports growth */
     int32_t   sex;              /* af_sex                                                  */
     int32_t   build;            /* af_build                                                */
     int32_t   hair_style;       /* af_hair_style                                           */
@@ -154,6 +154,9 @@ typedef enum af_image_role {
     AF_IMAGE_FULL_BODY = 2,  /* full-body framing hint for stature/proportion analysis        */
     AF_IMAGE_EXTRA_VIEW = 3  /* additional independently analysed view; no geometric fusion   */
 } af_image_role;
+
+/* The analyser has four role slots and intentionally rejects, rather than truncates, larger lists. */
+#define AF_MAX_REFERENCE_IMAGES 4
 
 /* A decoded, upright, sRGB-8 image. The engine never retains the pointer. */
 typedef struct af_image {
@@ -232,6 +235,8 @@ int32_t af_engine_reset(af_engine* engine, const af_spec* spec);
    in order. Stage calls are idempotent: re-running a stage rebuilds its outputs and
    invalidates downstream ones (reported via af_engine_dirty_mask()). */
 
+/* Accepts 1..AF_MAX_REFERENCE_IMAGES inputs and rejects oversized lists rather than truncating.
+   Returns the number of analyses produced, or a negative af_result on error. */
 int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int32_t image_count,
                                  af_image_analysis* out_analyses, int32_t max_analyses);
 
@@ -324,6 +329,7 @@ const af_vertex* af_engine_vertices_rest(const af_engine* engine);
 /* ------------------------------------------------------------------ skeleton access ----- */
 int32_t af_engine_joint_count(const af_engine* engine);
 int32_t af_engine_joint_info(const af_engine* engine, int32_t joint, af_joint_info* out);
+/* Returns the number of 4x4 matrices copied on success, or a negative af_result on error. */
 int32_t af_engine_joint_matrices(const af_engine* engine, float* out_matrices4x4, int32_t max_joints);
 
 /* ------------------------------------------------------------------ textures ------------- */
@@ -387,13 +393,13 @@ typedef struct af_stats {
     int32_t vertex_count, index_count, triangle_count, submesh_count, joint_count, blendshape_count;
     uint64_t texture_bytes, geometry_bytes, peak_field_bytes;
     float fit_anatomy_ms, field_ms, isosurface_ms, garment_ms, hair_ms, uv_ms, texture_ms, rig_ms, export_ms;
-    char gpu_hint[64];      /* informational; the Android app reports "gles31" */
+    char gpu_hint[64];      /* informational; the Android app reports "vulkan" or "gles31" */
 } af_stats;
 
 int32_t af_engine_stats(const af_engine* engine, af_stats* out);
 
 /* The renderer runs in the app layer (it needs the Android window), so it reports the backend it
-   actually initialised (the Android app uses "gles31"). Purely informational - the engine never
+   actually initialised ("vulkan" or "gles31"). Purely informational - the engine never
    reads it - but it is what the SDK's health check reports to the user. */
 int32_t af_engine_set_gpu_hint(af_engine* engine, const char* hint);
 

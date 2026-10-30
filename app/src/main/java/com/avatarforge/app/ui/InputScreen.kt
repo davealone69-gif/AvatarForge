@@ -15,6 +15,7 @@
 package com.avatarforge.app.ui
 
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -54,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +64,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.avatarforge.app.ImageAnalysisRequestGuard
+import com.avatarforge.app.withReferenceImageIo
 import com.avatarforge.sdk.AvatarSpec
 import com.avatarforge.sdk.Build
 import com.avatarforge.sdk.Footwear
@@ -69,6 +73,11 @@ import com.avatarforge.sdk.HairStyle
 import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.Outfit
 import com.avatarforge.sdk.Sex
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 
 private val PROMPT_EXAMPLES = listOf(
     "athletic woman, ponytail, full plate armour",
@@ -88,20 +97,120 @@ fun InputScreen(
     imageB: Bitmap?,
     onImageA: (Bitmap?) -> Unit,
     onImageB: (Bitmap?) -> Unit,
+    analysisInProgress: Boolean,
     analysisNote: String?,
     onGeneratePrompt: () -> Unit,
     onGenerateImages: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val decodeScope = rememberCoroutineScope()
+    val decodeGuardA = remember { ImageAnalysisRequestGuard() }
+    val decodeGuardB = remember { ImageAnalysisRequestGuard() }
+    var decodeJobA by remember { mutableStateOf<Job?>(null) }
+    var decodeJobB by remember { mutableStateOf<Job?>(null) }
+    var decodingA by remember { mutableStateOf(false) }
+    var decodingB by remember { mutableStateOf(false) }
+    var decodeNoteA by remember { mutableStateOf<String?>(null) }
+    var decodeNoteB by remember { mutableStateOf<String?>(null) }
+
+    fun clearA() {
+        decodeGuardA.begin()
+        decodeJobA?.cancel()
+        decodeJobA = null
+        decodingA = false
+        decodeNoteA = null
+        onImageA(null)
+    }
+
+    fun clearB() {
+        decodeGuardB.begin()
+        decodeJobB?.cancel()
+        decodeJobB = null
+        decodingB = false
+        decodeNoteB = null
+        onImageB(null)
+    }
+
+    fun decodeA(uri: Uri?) {
+        if (uri == null) return
+        val request = decodeGuardA.begin()
+        decodeJobA?.cancel()
+        decodingA = true
+        decodeNoteA = null
+        onImageA(null)
+        decodeJobA = decodeScope.launch {
+            val bitmap = try {
+                withReferenceImageIo {
+                    val decoded = AppBitmaps.decode(uri)
+                    try {
+                        currentCoroutineContext().ensureActive()
+                        decoded
+                    } catch (cancelled: CancellationException) {
+                        decoded?.recycle()
+                        throw cancelled
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (!decodeGuardA.isCurrent(request)) {
+                bitmap?.recycle()
+                return@launch
+            }
+            decodeJobA = null
+            decodingA = false
+            if (bitmap == null) decodeNoteA = "Image A could not be decoded. Choose another image or generate from the prompt."
+            else onImageA(bitmap)
+        }
+    }
+
+    fun decodeB(uri: Uri?) {
+        if (uri == null) return
+        val request = decodeGuardB.begin()
+        decodeJobB?.cancel()
+        decodingB = true
+        decodeNoteB = null
+        onImageB(null)
+        decodeJobB = decodeScope.launch {
+            val bitmap = try {
+                withReferenceImageIo {
+                    val decoded = AppBitmaps.decode(uri)
+                    try {
+                        currentCoroutineContext().ensureActive()
+                        decoded
+                    } catch (cancelled: CancellationException) {
+                        decoded?.recycle()
+                        throw cancelled
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (!decodeGuardB.isCurrent(request)) {
+                bitmap?.recycle()
+                return@launch
+            }
+            decodeJobB = null
+            decodingB = false
+            if (bitmap == null) decodeNoteB = "Image B could not be decoded. Choose another image or continue without it."
+            else onImageB(bitmap)
+        }
+    }
+
     val pickA = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        onImageA(AppBitmaps.decode(uri))
+        decodeA(uri)
     }
     val pickB = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        onImageB(AppBitmaps.decode(uri))
+        decodeB(uri)
     }
+    val canEdit = enabled && !analysisInProgress && !decodingA && !decodingB
+    val visibleAnalysisNote = listOfNotNull(decodeNoteA, decodeNoteB, analysisNote)
+        .joinToString("\n").takeIf { it.isNotBlank() }
 
     LazyColumn(
         modifier = modifier.fillMaxSize().safeDrawingPadding(),
@@ -125,13 +234,13 @@ fun InputScreen(
                 minLines = 2,
                 label = { Text("Prompt") },
                 placeholder = { Text(PROMPT_EXAMPLES.first()) },
-                enabled = enabled,
+                enabled = canEdit,
             )
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PROMPT_EXAMPLES.take(2).forEach { example ->
-                    TextButton(onClick = { onPromptChange(example) }, enabled = enabled) {
+                    TextButton(onClick = { onPromptChange(example) }, enabled = canEdit) {
                         Text(example.split(",").first(), maxLines = 1)
                     }
                 }
@@ -154,7 +263,7 @@ fun InputScreen(
                     role = "Portrait or full body",
                     bitmap = imageA,
                     onClick = { pickA.launch("image/*") },
-                    onClear = { onImageA(null) },
+                    onClear = ::clearA,
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
                 )
@@ -163,17 +272,26 @@ fun InputScreen(
                     role = "Garment / material",
                     bitmap = imageB,
                     onClick = { pickB.launch("image/*") },
-                    onClear = { onImageB(null) },
+                    onClear = ::clearB,
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
                 )
             }
         }
-        if (analysisNote != null) {
+        if (decodingA || decodingB || analysisInProgress) {
+            item {
+                Text(
+                    if (decodingA || decodingB) "Preparing reference image…" else "Analysing reference images…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (visibleAnalysisNote != null) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Text(
-                        analysisNote,
+                        visibleAnalysisNote,
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -181,20 +299,29 @@ fun InputScreen(
             }
         }
 
-        item { SpecEditor(spec, onSpecChange, enabled) }
+        item { SpecEditor(spec, onSpecChange, canEdit) }
 
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onGeneratePrompt,
-                    enabled = enabled && prompt.isNotBlank(),
+                    enabled = canEdit && prompt.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Generate from prompt") }
                 Button(
                     onClick = onGenerateImages,
-                    enabled = enabled && imageA != null,
+                    enabled = canEdit && imageA != null,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (imageB != null) "Generate using both hints" else "Generate using image measurements") }
+                ) {
+                    Text(
+                        when {
+                            decodingA || decodingB -> "Preparing image…"
+                            analysisInProgress -> "Analysing references…"
+                            imageB != null -> "Generate using both hints"
+                            else -> "Generate using image measurements"
+                        },
+                    )
+                }
                 if (imageB != null && imageA == null) {
                     Text(
                         "Image B needs Image A because the coarse analysis flow starts from the primary appearance/proportion reference.",

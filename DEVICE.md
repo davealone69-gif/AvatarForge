@@ -23,9 +23,9 @@ the host cannot judge at all.
 
 | | |
 |---|---|
-| Device | arm64 Android 8.0+ (API 26) with **OpenGL ES 3.1**; that is the only backend AvatarForge implements |
+| Device | arm64 Android 8.0+ (API 26) with a Vulkan loader and OpenGL ES 3.1 fallback |
 | Host | `adb` from platform-tools, and a copy of this repo (for `tools/validate_glb.py`) |
-| Artifact | `artifacts/avatarforge-debug-arm64.apk` (or the release one, see §1) |
+| Artifact | exact-head CI debug APK or a locally built arm64 debug APK |
 | Free storage | ~2 GB on the device: every generation writes a 33–39 MB `.glb` plus its textures |
 | Time | 15 minutes for the smoke path, 45 for the full sheet |
 
@@ -100,8 +100,9 @@ that is a finding — record it.
 ## 5. The viewer
 
 1. The model appears on a lit ground plane. Orbit with a drag, pinch to zoom.
-2. Open the **Stats** drawer: it shows backend (`gles31`), frame ms, FPS, triangles, draw
-   calls, and the **quality level** the budget controller has settled on.
+2. Open the **Stats** drawer: it shows the backend actually initialized (`vulkan` or `gles31`),
+   frame interval, FPS, triangles, draw calls, and the **quality level** the budget controller has
+   settled on. Timing remains explicitly in warm-up state until a real render-loop interval exists.
 3. Requirement: **≥30 FPS** while orbiting with the default (AUTO) quality. Orbiting fast on a
    mid-range phone should *step the quality down*, not drop frames: the three knobs the controller
    touches are MSAA, shadow-map size and bloom levels — camera, exposure and the model never change.
@@ -128,18 +129,15 @@ Under **Animation**:
 
 ## 7. Two-image multi-reference flow (the generator's second half)
 
-1. Prepare **Image A**: a portrait or half-body photo (any person). Prepare **Image B**: a photo of
-   armour or a garment on a plain background.
-2. Load both, tag A as `IDENTITY` and B as `EQUIPMENT` (the slots are labelled).
-3. Generate. Expected behaviour, in stages, body first and equipment second so the peak stays inside
-   the RAM ceiling:
-   * the body is built from A's proportions and skin tone, with the lower body **inferred** when A
-     only shows the torso;
-   * B is segmented from its background and transferred to the body both geometrically (silhouette
-     influence on the SDF) and texturally (albedo/roughness contribution on the affected submeshes).
-4. Compare against a run with A alone: the equipment pass must visibly add parts (pauldrons, plates,
-   boots) rather than recolour the skin. Open the **Inspect** panel and tap the added geometry — the
-   region name should read as the equipment region (`CLOTH`/`METAL`), not `SKIN`.
+1. Prepare **Image A** for coarse framing/proportion and appearance cues; prepare **Image B** for
+   garment/armour colour and metal-confidence cues. The analyzer is deterministic and does not
+   reconstruct identity, segment source garments into geometry, or transfer source pixels.
+2. Load either or both images. Confirm that the A/B analysis cards show measurements before pressing
+   Generate, and that clearing or replacing an image does not leave stale results.
+3. If decoding or analysis fails, the app must show a recoverable message and must not freeze the
+   main thread or silently claim that the image contributed.
+4. Generate with both images and compare against a text-only run. Confirm that preview and generated
+   specs reflect the displayed analysis, and that the output remains an original procedural avatar.
 5. Re-run the *same* pair twice: geometry must be byte-identical apart from the seed-dependent
    details (the kernel is deterministic — host test `[6]`).
 
@@ -217,22 +215,20 @@ system Vulkan capability and frame counters alone do not prove visible/sharp pix
 ### Samsung SM-S921B: driver and blurry clip retest
 
 1. Install the **exact-head** debug APK; run `python3 tools/verify_gles_artifacts.py <apk>` to
-   require system-Vulkan plus GLES linkage and reject a **bundled** Vulkan loader. Start with
-   **GLES (default)**, play `walk` and `run`, and run `tools/device_check.sh --soak 120` with USB
+   require system Vulkan/GLES linkage and reject a **bundled** Vulkan loader. Start with the current
+   **Vulkan default**, play `walk` and `run`, and run `tools/device_check.sh --soak 120` with USB
    debugging authorised. Export **MENU → Self diagnostics** during playback. Record the actual
-   `Backend: gles31`, app GLES context/driver, accepted presents, CPU frame time and thermal status.
-   The older `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)` report describes Android's GLES
-   translation layer, **not** this app's native Vulkan renderer.
-2. In RENDER settings opt into **Native Vulkan (experimental)**. The viewer must recreate the
-   native renderer. Capture another diagnostics export: `Backend: vulkan` with `API: Vulkan ...`
-   and the app's device/driver string confirms the distinct API was selected. If it still reports
-   `gles31`, initialization fell back; save the BACKEND_FALLBACK journal entry and
-   `adb logcat -s AvatarForgeRenderer:V` showing the Vulkan error. Test `walk`, `run`, rotation,
-   background/foreground, zoom/orbit and **Safe recovery**; a fatal VkResult must stop Vulkan and
-   re-create using safe GLES, not count blank frames. A third-party Vulkan Checker result does not
-   substitute for any of these in-app checks. To compare vendor GLES versus ANGLE, use the phone's
-   per-app driver setting if offered; the app cannot force that platform choice.
-3. With bloom **off**, capture paused and running PNGs for **each** active backend at the same
+   backend, physical-device API/driver, accepted presents, CPU frame time and thermal status; also
+   capture the `AF_VK_CONTEXT` log line, which separates the requested target label, application API,
+   compiled header revision, loader API and physical-device API.
+2. Select **GLES** explicitly and repeat the same clip, lifecycle, orbit and thermal checks. Confirm
+   `Backend: gles31` and capture the app's GLES context/driver. Test the bounded fallback by recording
+   the actual error and BACKEND_FALLBACK journal entry when Vulkan startup is unavailable; a fatal
+   Vulkan runtime error must stop that backend and recover through GLES rather than count blank frames.
+   The app requests Vulkan 1.3 using `VK_API_VERSION_1_3` (patch zero; Vulkan ignores the `apiVersion`
+   patch field). The supplied checker label `1.3.304` is separate device-capability evidence, not proof
+   that AvatarForge created an instance, selected Vulkan, or rendered correctly.
+3. With bloom **off**, capture paused and running PNGs for **each** backend at the same
    camera distance/FOV and quality/thermal state. Compare actual face/cloth/gear texture edges,
    geometry and motion; the UV fix is a bake change, so regenerate the avatar with this APK rather
    than reopening an older export. Share the matched captures, diagnostics and exact APK SHA.

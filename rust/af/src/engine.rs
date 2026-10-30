@@ -204,6 +204,11 @@ impl Engine {
         &self.spec
     }
 
+    #[cfg(feature = "renderer")]
+    pub(crate) fn as_raw_handle(&self) -> *mut sys::af_engine {
+        self.handle
+    }
+
     /// A cheap, cloneable progress/cancel handle for this engine.
     pub fn job(&self) -> JobHandle {
         JobHandle { state: std::sync::Arc::clone(&self.bridge.state) }
@@ -438,12 +443,18 @@ impl Engine {
     }
 
     /// World-space joint matrices (column-major 4x4 each), what a GPU skinning path would upload.
+    /// The native ABI returns the number copied on success (negative values are error codes).
     pub fn joint_matrices(&self) -> Result<Vec<f32>> {
         let joints = self.joint_count().max(0) as usize;
         let mut out = vec![0.0f32; joints * 16];
         let code = unsafe { sys::af_engine_joint_matrices(self.handle, out.as_mut_ptr(), joints as i32) };
-        if code != sys::AF_OK {
+        if code < 0 {
             return Err(error_from_code(code, "af_engine_joint_matrices"));
+        }
+        if code as usize != joints {
+            return Err(Error::Internal(format!(
+                "af_engine_joint_matrices copied {code} of {joints} requested matrices"
+            )));
         }
         Ok(out)
     }

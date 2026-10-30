@@ -70,6 +70,15 @@ else
     tail -15 build-host/model_detail_tests.txt
 fi
 
+# ------------------------------------------------------------------ Android release contract --
+banner "release workflow: signed artifact staging and provenance contract"
+if python3 tools/test_release_workflow.py > build-host/release_workflow_tests.txt 2>&1; then
+    ok "$(tail -1 build-host/release_workflow_tests.txt)"
+else
+    bad "release workflow artifact paths are inconsistent - see build-host/release_workflow_tests.txt"
+    cat build-host/release_workflow_tests.txt
+fi
+
 # ------------------------------------------------------------------ 2. shader tables ------------
 banner "shaders: complete GLSL ES table matches the sources"
 # glslc and spirv-val ship inside the NDK; make sure the Python script can see them even when
@@ -86,6 +95,24 @@ else
     else
         bad "shader tables are stale or a stage failed to compile"
         tail -12 /tmp/af_shader_check.txt | sed 's/^/      /'
+    fi
+fi
+
+banner "Vulkan shaders: Vulkan 1.3 target and checked-in SPIR-V provenance"
+if python3 tools/test_embed_vulkan_shaders.py > /tmp/af_vulkan_shader_tests.txt 2>&1; then
+    ok "$(grep -E '^Ran [0-9]+ tests|^OK$' /tmp/af_vulkan_shader_tests.txt | tr '\n' ';' | sed 's/;$/ /')"
+else
+    bad "Vulkan shader provenance regression - see /tmp/af_vulkan_shader_tests.txt"
+    tail -12 /tmp/af_vulkan_shader_tests.txt | sed 's/^/      /'
+fi
+if python3 tools/embed_vulkan_shaders.py --check > /tmp/af_vulkan_shader_check.txt 2>&1; then
+    ok "$(tail -1 /tmp/af_vulkan_shader_check.txt)"
+else
+    if grep -Eqi "glslc|spirv-val" /tmp/af_vulkan_shader_check.txt; then
+        skip "NDK glslc or spirv-val unavailable; Vulkan 1.3 compiler validation not claimed"
+    else
+        bad "Vulkan shader table/source mismatch or Vulkan 1.3 validation failed"
+        tail -12 /tmp/af_vulkan_shader_check.txt | sed 's/^/      /'
     fi
 fi
 
@@ -162,6 +189,22 @@ if command -v cargo >/dev/null 2>&1; then
     else
         bad "the Rust core does not build - see /tmp/af_rust_build.txt"
         tail -8 /tmp/af_rust_build.txt | sed 's/^/      /'
+    fi
+    if [ "$(uname -s)" = "Linux" ] && [ -f build-host/libafcore.so ]; then
+        # Cargo prepends rust/target/debug/deps to LD_LIBRARY_PATH, where the work-in-progress
+        # Rust cdylib shares the C++ library's legacy libafcore.so name. Preload the explicitly
+        # selected C++ implementation so af-sys integration tests resolve the intended ABI.
+        RUST_TEST_PRELOAD="$ROOT/build-host/libafcore.so"
+        [ -n "${LD_PRELOAD:-}" ] && RUST_TEST_PRELOAD="$RUST_TEST_PRELOAD:$LD_PRELOAD"
+        if ( cd rust && LD_PRELOAD="$RUST_TEST_PRELOAD" cargo test --workspace --offline -- --nocapture ) \
+                > /tmp/af_rust_tests.txt 2>&1; then
+            ok "Rust workspace tests passed: $(grep '^test result: ok\.' /tmp/af_rust_tests.txt | tr '\n' ';' | sed 's/;$/ /')"
+        else
+            bad "Rust workspace tests failed - see /tmp/af_rust_tests.txt"
+            tail -20 /tmp/af_rust_tests.txt | sed 's/^/      /'
+        fi
+    else
+        skip "Rust workspace runtime test library preload applies only on Linux with build-host/libafcore.so"
     fi
 else
     skip "no cargo on PATH - the Rust core was not checked (see BUILD.md)"

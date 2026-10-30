@@ -25,6 +25,7 @@ bool contains(const std::string& text, const char* part) { return text.find(part
 ANativeWindow* window() { return reinterpret_cast<ANativeWindow*>(uintptr_t(10)); }
 af::RendererOptions options() {
     af::RendererOptions o{};
+    o.preferVulkan = false;  // Most tests exercise GLES directly; Vulkan has a separate explicit case.
     o.msaaSamples = 2;
     return o;
 }
@@ -40,6 +41,8 @@ void successAndOwnership() {
     std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
     check(r != nullptr, "GLES initializes without an engine attached");
     check(error.empty(), "successful initialization has no error");
+    check(r && r->stats().frameMs < 0.0f && r->stats().fps < 0.0f && r->stats().cpuMs < 0.0f,
+          "timing is explicitly unknown before a measured frame");
     check(af_test::state.glErrors.empty(), "no invalid sampler/VAO calls during initialization");
     check(af_test::state.legacyExtensionQueries == 0 && af_test::state.indexedExtensionQueries > 0,
           "ES 3.1 capabilities use indexed extensions, not glGetString(GL_EXTENSIONS)");
@@ -56,11 +59,20 @@ void successAndOwnership() {
     check(validAvatarElements, "avatar VAO captures a non-zero element buffer");
     if (r) {
         r->attachEngine(reinterpret_cast<af_engine*>(uintptr_t(20)));
+        r->renderFrame(0.0f);
+        check(r->stats().frameMs < 0.0f && r->stats().fps < 0.0f,
+              "zero first delta remains explicitly unmeasured");
         r->renderFrame(1.0f / 60.0f);
-        r->renderFrame(1.0f / 60.0f);
-        r->renderFrame(1.0f / 60.0f);
+        check(std::fabs(r->stats().frameMs - (1000.0f / 60.0f)) < 0.02f &&
+              std::fabs(r->stats().fps - 60.0f) < 0.1f,
+              "first valid sample seeds frame time instead of reporting an inflated FPS");
+        const float expectedEma = (1000.0f / 60.0f) * 0.94f + (1000.0f / 30.0f) * 0.06f;
+        r->renderFrame(1.0f / 30.0f);
+        check(std::fabs(r->stats().frameMs - expectedEma) < 0.02f &&
+              std::fabs(r->stats().fps - 1000.0f / expectedEma) < 0.1f,
+              "second valid sample follows the documented 0.06 EMA");
         check(r->stats().triangles == 1, "attached fixture reaches the real draw path");
-        check(r->stats().textureBytes > 0, "uploaded atlas texture memory is reported, not zero");
+    check(r->stats().textureBytes > 0, "uploaded atlas texture memory is reported, not zero");
         check(af_test::state.anisotropyWrites == AF_TEX_COUNT && af_test::state.lastAnisotropy == 4.0f,
               "atlas enables supported 4x anisotropy for oblique textures during clips");
         check(af_test::state.legacyExtensionQueries == 0,
@@ -237,18 +249,23 @@ void optionSanitisation() {
 }
 
 void renderAbi() {
+    af_test::reset(); af_test_vk::reset(); af_test_vk::initSucceeds = false;
     af_render_options o{};
     af_render_options_defaults(&o);
-    check(sizeof(o) == 64 && o.quality == 0 && o.msaa_samples == 4, "GLES options ABI has no backend-choice field");
+    check(sizeof(o) == 64 && o.quality == 0 && o.msaa_samples == 4, "render options ABI remains layout-compatible");
     void* handle = af_renderer_create(window(), &o);
-    check(handle != nullptr, "C ABI creates the GLES renderer");
+    check(handle != nullptr && af_test_vk::attempts == 1 && af_test::state.contextsCreated == 1,
+          "C ABI defaults to Vulkan and falls back to GLES when Vulkan initialization fails");
     af_render_stats stats{};
-    check(af_renderer_stats(handle, &stats) == AF_OK && sizeof(stats) == 72 && stats.gpu_ms == -1.0f,
-          "C telemetry preserves unknown GPU time and aligned layout");
+    check(af_renderer_stats(handle, &stats) == AF_OK && sizeof(stats) == 72 && stats.gpu_ms == -1.0f &&
+          stats.frame_ms < 0.0f && stats.fps < 0.0f && stats.cpu_ms < 0.0f,
+          "C telemetry preserves unknown timing sentinels and aligned layout");
     af_renderer_frame(handle, 1.0f / 60.0f);
     check(af_renderer_stats(handle, &stats) == AF_OK && stats.frame_attempts == 1 &&
           stats.frame_submissions == 1 && stats.present_requests_accepted == 1,
           "C telemetry distinguishes attempts, submissions and accepted presents");
+    check(stats.frame_ms > 0.0f && stats.fps > 0.0f && stats.cpu_ms >= 0.0f,
+          "C telemetry becomes measured only after an accepted frame");
     af_renderer_destroy(handle);
 }
 void selector() {
@@ -268,6 +285,18 @@ void selector() {
     r.reset(af::Renderer::create(window(), options(), &error));
     check(r != nullptr && error.empty(), "fresh GLES attempt succeeds and clears stale error");
 }
+
+void defaultBackendSelection() {
+    af_test::reset(); af_test_vk::reset(); af_test_vk::initSucceeds = true;
+    std::string error;
+    const af::RendererOptions defaults{};
+    std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), defaults, &error));
+    check(defaults.preferVulkan && r && r->info().backend == "vulkan" && error.empty() &&
+          af_test_vk::attempts == 1 && af_test::state.contextsCreated == 0,
+          "native RendererOptions defaults to Vulkan without creating a GLES context");
+    r.reset();
+    af_test::reset(); af_test_vk::reset();
+}
 }  // namespace
 int main() {
     successAndOwnership();
@@ -278,7 +307,7 @@ int main() {
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
-    selector(); vulkanSelection(); optionSanitisation(); renderAbi();
+    selector(); defaultBackendSelection(); vulkanSelection(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

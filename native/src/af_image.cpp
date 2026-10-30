@@ -73,7 +73,10 @@ struct Work {
 
 /** Box-downsamples so the long edge is at most `maxSide`. Deterministic and cheap. */
 bool makeWork(const af_image& img, Work* out) {
-    if (img.width <= 0 || img.height <= 0 || img.channels < 3 || !img.pixels) return false;
+    std::uint64_t inputBytes = 0;
+    if (!out || !img.pixels ||
+        !checkedImageByteCount(img.width, img.height, img.channels, &inputBytes)) return false;
+    (void)inputBytes;
     const int longSide = std::max(img.width, img.height);
     const int step = std::max(1, (longSide + kAnalysisMaxSide - 1) / kAnalysisMaxSide);
     const int w = std::max(1, img.width / step);
@@ -129,6 +132,18 @@ float medianChannel(const Work& im, const std::vector<int>& idx, int channel) {
 }
 
 } // namespace
+
+bool checkedImageByteCount(int32_t width, int32_t height, int32_t channels,
+                           std::uint64_t* outBytes) {
+    if (!outBytes) return false;
+    *outBytes = 0;
+    if (width <= 0 || height <= 0 || width > kAnalysisMaxDimension || height > kAnalysisMaxDimension ||
+        (channels != 3 && channels != 4)) return false;
+    const std::uint64_t pixels = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    if (pixels > kAnalysisMaxInputBytes / static_cast<std::uint64_t>(channels)) return false;
+    *outBytes = pixels * static_cast<std::uint64_t>(channels);
+    return true;
+}
 
 bool analyseImage(const af_image& image, af_image_analysis* out) {
     if (!out) return false;

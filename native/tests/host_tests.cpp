@@ -24,6 +24,7 @@
  */
 #include "../src/af_anatomy.h"
 #include "../src/af_field.h"
+#include "../src/af_image.h"
 #include "../src/af_image_pack.h"
 #include "../include/afcore.h"
 #include "../src/af_isosurface.h"
@@ -134,6 +135,13 @@ static void testImageAnalysisPacking() {
     CHECK(shortWrite == 0 && untouched, "undersized destinations are rejected without a partial write");
     CHECK(af::packImageAnalysis(zero, nullptr, AF_IMAGE_ANALYSIS_FLOAT_COUNT) == 0,
           "null analysis destinations are rejected");
+    std::uint64_t imageBytes = 0;
+    CHECK(af::checkedImageByteCount(1600, 1600, 4, &imageBytes) && imageBytes == 10240000,
+          "RGBA image byte count is computed within the analysis limit");
+    CHECK(!af::checkedImageByteCount(INT32_MAX, 2, 4, &imageBytes) &&
+              !af::checkedImageByteCount(16385, 1, 3, &imageBytes) &&
+              !af::checkedImageByteCount(64, 64, 2, &imageBytes),
+          "overflow-prone dimensions, oversized edges and unsupported channels are rejected");
     std::printf("  %s  stride=%d, all Lab triplets retained, guards intact\n", PASS,
                 AF_IMAGE_ANALYSIS_FLOAT_COUNT);
 }
@@ -579,12 +587,20 @@ static void testAbi() {
     /* --- prompt interpretation, on the ABI's own entry point --- */
     af_spec spec;
     af_spec_init(&spec);
+    af_spec zeroSizeSpec{};
+    af_engine* rejectedZeroSize = nullptr;
+    CHECK(af_engine_create(&zeroSizeSpec, nullptr, &rejectedZeroSize) == AF_ERR_ABI_MISMATCH &&
+              rejectedZeroSize == nullptr,
+          "zero-sized spec is rejected before a full-width ABI copy");
     af_callbacks cb{};
     cb.on_progress = testAbiProgress;
     cb.on_log = testAbiLog;
     cb.should_cancel = testAbiCancel;
     af_engine* engine = nullptr;
     CHECK(af_engine_create(&spec, &cb, &engine) == AF_OK && engine != nullptr, "engine created");
+    CHECK(af_engine_reset(engine, &zeroSizeSpec) == AF_ERR_ABI_MISMATCH &&
+              std::strstr(af_engine_last_error(engine), "struct_size must be positive") != nullptr,
+          "zero-sized spec reset is rejected with a clear ABI diagnostic");
 
     /* Outfit NONE is a genuine unclothed surface, so the adult-only rule must live below the UI.
        Exercise direct create, reset and prompt entry points to prove no C/JNI/Rust caller bypasses it. */
@@ -899,6 +915,16 @@ static void testAbi() {
         CHECK(a.subject_coverage <= 1.0f, "coverage is a fraction (%.3f)", a.subject_coverage);
         CHECK(af_engine_analyze_images(e2, nullptr, 0, nullptr, 0) == AF_ERR_INVALID_ARG,
               "a null image list is refused");
+        af_image oversized{INT32_MAX, 32, 4, AF_IMAGE_IDENTITY, px.data()};
+        CHECK(af_engine_analyze_images(e2, &oversized, 1, &a, 1) == AF_ERR_INVALID_ARG,
+              "an overflow-prone image is rejected before reading pixels");
+        af_image tooMany[AF_MAX_REFERENCE_IMAGES + 1]{};
+        for (auto& image : tooMany) image = blank;
+        CHECK(af_engine_analyze_images(e2, tooMany, AF_MAX_REFERENCE_IMAGES + 1,
+                                       nullptr, 0) == AF_ERR_INVALID_ARG,
+              "the C API rejects lists larger than its four role slots");
+        CHECK(af_engine_analyze_images(e2, &blank, 1, &a, -1) == AF_ERR_INVALID_ARG,
+              "negative analysis output capacity is rejected");
         af_engine_destroy(e2);
     }
 

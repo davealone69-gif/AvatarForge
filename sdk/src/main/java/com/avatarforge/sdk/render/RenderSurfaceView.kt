@@ -262,9 +262,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     /* ------------------------------------------------------------------ render thread --------- */
 
     private val frameLoop = object : Runnable {
-        @Volatile private var lastNs = 0L
+        private val frameClock = FrameLoopClock()
 
-        fun resetClock() { lastNs = 0L }
+        fun resetClock() { frameClock.reset() }
 
         override fun run() {
             val r = renderer
@@ -275,12 +275,10 @@ class RenderSurfaceView @JvmOverloads constructor(
                 return
             }
             val frameStartNs = System.nanoTime()
-            val delta = if (lastNs == 0L) 1f / 60f
-                        else ((frameStartNs - lastNs) / 1_000_000_000.0).toFloat()
-            lastNs = frameStartNs
+            val delta = frameClock.nextDeltaSeconds(frameStartNs)
             try {
                 r.setCamera(camera)
-                r.frame(delta.coerceIn(0f, 0.1f))
+                r.frame(delta)
                 val frameStats = r.stats()
                 _stats.value = frameStats
                 observeRecoveryProbe(frameStats)
@@ -547,6 +545,6 @@ class RenderSurfaceView @JvmOverloads constructor(
         const val FRAME_INTERVAL_NS = 16_666_667L
         const val RENDER_LOG_TAG = "AvatarForgeRenderer"
 
-        fun emptyStats() = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
+        fun emptyStats() = RendererStats(-1f, -1f, -1f, 0f, 0, 0, 0, 0, 1, 0, 0)
     }
 }

@@ -1,16 +1,16 @@
 # Renderer audit — current branch 2026-10-30
 
-Status: **PARTIAL** — GLES is the default, a distinct native Vulkan backend is opt-in, and
-startup/frame failure has a bounded safe-GLES recovery. Android build, real Vulkan commands,
-visible pixels and Samsung thermal/clip sharpness remain **UNVERIFIED** until the exact-head
-CI and device gates pass. See [the restoration notes](../VULKAN_RESTORE_2026-10-30.md).
+Status: **PARTIAL** — native Vulkan is the default, GLES remains the startup and bounded safe-recovery
+fallback, and the selector is host-tested. Android app Vulkan commands, visible pixels and Samsung
+thermal/clip sharpness remain **UNVERIFIED** until exact-head build and device gates pass. See
+[the restoration notes](../VULKAN_RESTORE_2026-10-30.md) for the earlier restoration checkpoint.
 
 ## Pipeline trace
 
 `RenderSurfaceView.frameLoop` → `AvatarRenderer.frame` → JNI `rendererFrame` →
 `BudgetRenderer.renderFrame` → selected `GlesRenderer` or `VulkanRenderer.renderFrame`.
-The C++ factory tries native Vulkan only if `RenderSettings.backend == VK`, then falls back to
-GLES on Vulkan startup error. Backend changes recreate the native renderer on its owner thread;
+The app's default `RenderSettings.backend` is Vulkan; the C++ factory tries native Vulkan first,
+then falls back to GLES on Vulkan startup error. Backend changes recreate the native renderer on its owner thread;
 preferences cannot silently override the default. `actualBackend` reports what initialized,
 not what was requested. A GLES driver reporting ANGLE-on-Vulkan is **still** `backend=gles31`.
 
@@ -38,7 +38,7 @@ GLES: EGL context/surface → shadow pass → forward pass → bloom → composi
 
 ## Verification
 
-Host kernel **411 checks / 0 failures**, renderer selection/GLES fault-injection **81/0**,
+Host kernel verification is in progress for the current repair batch; renderer selection/GLES fault-injection **87/0**,
 artifact guard **3/0**, Vulkan translation units `-fsyntax-only` with fetched headers.
 Hardware tests: **none on this branch**. Check exact-head Android CI status in
 [PROJECT_STATUS.md](../../PROJECT_STATUS.md), then follow [DEVICE.md](../../DEVICE.md) for

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed Vulkan 1.0 SPIR-V embedding with pinned historical provenance.
+"""Fail-closed Vulkan 1.3 SPIR-V embedding with pinned historical provenance.
 
 The Vulkan dialect lives in shaders_vk/, independent of GLES's shaders/. With no
 compiler, --check fails and regeneration never touches the checked-in table. A
@@ -29,6 +29,7 @@ REQUIRED = {
     ("forward_plus", "comp"),
 }
 ENUM = {"vert": "AF_STAGE_VERT", "frag": "AF_STAGE_FRAG", "comp": "AF_STAGE_COMP"}
+TARGET_ENV = "vulkan1.3"
 
 # The pre-removal table is from 76fdebab014b029680ed7df56eb0db2a916c8aaf.
 # All 13 preprocessed compiler inputs are byte-identical to that commit. Its
@@ -134,7 +135,7 @@ def validate_historical_table(stages, header, validator):
         for (name, stage), words in entries:
             output = Path(directory) / f"{name}.{stage}.spv"
             output.write_bytes(struct.pack(f"<{len(words)}I", *words))
-            result = subprocess.run([str(validator), "--target-env", "vulkan1.0", str(output)],
+            result = subprocess.run([str(validator), "--target-env", TARGET_ENV, str(output)],
                                     capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"embedded SPIR-V rejected: {name}.{stage}: {result.stdout}{result.stderr}")
@@ -160,13 +161,13 @@ def main():
             stage_path = Path(directory) / f"{name}.{stage}"
             output = Path(directory) / f"{name}.{stage}.spv"
             stage_path.write_text(source(path, stage), encoding="utf-8")
-            command = [glslc, f"-fshader-stage={stage}", "-O", "--target-env=vulkan1.0", "-Werror",
+            command = [glslc, f"-fshader-stage={stage}", "-O", f"--target-env={TARGET_ENV}", "-Werror",
                        "-o", str(output), str(stage_path)]
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"Vulkan compile failed: {name}.{stage}\n{result.stdout}{result.stderr}")
             if validator.is_file():
-                result = subprocess.run([str(validator), "--target-env", "vulkan1.0", str(output)],
+                result = subprocess.run([str(validator), "--target-env", TARGET_ENV, str(output)],
                                         capture_output=True, text=True)
                 if result.returncode:
                     raise RuntimeError(f"spirv-val rejected {name}.{stage}: {result.stdout}{result.stderr}")

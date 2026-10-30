@@ -5,9 +5,9 @@
  *
  *  Two responsibilities:
  *
- *   1. Renderer::create() uses GLES by default; an explicit Vulkan request tries the native
- *      Vulkan renderer first and falls back to GLES only if initialization fails. Generation and
- *      export remain available when neither API initializes; no software success is invented.
+ *   1. Renderer::create() tries native Vulkan by default and falls back to GLES if Vulkan
+ *      initialization fails. Callers may explicitly request GLES. Generation and export remain
+ *      available when neither API initializes; no software success is invented.
  *
  *   2. The quality controller. The app's hard requirement is 30 FPS minimum on a mid-range
  *      device with a 2 GB memory ceiling, on a phone that is also thermally throttling because

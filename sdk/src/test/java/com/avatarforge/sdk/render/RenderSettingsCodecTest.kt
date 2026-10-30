@@ -43,12 +43,14 @@ class RenderSettingsCodecTest {
         assertEquals(4f, decoded.environmentIntensity, 0f)
     }
 
-    @Test fun explicitVulkanSelectionRoundTripsButOldPreferenceAloneIsNotOptIn() {
+    @Test fun defaultsToVulkanAndPreservesAnExplicitGlesSelection() {
+        assertEquals(RenderBackend.VULKAN, RenderSettings().backend)
+        assertEquals(RenderBackend.VULKAN, RenderSettingsCodec.decode(emptyMap()).backend)
         assertEquals(RenderBackend.VULKAN,
             RenderSettingsCodec.decode(mapOf("backend" to "vulkan")).backend)
         assertEquals(RenderBackend.GLES,
-            RenderSettingsCodec.decode(mapOf("preferVulkan" to "true")).backend)
-        assertEquals(RenderBackend.GLES,
+            RenderSettingsCodec.decode(mapOf("backend" to "gles")).backend)
+        assertEquals(RenderBackend.VULKAN,
             RenderSettingsCodec.decode(mapOf("backend" to "not-a-backend")).backend)
     }
 

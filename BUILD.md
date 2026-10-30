@@ -8,7 +8,7 @@ The project has four layers, and each can be built and tested on its own:
 | Layer | Sources | What it is | How it is built |
 |---|---|---|---|
 | Kernel | `native/src/*.cpp`, `native/include/afcore.h` | anatomy → SDF field → isosurface → UV → PBR bake → rig → blendshapes → clips → GLB, behind a stable C ABI | `tools/build_host.sh` (host) / CMake+NDK (Android) |
-| Renderer | `native/src/render/` | OpenGL ES 3.1 only, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); GLES shaders baked on any host |
+| Renderer | `native/src/render/` | Native Vulkan by default, OpenGL ES 3.1 fallback/explicit choice; both are custom implementations | CMake+NDK (Android: system Vulkan/EGL/ANativeWindow); independent GLES and SPIR-V shader gates |
 | Rust | `rust/af-sys`, `rust/af` | safe Rust wrapper over the *same* C ABI as the Kotlin path | `cargo test --offline` against `build-host/libafcore.so` |
 | App + SDK | `sdk/`, `app/` | Kotlin SDK façade, Compose UI, one Activity | Gradle + AGP 8.5 |
 
@@ -44,15 +44,17 @@ accordingly (`gradle.properties` already does: no daemon, no parallel module bui
 ## 1. Kernel + host test harness (no device, no Android toolchain)
 
 ```bash
-tools/build_host.sh test     # builds build-host/libafcore.so and runs the 386-check harness
+tools/build_host.sh test     # builds build-host/libafcore.so and runs the geometry-heavy harness
 tools/build_host.sh kernel   # library only
 tools/build_host.sh all      # library + harness binary, do not run
 ```
 
-Expected output ends with:
+The success line is `All <N> checks complete: 0 failure(s)`; the number grows as regressions are
+added. The exact working-tree run for this checkpoint passed **423 checks**. Expected output ends
+with:
 
 ```
-All 386 checks complete: 0 failure(s)
+All 423 checks complete: 0 failure(s)
 ```
 
 The harness covers anthropometry (waist/hip/crotch exactness against tape measurements), signed
@@ -88,9 +90,16 @@ python3 tools/embed_shaders.py --check   # requires glslc: compile every stage a
 ```
 
 The script embeds exactly the 12 required GLES stages and fails loudly on a missing, duplicate or
-unexpected stage. With `glslc` present (NDK shader-tools or `AF_GLSLC`) it type-checks every stage
-using `--target-env=opengl`. The kernel harness ([10]) verifies stage coverage, GLSL ES version and
-explicit null lookup for unknown names. There is no SPIR-V table and no alternate graphics API.
+unexpected stage. Vulkan uses an independent 13-module checked-in SPIR-V table and source gate.
+`tools/embed_vulkan_shaders.py --check` compiles and validates Vulkan modules with NDK `glslc` and
+`spirv-val` when available, targeting `vulkan1.3`. The app gates the Vulkan path on loader and
+physical-device API 1.3 and declares `VK_API_VERSION_1_3` (the standard patch-zero encoding). The
+requested target label `1.3.304` is logged separately; the pinned NDK `26.1.10909125` headers are
+revision 1.3.237 and neither value establishes the runtime loader/device version. The historical
+checked-in SPIR-V table remains hash-pinned, and every module must validate for Vulkan 1.3; `--check`
+does not rewrite it just because this NDK's optimizer emits different words. The SM-S921B checker
+label is not proof of AvatarForge runtime selection or pixels. See
+`docs/audit/VULKAN_TARGET_AUDIT.md` for the target and evidence boundaries.
 
 ---
 
@@ -106,8 +115,9 @@ powershell -ExecutionPolicy Bypass -File tools\build-android.ps1
 ```
 
 `native/CMakeLists.txt` builds three targets: the kernel (`afcore`), the renderer (`afrender`,
-links system Vulkan plus EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). GLES is the
-app default; native Vulkan is an explicit per-viewer option. The Gradle build runs
+links system Vulkan plus EGL/GLESv3/android/log), and the JNI bridge (`avatarforge`). The app requests
+native Vulkan by default and falls back to GLES after Vulkan initialization failure; users can also
+select GLES explicitly. The Gradle build runs
 exactly this through `externalNativeBuild`; the manual invocation is there so the native side can be
 iterated without Gradle in the loop, and so the `.so` files can be built once and packaged many times
 (`-Paf.prebuiltJni=/path/to/prebuilt`, which is also the way to build the APK on a machine that has
@@ -170,14 +180,20 @@ AAB/APK delivery requires real signing credentials and remains BLOCKED until the
 
 ```bash
 cd rust
-AF_CORE_LIB_DIR=/home/user/AvatarForge/build-host cargo build --offline
-cargo test --offline                       # unit tests
-AF_CORE_LIB_DIR=/home/user/AvatarForge/build-host \
+AF_CORE_LIB_DIR="$PWD/../build-host" cargo build --offline
+AF_CORE_LIB_DIR="$PWD/../build-host" \
+  LD_PRELOAD="$PWD/../build-host/libafcore.so" \
+  cargo test --workspace --offline -- --nocapture
+AF_CORE_LIB_DIR="$PWD/../build-host" \
+  LD_PRELOAD="$PWD/../build-host/libafcore.so" \
   cargo test --offline --release -p af --test engine -- --ignored --nocapture --test-threads=1
 ```
 
-`af-sys` binds the C ABI, `af` wraps it safely (`Engine`, `JobHandle`, `Spec`, `export_glb`, and an
-optional `renderer` feature that drives the same renderer through its flat C ABI). The end-to-end
+On Linux, preload the selected C++ library: Cargo places `rust/target/debug/deps` ahead of the test
+binary's RUNPATH, and the Rust core currently shares the legacy `libafcore.so` basename. The preload
+ensures integration tests call the intended C++ ABI implementation. `af-sys` binds the C ABI, `af`
+wraps it (`Engine`, `JobHandle`, `Spec`, `export_glb`, and an optional `renderer` feature that drives
+the same renderer through its flat C ABI). The end-to-end
 test builds a watertight avatar through the Rust API and inspects it — the same claims the C++
 harness makes, asserted from a second language, which is what keeps the ABI honest.
 
@@ -202,9 +218,9 @@ installed but Python.
 tools/verify.sh
 ```
 
-Five sections, non-zero exit on the first failure: the kernel harness (386 checks), the shader tables
-against their sources, the structural validation of an exported `.glb`, and an audit of the built
-artifacts - including the one claim that must never regress, **no `INTERNET` permission in any APK**.
+`tools/verify.sh` runs the host kernel, renderer, device-report, model-detail and release-workflow
+regressions; shader table checks; exported-model validation; ABI conformance; Rust workspace tests
+when Cargo is available; and built-artifact checks. It exits non-zero if any executed gate fails.
 
 What that script cannot check is the device: rendering, frame timing, thermals and touch. That pass is
 `DEVICE.md`.

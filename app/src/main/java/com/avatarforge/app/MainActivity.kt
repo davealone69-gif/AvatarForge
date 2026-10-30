@@ -78,16 +78,14 @@ import com.avatarforge.sdk.recovery.RecoveryBackend
 import com.avatarforge.sdk.recovery.RecoveryJournal
 import com.avatarforge.sdk.recovery.RecoveryRecordKind
 import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private enum class Screen { INPUT, PROGRESS, VIEWER }
 
-/** Zero-valued frame stats used before a renderer exists; never presented as a real measurement. */
-private val EMPTY_RENDERER_STATS = RendererStats(0f, 0f, 0f, 0f, 0, 0, 0, 0, 1, 0, 0)
+/** Explicitly unknown timing is used before a renderer has produced a valid frame-loop sample. */
+private val EMPTY_RENDERER_STATS = RendererStats(-1f, -1f, -1f, 0f, 0, 0, 0, 0, 1, 0, 0)
 
 /** One analysed reference image, rendered as the card the user sees before pressing Generate. */
 private fun describeAnalysis(ref: ImageReference): String {
@@ -149,6 +147,7 @@ class MainActivity : ComponentActivity() {
         var imageA by remember { mutableStateOf<Bitmap?>(null) }
         var imageB by remember { mutableStateOf<Bitmap?>(null) }
         var analysisNote by remember { mutableStateOf<String?>(null) }
+        var imageAnalysisInProgress by remember { mutableStateOf(false) }
         /* The measurements the last successful reference-image analysis produced, kept so the
            spec the user sees and approves is exactly the spec that gets built. */
         var analysedImages by remember { mutableStateOf<List<ImageReference>>(emptyList()) }
@@ -268,20 +267,17 @@ class MainActivity : ComponentActivity() {
                 analysedImages = emptyList()
                 analysisNote = null
                 if (bitmapA == null) {
+                    imageAnalysisInProgress = false
                     return
                 }
+                imageAnalysisInProgress = true
                 /* The pixel copy into a direct buffer happens on the IO thread too: a 1600 px
                    ARGB image is up to 10 MB, and this is not work for the frame the user tapped on. */
                 scope.launch {
-                    val analysed = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val refA = ImageReference.fromBitmap(bitmapA, ImageRole.IDENTITY)
-                            val refB = bitmapB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                            engine.analyseImages(listOfNotNull(refA, refB))
-                        }.getOrNull()
-                    }
+                    val analysed = analyseReferenceImages(engine, bitmapA, bitmapB)
                     if (!analysisRequestGuard.isCurrent(request)) return@launch
-                    if (analysed == null) {
+                    imageAnalysisInProgress = false
+                    if (analysed.isNullOrEmpty()) {
                         analysedImages = emptyList()
                         analysisNote =
                             "Reference analysis failed on this device; the prompt and the specification below are used unchanged."
@@ -320,10 +316,13 @@ class MainActivity : ComponentActivity() {
                     imageB = picked
                     analyseReferences(imageA, picked)
                 },
+                analysisInProgress = imageAnalysisInProgress,
                 analysisNote = analysisNote,
                 enabled = health.usable,
                 onGeneratePrompt = {
                     if (hasStorageForExport()) {
+                        analysisRequestGuard.begin()
+                        imageAnalysisInProgress = false
                         /* The prompt parser is run first so the spec the user sees is the spec that
                            gets built - including the measurements the prompt implied. */
                         val parsed = runCatching { engine.parsePrompt(prompt, spec) }.getOrDefault(spec)
@@ -336,26 +335,39 @@ class MainActivity : ComponentActivity() {
                     if (a == null) {
                         Toast.makeText(context, "Choose Image A first.", Toast.LENGTH_SHORT).show()
                     } else if (hasStorageForExport()) {
-                        /* Reuse the analysis the user already saw. Only analyse here when that step
-                           has not run yet (for example after a process restart). */
-                        val analysed = analysedImages.ifEmpty {
-                            val refA = ImageReference.fromBitmap(a, ImageRole.IDENTITY)
-                            val refB = imageB?.let { ImageReference.fromBitmap(it, ImageRole.CLOTHING) }
-                            runCatching { engine.analyseImages(listOfNotNull(refA, refB)) }
-                                .getOrDefault(emptyList())
-                        }
-                        val resolved = if (analysed.isNotEmpty()) engine.specFromImages(analysed, spec) else spec
-                        spec = resolved
-                        begin(
-                            engine.generate(
-                                GenerationRequest(
-                                    spec = resolved,
-                                    prompt = prompt,
-                                    imageA = analysed.firstOrNull(),
-                                    imageB = analysed.getOrNull(1),
+                        val request = analysisRequestGuard.begin()
+                        val selectedB = imageB
+                        val cachedAnalysis = analysedImages
+                        imageAnalysisInProgress = true
+                        scope.launch {
+                            /* Reuse the measurements already shown to the user. If absent, decode
+                               packing and native analysis still run off-main; failure never silently
+                               falls through to an image-free build. */
+                            val analysed = if (cachedAnalysis.isNotEmpty()) cachedAnalysis
+                                else analyseReferenceImages(engine, a, selectedB)
+                            if (!analysisRequestGuard.isCurrent(request)) return@launch
+                            imageAnalysisInProgress = false
+                            if (analysed.isNullOrEmpty()) {
+                                analysedImages = emptyList()
+                                analysisNote =
+                                    "Reference analysis failed; no image hints were applied and nothing was generated. Retry the image or use Generate from prompt."
+                                return@launch
+                            }
+                            analysedImages = analysed
+                            val resolved = engine.specFromImages(analysed, spec)
+                            spec = resolved
+                            analysisNote = analysed.joinToString("\n", transform = ::describeAnalysis)
+                            begin(
+                                engine.generate(
+                                    GenerationRequest(
+                                        spec = resolved,
+                                        prompt = prompt,
+                                        imageA = analysed.firstOrNull(),
+                                        imageB = analysed.getOrNull(1),
+                                    ),
                                 ),
-                            ),
-                        )
+                            )
+                        }
                     }
                 },
             )
@@ -489,6 +501,11 @@ class MainActivity : ComponentActivity() {
                                         view.setFrameLoopEnabled(true)
                                     }
                                 },
+                                onRelease = { releasedView ->
+                                    if (surfaceView === releasedView) surfaceView = null
+                                    if (surfaceViewState === releasedView) surfaceViewState = null
+                                    releasedView.release()
+                                },
                             )
                         },
                     )
@@ -568,8 +585,15 @@ class MainActivity : ComponentActivity() {
                     appendLine("Anisotropy  : ${info.supportsAnisotropy} (capability; atlas requests up to 4x)")
                 }
                 if (frameStats != null) {
-                    appendLine("FPS         : %.1f (%.2f ms presented-frame interval)".format(frameStats.fps, frameStats.frameMs))
-                    appendLine("CPU submit  : %.2f ms; GPU time: %s".format(frameStats.cpuMs,
+                    if (frameStats.hasValidFrameTiming) {
+                        appendLine("Frame loop  : %.1f FPS (%.2f ms input-delta EMA; not present-completion timing)".format(
+                            frameStats.fps, frameStats.frameMs))
+                    } else {
+                        appendLine("Frame loop  : not measured (waiting for a valid input-delta sample)")
+                    }
+                    val cpuSubmit = if (frameStats.cpuMs.isFinite() && frameStats.cpuMs >= 0f)
+                        "%.2f ms".format(frameStats.cpuMs) else "not measured"
+                    appendLine("CPU submit  : $cpuSubmit; GPU time: %s".format(
                         if (frameStats.gpuMs < 0f) "unknown (no timestamp query)" else "%.2f ms".format(frameStats.gpuMs)))
                     appendLine("Frames      : %d attempts, %d submissions, %d accepted presents".format(
                         frameStats.frameAttempts, frameStats.frameSubmissions, frameStats.presentRequestsAccepted))

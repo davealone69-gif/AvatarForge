@@ -26,6 +26,7 @@ rust/target/
 # ---- Gradle / Android SDK ---------------------------------------------------------------------
 .gradle/
 **/build/
+**/.cxx/
 local.properties
 *.iml
 .idea/

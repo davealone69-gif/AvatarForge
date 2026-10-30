@@ -24,7 +24,11 @@ fn main() {
         return;
     }
     println!("cargo:rustc-link-search=native={dir}");
-    // Tests, benches and examples of this package all need to find the kernel at run time.
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
-    println!("cargo:rustc-link-arg-tests=-Wl,-rpath,{dir}");
+    // This RUNPATH lets standalone binaries locate the selected library. Cargo prepends
+    // target/debug/deps to LD_LIBRARY_PATH for tests; when the Rust alternate core is also built
+    // there as libafcore.so, that directory can shadow the C++ ABI library. tools/verify.sh
+    // preloads the exact C++ library for the workspace test run. Android packages the selected .so.
+    let rpath = format!("-Wl,-rpath,{dir}");
+    println!("cargo:rustc-link-arg={rpath}");
+    println!("cargo:rustc-link-arg-tests={rpath}");
 }

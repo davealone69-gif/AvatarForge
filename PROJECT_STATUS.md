@@ -1,20 +1,28 @@
 # Project status
 
-## Current branch — 2026-10-30 (`arena/c87f5c50-avatarforge`)
+## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; task-start HEAD `187fa25`)
 
-The user reversed the GLES-only direction and requested **a separate native Vulkan renderer**,
-with blur occurring during **live animation clips**. GLES remains the default and a safe fallback;
-Vulkan is an explicit viewer toggle, *not* the OS's ANGLE-on-Vulkan GLES implementation. UV atlas
-packing (AF-034) and animation skinning (AF-035) fixes were ported from the newer upstream branch.
-Host verification: kernel **411/0**, renderer GLES/selector double **81/0**, linkage-guard tests
-**3/0**, SPIR-V provenance regressions **6/0**, Vulkan source host C++ syntax check passed.
-Check the Android APK workflow for the **current commit's** shader/NDK/Kotlin/artifact outcome;
-its status cannot be inferred from a prior commit. Samsung GPU/pixel evidence is still missing;
-neither backend is claimed visually correct on the phone. See [restoration report](docs/VULKAN_RESTORE_2026-10-30.md)
-and [device checklist](DEVICE.md). The older branch snapshot below is historical.
+The owner-approved engineering directive was applied on the existing branch, preserving the three
+pre-existing local commits (clean-checkout verifier log, shoulder-width/image-role fixes, and stale
+image-analysis guard). At task start the local tip was `187fa25`, based on common commit `1dfcf40`.
+A later read-only check found `origin/arena/c87f5c50-avatarforge` at `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62`,
+two commits beyond that base. No merge, rebase, reset, or direct push to `arena` was performed. The
+authorized publication target is a new `fix/verify-clean-checkout-output-dir` remote branch; that
+same-name ref was absent at the last read-only check and must be rechecked before pushing.
+
+The renderer defaults to native Vulkan with explicit and bounded OpenGL ES 3.1 fallback. The requested
+target label is Vulkan `1.3.304`; the app declares `VK_API_VERSION_1_3` (standard patch-zero encoding)
+and requires loader/device API 1.3. Shaders compile/validate for `vulkan1.3`. The installed NDK
+26.1.10909125 headers are revision 1.3.237; these and the supplied SM-S921B checker label are not
+AvatarForge runtime versions. The post-fix host verifier passed 423 kernel checks, 87 renderer
+fault checks plus 7 API-version checks, and 33 model regressions; all 12 GLES and 13 Vulkan shader
+modules validate. The ARM64 native build and 3 app / 38 SDK JVM tests pass, and compile-only
+artifacts were produced. Exact-head CI after the new-branch push, the app/device Vulkan path, visible
+pixels, validation-layer output, thermal soak and production signing remain **UNVERIFIED/BLOCKED**. See
+[Vulkan target audit](docs/audit/VULKAN_TARGET_AUDIT.md), [device checklist](DEVICE.md), and the
+current exact-head test record in `docs/audit/VERIFICATION_RESULTS.md`.
 
 ## Historical snapshot — prior `arena/aaf85469-avatarforge` branch (2026-10-29)
-
 PR #20 remained draft when recorded below; `main` was then at `40ef65b`. Statements that Vulkan
 was removed or linkage was GLES-only describe that earlier checkpoint, **not this branch**.
 

@@ -1284,11 +1284,7 @@ void GlRenderer::renderFrame(float deltaSeconds) {
 
     ++stats_.presentRequestsAccepted;
     ++stats_.frames;
-    if (deltaSeconds > 0.0f && deltaSeconds < 1.0f) {
-        const float alpha = 0.06f;
-        stats_.frameMs = stats_.frameMs * (1.0f - alpha) + deltaSeconds * 1000.0f * alpha;
-        stats_.fps = stats_.frameMs > 0.01f ? 1000.0f / stats_.frameMs : 0.0f;
-    }
+    updateFrameLoopTimingEstimate(stats_, deltaSeconds);
     stats_.drawCalls = drawCalls_;
     stats_.triangles = triangles_;
     stats_.vertices = vertexCount_;

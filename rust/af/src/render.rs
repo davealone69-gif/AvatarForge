@@ -2,7 +2,7 @@
 //  af::render -- optional Rust binding for the custom renderer (feature = "renderer")
 // =============================================================================================
 //
-//  The renderer is C++ (native/src/render/) and needs a real Android window plus a GLES 3.1 driver, so this module is off by default: desktop builds and unit tests of the kernel
+//  The renderer is C++ (native/src/render/) and needs a real Android window plus a graphics driver, so this module is off by default: desktop builds and unit tests of the kernel
 //  do not link it, and an Android build can turn it on to drive the exact same renderer the
 //  Kotlin app uses.
 //
@@ -12,6 +12,7 @@
 
 use af_sys::af_engine;
 use core::ffi::{c_char, c_void, CStr};
+use core::marker::PhantomData;
 
 use crate::error::{Error, Result};
 
@@ -74,7 +75,7 @@ impl Default for RenderOptions {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Camera {
     pub yaw_deg: f32,
     pub pitch_deg: f32,
@@ -119,7 +120,7 @@ impl Default for RenderInfo {
 }
 
 impl RenderInfo {
-    /// Actual GLES backend identifier reported by the renderer.
+    /// Actual backend identifier reported by the renderer (Vulkan or GLES fallback/selection).
     pub fn backend(&self) -> String {
         cstr(&self.backend)
     }
@@ -162,7 +163,7 @@ pub struct RenderStats {
 impl Default for RenderStats {
     fn default() -> Self {
         Self {
-            frame_ms: 0.0, cpu_ms: 0.0, fps: 0.0, gpu_ms: -1.0,
+            frame_ms: -1.0, cpu_ms: -1.0, fps: -1.0, gpu_ms: -1.0,
             draw_calls: 0, triangles: 0, vertices: 0, shadow_map_size: 0,
             msaa_samples: 0, bloom_levels: 0, quality_level: 0, frames: 0,
             frame_attempts: 0, frame_submissions: 0, present_requests_accepted: 0,
@@ -179,8 +180,12 @@ const _: () = assert!(core::mem::size_of::<Camera>() == 24);
 mod tests {
     use super::*;
     #[test]
-    fn unknown_gpu_time_and_camera_defaults_are_explicit() {
-        assert_eq!(RenderStats::default().gpu_ms, -1.0);
+    fn unknown_renderer_timings_and_camera_defaults_are_explicit() {
+        let stats = RenderStats::default();
+        assert_eq!(stats.frame_ms, -1.0);
+        assert_eq!(stats.cpu_ms, -1.0);
+        assert_eq!(stats.fps, -1.0);
+        assert_eq!(stats.gpu_ms, -1.0);
         assert_eq!(Camera::default().distance, 3.5);
     }
 }
@@ -228,12 +233,14 @@ extern "C" {
     );
 }
 
-/// Owns one GLES backend instance for one Android window.
-pub struct Renderer {
+/// Owns one renderer instance for one Android window. If an engine is attached, its borrow is
+/// retained in the type so the engine cannot be dropped before this renderer.
+pub struct Renderer<'engine> {
     handle: *mut c_void,
+    _engine: PhantomData<&'engine crate::Engine>,
 }
 
-impl Renderer {
+impl Renderer<'static> {
     /// `native_window` is an `ANativeWindow*` - on Android, the pointer behind a `Surface`.
     /// Returns the reason string from `Renderer::create` on failure, never a null renderer.
     pub fn create(native_window: *mut c_void, options: RenderOptions) -> Result<Self> {
@@ -252,9 +259,11 @@ impl Renderer {
             };
             return Err(Error::Unsupported(message));
         }
-        Ok(Self { handle })
+        Ok(Self { handle, _engine: PhantomData })
     }
+}
 
+impl<'engine> Renderer<'engine> {
     pub fn resize(&self, width: i32, height: i32) -> Result<()> {
         let code = unsafe { af_renderer_resize(self.handle, width, height) };
         if code == af_sys::AF_OK {
@@ -264,13 +273,27 @@ impl Renderer {
         }
     }
 
-    /// Binds an engine handle, whose lifetime must exceed the renderer's.
-    pub fn attach_engine(&self, engine: &crate::Engine) -> Result<()> {
-        // SAFETY: the caller guarantees the engine outlives the renderer (documented on
-        // Renderer::create and enforced by the app's ownership structure).
+    /// Binds an engine handle and returns a renderer whose lifetime is tied to that engine.
+    /// This consumes the unbound renderer, so later calls cannot shorten the retained borrow.
+    ///
+    /// Dropping the engine while the renderer can still read its buffers is rejected by Rust:
+    ///
+    /// ```compile_fail,E0505
+    /// use af::render::{RenderOptions, Renderer};
+    /// use af::{Engine, Spec};
+    /// let engine = Engine::new(Spec::new()).unwrap();
+    /// let renderer = Renderer::create(core::ptr::null_mut(), RenderOptions::default()).unwrap()
+    ///     .attach_engine(&engine).unwrap();
+    /// drop(engine);
+    /// renderer.frame(1.0 / 60.0);
+    /// ```
+    pub fn attach_engine(self, engine: &'engine crate::Engine) -> Result<Self> {
+        // SAFETY: the returned Renderer<'engine> retains the engine borrow in PhantomData.
         let code = unsafe { af_renderer_attach_engine(self.handle, engine.as_raw_handle()) };
         if code == af_sys::AF_OK {
-            Ok(())
+            let handle = self.handle;
+            core::mem::forget(self); // transfer ownership of the native renderer handle
+            Ok(Renderer { handle, _engine: PhantomData })
         } else {
             Err(Error::Internal(format!("attach_engine failed with code {code}")))
         }
@@ -334,7 +357,7 @@ impl Renderer {
     }
 }
 
-impl Drop for Renderer {
+impl Drop for Renderer<'_> {
     fn drop(&mut self) {
         unsafe { af_renderer_destroy(self.handle) };
     }

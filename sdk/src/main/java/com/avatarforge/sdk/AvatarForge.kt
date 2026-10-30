@@ -90,6 +90,7 @@ object AvatarForge {
         }
         return RenderSettings(
             quality = preset,
+            backend = com.avatarforge.sdk.render.RenderBackend.VULKAN,
             msaa = if (preset == Quality.HIGH) 4 else if (preset == Quality.MEDIUM) 2 else 1,
             shadowMapSize = if (preset == Quality.HIGH) 2048 else if (preset == Quality.MEDIUM) 2048 else 1024,
             bloomLevels = if (preset == Quality.HIGH) 5 else if (preset == Quality.MEDIUM) 4 else 3,

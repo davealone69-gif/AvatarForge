@@ -11,11 +11,21 @@ Status: **PARTIAL** — prior device reports are real user evidence, not a curre
 
 ## Current measurement truth
 
-- `frameMs`/FPS are presented-frame interval estimates from the render loop, not GPU timestamps.
-- `cpuMs` is CPU wall time inside the backend frame call.
+- `frameMs`/FPS are render-loop intervals derived from monotonic time, not GPU timestamps. The first callback and the first callback after a reset are unmeasured and display as warm-up; no synthetic 60 Hz sample is reported.
+- `cpuMs` is CPU wall time inside the backend frame call; it remains unknown until a real sample is available.
 - `gpuMs` is unknown (-1); no timestamp query is implemented.
 - Triangles are submitted index counts, not occlusion-culled visible triangles.
 - Thermal severe now caps quality to LOW and pacing to ~30 FPS in source; device effect is unverified.
+
+## Current renderer target and measurement scope
+
+The current default is native Vulkan with explicit GLES and bounded GLES fallback. AvatarForge now
+gates Vulkan startup on loader and physical-device API 1.3 and compiles/validates shaders for
+`vulkan1.3`; host selector/version tests and the ARM64 native build do not execute Vulkan commands or
+prove pixels. `VkApplicationInfo` encodes API 1.3 with patch zero; the requested label `1.3.304`, NDK
+header revision 1.3.237, runtime loader version and physical-device API are separate values. The
+supplied SM-S921B checker report is not an AvatarForge runtime measurement. No current-head FPS,
+thermal, memory, or sharpness claim is made without an exact APK installed and measured on the phone.
 
 ## Required next measurements
 

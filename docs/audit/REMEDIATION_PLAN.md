@@ -1,10 +1,13 @@
 # Remediation plan
 
 **Current-branch override (2026-10-30):** The GLES-only plan below is a historical snapshot.
-The user explicitly requested the separate native Vulkan renderer be restored. Source and host
-checks are documented in [the restoration report](../VULKAN_RESTORE_2026-10-30.md); the first P0
-item is now matched **GLES versus native Vulkan** live-clip/device testing with a safe-GLES fallback.
-Do not describe the earlier removal/linker-guard outcome as the current APK.
+The current renderer defaults to native Vulkan, with explicit GLES selection and bounded safe-GLES
+fallback. The requested Vulkan target is `1.3.304`; the app encodes API 1.3 using `VK_API_VERSION_1_3`
+(patch zero) and gates the loader/device separately. Shaders target `vulkan1.3`; the pinned NDK header
+revision is 1.3.237. These are distinct from runtime loader/device reports. Local ARM64 compile/link
+and shader checks pass; actual phone initialization/rendering remains unverified. See
+[the restoration report](../VULKAN_RESTORE_2026-10-30.md) and
+[the Vulkan target audit](VULKAN_TARGET_AUDIT.md).
 
 ## Done in the 2026-10-29 zero-trust pass
 
@@ -34,7 +37,7 @@ Do not describe the earlier removal/linker-guard outcome as the current APK.
 
 ## P0 — safety and truth
 
-1. Device-retest the exact-head build with GLES first, then opt-in native Vulkan during live walk/run clips; capture actual-backend diagnostics, matched paused/live PNGs, fallback/errors and thermal state. Camera is user-confirmed but exact-build evidence is still needed.
+1. Device-retest the exact-head build with Vulkan default and explicit GLES during live walk/run clips; capture actual-backend diagnostics, matched paused/live PNGs, fallback/errors and thermal state. Camera is user-confirmed but exact-build evidence is still needed.
 2. ~~Add a full engine read/write fence or ownership transfer so render-thread reads cannot race UI mutations/generation.~~ **DONE (AF-020)** — source + host compile proof; a device soak with clip playback, camera drags and expression edits still has to run.
 3. Implement diagnostic scene ladder and label submission vs visible output separately.
 4. Supply production signing credentials to unblock signed AAB/APK release.
@@ -53,4 +56,6 @@ Do not describe the earlier removal/linker-guard outcome as the current APK.
 9. Matched device pixel comparison for eyes/hair/chest/hands/garments/moiré; then target lash geometry, strand-level hair, facial texture smudges and teeth cost.
 10. Benchmark meshoptimizer/KTX2/ozz-style improvements; adopt only with measured device gains.
 11. Add LICENSE, SBOM, SHA-pinned actions, wrapper checksum verification, and artifact provenance policy.
-12. Build/test Rust bindings on a Rust toolchain; C/Rust renderer telemetry layout is now mirrored and statically asserted.
+12. Keep Rust bindings in the acceptance gate: default workspace tests are verified; test the optional renderer feature's compile-fail lifetime guard and keep C/Rust telemetry layouts aligned.
+13. Replace or formally constrain raw pointer-valued JNI handles; stale/double-destroy values currently have no native registry validation. Do not attempt a broad registry redesign without synchronized lifecycle tests.
+14. **Source policy implemented:** Vulkan 1.3 target gates and `vulkan1.3` shader validation are in place. Capture the exact `AF_VK_CONTEXT` log on the SM-S921B, verify loader/device API ≥1.3, and run validation layers plus visible-frame tests; devices below the gate must be seen to fall back to GLES correctly.

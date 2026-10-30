@@ -59,6 +59,9 @@ fn builds_a_watertight_avatar_end_to_end() {
     );
     assert!(stats.vertex_count > 50_000, "suspiciously coarse mesh");
     assert!(stats.triangle_count > 100_000, "suspiciously coarse mesh");
+    let matrices = engine.joint_matrices().expect("joint matrices");
+    assert_eq!(matrices.len(), stats.joint_count as usize * 16);
+    assert!(matrices.iter().all(|value| value.is_finite()), "joint matrices must be finite");
 
     // --- manifold and shape checks -------------------------------------------------------
     let vertices = engine.vertices();

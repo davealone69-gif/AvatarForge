@@ -1,9 +1,9 @@
 # Native Vulkan restoration and live-clip quality — 2026-10-30
 
-**Status: source restored, physical-device visibility UNVERIFIED.** This is a new opt-in renderer,
-not a claim that Vulkan Checker or Android's ANGLE-on-Vulkan is AvatarForge's native Vulkan path.
-GLES remains the default and the bounded recovery target. The affected clip is live `walk`/`run`
-playback inside the viewer, not an encoded recording.
+**Status: native Vulkan is the app default; physical-device visibility remains UNVERIFIED.** This is
+AvatarForge's own native renderer, not Vulkan Checker or Android's ANGLE-on-Vulkan. OpenGL ES 3.1 is
+the explicit alternative and bounded recovery target. The affected clip is live `walk`/`run` playback
+inside the viewer, not an encoded recording.
 
 ## Diagnosis before changes
 
@@ -29,11 +29,11 @@ playback inside the viewer, not an encoded recording.
   source tree and precompiled 13-stage SPIR-V table. Existing GLES shaders and 12-stage table
   remain independent. Removed the old async ASTC/ETC2 encoder from this restoration rather than
   adding a second live texture-owner race; the Vulkan path uploads uncompressed atlases/mips.
-- Explicit `RenderSettings.backend` opt-in goes through JNI to the native factory. Startup tries
-  Vulkan then GLES when Vulkan initialization fails; the app reports the **actual** backend and
-  journals a fallback. Changing API recreates the native renderer on its owning thread, preserving
-  camera, engine attachment, clip selection and overlays. Old persisted `preferVulkan` alone
-  cannot silently select the experimental backend.
+- `RenderSettings.backend` goes through JNI to the native factory and defaults to Vulkan. Startup
+  tries Vulkan then GLES when Vulkan initialization or recovery fails; the app reports the
+  **actual** backend and journals a fallback. Changing API recreates the native renderer on its
+  owning thread, preserving camera, engine attachment, clip selection and overlays. Legacy
+  `preferVulkan` state is not treated as proof that Vulkan initialized successfully.
 - The Vulkan backend owns an Android window reference across surface recreation. It propagates
   unrecoverable `vkAcquire`/`vkResetCommandBuffer`/record/submit/present and target-rebuild errors
   through `frameError()` to JNI's exception and one safe GLES recovery. Atlas upload, white
@@ -48,11 +48,12 @@ playback inside the viewer, not an encoded recording.
 
 ## Verification / remaining gates
 
-- `bash tools/build_host.sh test`: **411 checks, 0 failures** (host kernel, incl. UV/rig).
+- `bash tools/build_host.sh test`: **423 checks, 0 failures** (host kernel, incl. UV/rig).
   This environment needed a compatible local zlib header (`/usr/local/include/node`) and symlink
   to the system libz; neither is committed or shipped.
-- `bash tools/test_renderer_host.sh`: **81 checks, 0 failures** (real GLES/EGL mock and a
-  factory-only Vulkan double). It does not execute Vulkan commands.
+- `bash tools/test_renderer_host.sh`: **87 checks, 0 failures**, plus **7/7 Vulkan API-version
+  helper checks** (GLES/EGL mock and factory-only Vulkan double). It does not execute Vulkan
+  commands.
 - `python3 tools/test_renderer_artifacts.py`: **3 tests pass**; package/linkage logic only.
 - `python3 tools/test_embed_vulkan_shaders.py`: **6 tests pass**. Sources and the actual checked-in
   SPIR-V table match the byte-identical pre-removal snapshot; mutations to either are rejected.

@@ -7,6 +7,7 @@
     "AF_ABI_VERSION": 1,
     "AF_DEFAULT_HEIGHT_M": "1.75f",
     "AF_ENGINE_VERSION": "0.10.1",
+    "AF_MAX_REFERENCE_IMAGES": 4,
     "AF_IMAGE_ANALYSIS_FLOAT_COUNT": 28
   },
   "enums": {

@@ -1,8 +1,14 @@
 # Branch triage
 
-Status: **PARTIAL** — GitHub compare metadata and selective source diffs were inspected; no branch was merged, deleted, reset, or force-pushed.
+## Pre-push snapshot — 2026-10-30
 
-Snapshot: 2026-10-29. Repository has 20 branches, 19 PRs in history, 0 releases/tags. Current work remains on `arena/aaf85469-avatarforge`, draft PR #20.
+No branch was merged, deleted, reset, or force-pushed. The owner authorized a normal push to a new fix branch only; `arena` is not a push target.
+
+At task start, `fix/verify-clean-checkout-output-dir` was at `187fa25`, three commits ahead of its common base `1dfcf40`. The three inherited commits are preserved: the clean-checkout verifier log fix, shoulder/image-role correction, and stale asynchronous image-result guard. A later read-only remote check found `origin/arena/c87f5c50-avatarforge` at `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62`, two commits beyond that base. No merge or rebase was applied. Task changes are preserved on this local branch; the authorized destination is a new `origin/fix/verify-clean-checkout-output-dir` ref. That same-name remote ref was absent at the last read-only check and must be rechecked immediately before push.
+
+## Historical GitHub branch/PR comparison — 2026-10-29
+
+The table below records the earlier read-only GitHub comparison and is not a fresh inventory of current remote branches or PRs.
 
 | Branch / PR | Observed divergence | Disposition |
 |---|---|---|
