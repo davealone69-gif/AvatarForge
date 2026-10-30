@@ -16,6 +16,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+mkdir -p build-host
 QUICK="${1:-}"
 FAILED=0
 SECTION=0
