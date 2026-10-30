@@ -606,6 +606,7 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
         if (!images || image_count <= 0) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
         engine->stage = AF_STAGE_ANALYZE_INPUTS;
         engine->analysisCount = 0;
+        const af_image_analysis* analysisForInput[4]{};
         int32_t produced = 0;
         for (int32_t i = 0; i < image_count && i < 4; ++i) {
             if (engine->cancelled()) return static_cast<int32_t>(AF_ERR_CANCELLED);
@@ -616,7 +617,9 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
                 engine->log(AF_LOG_WARN, "reference image could not be analysed (empty or unreadable)");
                 continue;
             }
-            engine->analyses[engine->analysisCount++] = a;
+            const int32_t analysisIndex = engine->analysisCount++;
+            engine->analyses[analysisIndex] = a;
+            analysisForInput[i] = &engine->analyses[analysisIndex];
             if (out_analyses && produced < max_analyses) out_analyses[produced] = a;
             ++produced;
         }
@@ -627,8 +630,9 @@ int32_t af_engine_analyze_images(af_engine* engine, const af_image* images, int3
         const af_image_analysis* identity = &engine->analyses[0];
         const af_image_analysis* clothing = nullptr;
         for (int32_t i = 0; i < image_count && i < 4; ++i) {
-            if (images[i].role == AF_IMAGE_CLOTHING) clothing = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
-            if (images[i].role == AF_IMAGE_IDENTITY) identity = &engine->analyses[std::min<int32_t>(i, engine->analysisCount - 1)];
+            if (!analysisForInput[i]) continue;
+            if (images[i].role == AF_IMAGE_CLOTHING) clothing = analysisForInput[i];
+            if (images[i].role == AF_IMAGE_IDENTITY) identity = analysisForInput[i];
         }
         float confidence = 0.0f;
         specFromAnalysis(*identity, clothing, &engine->spec, &confidence);

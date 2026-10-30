@@ -239,7 +239,8 @@ BodyMetrics Anatomy::solve(const af_spec& spec) {
     /* ---------- widths ---------------------------------------------------------------- */
     /* Biacromial breadth is correlated with chest girth; the regression keeps a tall slim
        person from acquiring a heavy person's shoulders. */
-    const float biacromialCm = (female ? 36.6f : 41.5f) + (circ.chest - (female ? 93.5f : 102.3f)) * 0.16f
+    /* Circumferences were converted from cm to m above; compare in cm with the regression baseline. */
+    const float biacromialCm = (female ? 36.6f : 41.5f) + (circ.chest * 100.0f - (female ? 93.5f : 102.3f)) * 0.16f
                              + (H - populationHeight) * 100.0f * 0.10f;
     m.biacromialHalf = clampf(biacromialCm / 100.0f, 0.28f, 0.60f) * 0.5f;
     m.armPitHalf = m.chest.rx * 0.86f;

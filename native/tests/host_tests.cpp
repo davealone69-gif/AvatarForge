@@ -160,6 +160,17 @@ static void testAnthropometry() {
     CHECK_NEAR(Anatomy::solve(explicitHeight).height, 1.82f, 1e-6f,
                "explicit metre override wins over the default");
 
+    /* Shoulder breadth regresses against chest girth in centimetres. A unit mismatch here
+       silently drove every ordinary input to the 28 cm minimum-width clamp. */
+    af_spec shoulderSpec = defaultSpec(AF_SEX_FEMALE, AF_BUILD_ATHLETIC, 1.70f);
+    shoulderSpec.chest_cm = 90.0f;
+    const float shoulderWidth = 2.0f * Anatomy::solve(shoulderSpec).biacromialHalf;
+    CHECK_NEAR(shoulderWidth, 0.3674f, 1e-4f,
+               "90 cm chest and 1.70 m female stature produce 36.74 cm shoulder breadth");
+    shoulderSpec.chest_cm = 100.0f;
+    CHECK(2.0f * Anatomy::solve(shoulderSpec).biacromialHalf > shoulderWidth + 0.01f,
+          "shoulder breadth responds to larger chest girth instead of sticking at the lower clamp");
+
     af_spec spec = defaultSpec(AF_SEX_FEMALE, AF_BUILD_ATHLETIC, 1.70f);
     spec.waist_cm = 68.0f;
     spec.hip_cm = 96.0f;
@@ -889,6 +900,66 @@ static void testAbi() {
         CHECK(af_engine_analyze_images(e2, nullptr, 0, nullptr, 0) == AF_ERR_INVALID_ARG,
               "a null image list is refused");
         af_engine_destroy(e2);
+    }
+
+    /* A skipped image must not shift later role-tagged images onto another analysis record. */
+    {
+        constexpr int side = 64;
+        auto makeSilhouette = [=](int left, int right, uint8_t r, uint8_t g, uint8_t b) {
+            std::vector<uint8_t> pixels(static_cast<size_t>(side) * side * 3);
+            for (int y = 0; y < side; ++y) {
+                for (int x = 0; x < side; ++x) {
+                    const size_t offset = (static_cast<size_t>(y) * side + x) * 3;
+                    pixels[offset + 0] = 240;
+                    pixels[offset + 1] = 240;
+                    pixels[offset + 2] = 240;
+                    if (y >= 8 && y < 56 && x >= left && x < right) {
+                        pixels[offset + 0] = r;
+                        pixels[offset + 1] = g;
+                        pixels[offset + 2] = b;
+                    }
+                }
+            }
+            return pixels;
+        };
+        std::vector<uint8_t> identityPixels = makeSilhouette(26, 38, 110, 65, 45);
+        std::vector<uint8_t> extraPixels = makeSilhouette(18, 46, 20, 40, 170);
+        std::vector<uint8_t> clothingPixels = makeSilhouette(8, 56, 90, 35, 35);
+        af_image invalid{};
+        invalid.width = side; invalid.height = side; invalid.channels = 3;
+        invalid.role = AF_IMAGE_EXTRA_VIEW; /* null pixels make this image fail analysis */
+        af_image identity{side, side, 3, AF_IMAGE_IDENTITY, identityPixels.data()};
+        af_image extra{side, side, 3, AF_IMAGE_EXTRA_VIEW, extraPixels.data()};
+        af_image clothing{side, side, 3, AF_IMAGE_CLOTHING, clothingPixels.data()};
+        af_image inputs[] = {invalid, identity, extra, clothing};
+
+        std::string identityLog;
+        af_callbacks roleCallbacks{};
+        roleCallbacks.user = &identityLog;
+        roleCallbacks.on_log = [](void* user, int severity, const char* message) {
+            if (severity == AF_LOG_INFO && message && std::strncmp(message, "identity:", 9) == 0) {
+                static_cast<std::string*>(user)->assign(message);
+            }
+        };
+        af_spec roleSpec;
+        af_spec_init(&roleSpec);
+        af_engine* roleEngine = nullptr;
+        CHECK(af_engine_create(&roleSpec, &roleCallbacks, &roleEngine) == AF_OK && roleEngine,
+              "engine created for skipped-image role regression");
+        if (roleEngine) {
+            af_image_analysis analyses[3]{};
+            const int32_t produced = af_engine_analyze_images(roleEngine, inputs, 4, analyses, 3);
+            CHECK(produced == 3 && analyses[0].subject_coverage < analyses[1].subject_coverage &&
+                      analyses[1].subject_coverage < analyses[2].subject_coverage,
+                  "valid image analyses retain input order and distinct silhouettes (%d)", produced);
+            char expectedCoverage[32];
+            std::snprintf(expectedCoverage, sizeof(expectedCoverage), "coverage %.2f",
+                          analyses[0].subject_coverage);
+            CHECK(identityLog.find(expectedCoverage) != std::string::npos,
+                  "identity role still selects its own analysis after an invalid earlier image (%s)",
+                  identityLog.c_str());
+            af_engine_destroy(roleEngine);
+        }
     }
 }
 
