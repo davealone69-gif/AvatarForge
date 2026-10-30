@@ -8,7 +8,7 @@ The project has four layers, and each can be built and tested on its own:
 | Layer | Sources | What it is | How it is built |
 |---|---|---|---|
 | Kernel | `native/src/*.cpp`, `native/include/afcore.h` | anatomy → SDF field → isosurface → UV → PBR bake → rig → blendshapes → clips → GLB, behind a stable C ABI | `tools/build_host.sh` (host) / CMake+NDK (Android) |
-| Renderer | `native/src/render/` | OpenGL ES 3.1 only, written from scratch | CMake+NDK (Android only: EGL/ANativeWindow); GLES shaders baked on any host |
+| Renderer | `native/src/render/` | GLES 3.1 default, native Vulkan 1.3 opt-in; written from scratch | CMake+NDK (Android: system EGL/GLES/Vulkan); separate GLES and SPIR-V shader tables |
 | Rust | `rust/af-sys`, `rust/af` | safe Rust wrapper over the *same* C ABI as the Kotlin path | `cargo test --offline` against `build-host/libafcore.so` |
 | App + SDK | `sdk/`, `app/` | Kotlin SDK façade, Compose UI, one Activity | Gradle + AGP 8.5 |
 
@@ -33,8 +33,11 @@ export PATH=$JAVA_HOME/bin:/usr/local/tc/gradle-8.9/bin:$ANDROID_HOME/cmdline-to
 ```
 
 Which packages are needed and why is documented at the top of the script; the short version is that
-AGP 8.x needs JDK 17, the renderer links `EGL`/`GLESv3`/`android`/`log` from the NDK
-sysroot, and the kernel needs only zlib (provided by the Android platform, `-lz` on a host).
+AGP 8.x needs JDK 17; the renderer links system `vulkan` plus `EGL`/`GLESv3`/`android`/`log`
+from the NDK sysroot, and the kernel needs only zlib (provided by Android, `-lz` on a host).
+The opt-in Vulkan path requests **1.3 core**; NDK header revision and a phone's driver patch
+(e.g. `1.3.304`) are separate values. The checked-in Vulkan 1.0-targeted SPIR-V remains valid
+on Vulkan 1.3 and does not need to be regenerated merely to change the requested API version.
 
 Hardware: this project is developed and verified on a 2 vCPU / 2 GB container. Configure Gradle
 accordingly (`gradle.properties` already does: no daemon, no parallel module builds, 1.5 GB heap).

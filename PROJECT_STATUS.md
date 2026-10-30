@@ -4,9 +4,11 @@
 
 The user reversed the GLES-only direction and requested **a separate native Vulkan renderer**,
 with blur occurring during **live animation clips**. GLES remains the default and a safe fallback;
-Vulkan is an explicit viewer toggle, *not* the OS's ANGLE-on-Vulkan GLES implementation. UV atlas
-packing (AF-034) and animation skinning (AF-035) fixes were ported from the newer upstream branch.
-Host verification: kernel **411/0**, renderer GLES/selector double **81/0**, linkage-guard tests
+Vulkan is an explicit viewer toggle requesting **Vulkan 1.3 core** on a 1.3-capable physical device,
+*not* the OS's ANGLE-on-Vulkan GLES implementation. `.304` is a reported driver patch, not an
+application-requested feature. UV atlas packing (AF-034) and animation skinning (AF-035) fixes
+were ported from the newer upstream branch.
+Host verification: kernel **411/0**, renderer GLES/selector/version gate **87/0**, linkage-guard tests
 **3/0**, SPIR-V provenance regressions **6/0**, Vulkan source host C++ syntax check passed.
 Check the Android APK workflow for the **current commit's** shader/NDK/Kotlin/artifact outcome;
 its status cannot be inferred from a prior commit. Samsung GPU/pixel evidence is still missing;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Compile the real GLES path and native backend selector against a stateful GLES/EGL mock
-# and a factory-only Vulkan double. This is NOT a Vulkan command or device test.
+# Compile real GLES and backend selection against a stateful GLES/EGL mock, plus a
+# factory-only Vulkan double and the pure 1.3 physical-device version gate.
+# This is NOT a Vulkan command or device test.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/build-host"

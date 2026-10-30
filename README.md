@@ -20,9 +20,9 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
 
 ## Status, in one paragraph
 
-The default renderer is **GLES 3.1**; an **opt-in native Vulkan** path has been restored separately,
-with GLES fallback on Vulkan startup/frame failure. The UV-atlas overflow and clip skinning hot path
-have focused host regressions, but the Vulkan restoration is **not yet verified on a Samsung GPU**.
+The default renderer is **GLES 3.1**; an **opt-in native Vulkan 1.3** path is available separately,
+with GLES fallback on Vulkan failure or when 1.3 is unavailable. The UV-atlas overflow and clip
+skinning hot path have focused host regressions, but native Vulkan is **not yet verified on a Samsung GPU**.
 Camera movement was user-confirmed earlier (exact build SHA not supplied). CI builds exact-head
 Android artifacts; visible pixels, sustained performance/thermal behaviour and production signing
 remain unverified or BLOCKED. See `docs/VULKAN_RESTORE_2026-10-30.md` and `DEVICE.md`.
@@ -105,8 +105,9 @@ bash tools/test_renderer_host.sh      # renderer fault-injection regressions
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** OpenGL ES 3.1 is the only supported backend; no
-  third-party engine and no alternate graphics API are linked.
+* **The custom renderer stays custom.** GLES 3.1 is the default; opt-in native Vulkan requires
+  API 1.3 core. No third-party rendering engine is linked. Android's ANGLE-on-Vulkan still counts
+  as GLES, and neither backend is claimed visually verified on the phone.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
 
 ## Licence

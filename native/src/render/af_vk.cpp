@@ -1,6 +1,6 @@
 /*
  * ============================================================================================
- *  AvatarForge :: af_vk.cpp  --  opt-in native Vulkan 1.0 renderer
+ *  AvatarForge :: af_vk.cpp  --  opt-in native Vulkan 1.3 renderer
  * ============================================================================================
  *
  *  Written against the raw Vulkan API. Nothing here comes from a rendering framework: the
@@ -10,9 +10,10 @@
  *  GLES remains the default and does not share shader binaries with this backend.
  *
  *  What the backend guarantees regardless of device:
- *      * Vulkan 1.0 core only - no dynamic rendering, no maintenance1, no KHR swapchain beyond
- *        the one extension every Android driver has. Negative viewport height is NOT used (the
- *        Y flip lives in the vertex shader) so this runs on 1.0 drivers too.
+ *      * Vulkan 1.3 core is required by this opt-in backend. Commands and checked-in SPIR-V
+ *        intentionally remain valid Vulkan 1.0 subsets; no 1.3-only rendering feature is
+ *        assumed. Older loaders or physical devices fall back to GLES. Negative viewport height
+ *        is NOT used (the Y flip lives in the vertex shader).
  *      * MSAA is optional: the sample count is clamped to what the device reports for both
  *        colour and depth, so a device that only supports 1x still renders correctly.
  *      * HDR: RGBA16F if it can be used as a colour attachment and sampled, else R11G11B10F,
@@ -37,6 +38,7 @@
 #include "af_environment.h"
 #include "af_shaders.h"
 #include "af_gpu_profile.h"
+#include "af_vk_version.h"
 
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
@@ -479,13 +481,19 @@ bool VulkanRenderer::init(ANativeWindow* window, const RendererOptions& options,
 }
 
 bool VulkanRenderer::createInstance(std::string* error) {
+    static_assert(VK_VERSION_MAJOR(VK_API_VERSION_1_3) == kRequestedVkMajor &&
+                  VK_VERSION_MINOR(VK_API_VERSION_1_3) == kRequestedVkMinor,
+                  "Vulkan instance request and physical-device version gate must agree");
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "AvatarForge";
     app.applicationVersion = 1;
     app.pEngineName = "AvatarForge";
     app.engineVersion = 1;
-    app.apiVersion = VK_API_VERSION_1_0;   /* 1.0 core only: every Android Vulkan driver qualifies */
+    /* Request Vulkan 1.3 core, not the driver's patch revision (e.g. 1.3.304). The Vulkan
+       spec ignores the patch in this field. A 1.0/1.1/1.2 loader may reject the instance;
+       Renderer::create then attempts the real GLES backend. */
+    app.apiVersion = VK_API_VERSION_1_3;
 
     const char* extensions[] = {"VK_KHR_surface", "VK_KHR_android_surface"};
     VkInstanceCreateInfo ci{};
@@ -497,7 +505,7 @@ bool VulkanRenderer::createInstance(std::string* error) {
        layer list is a debug-time concern. Release builds stay silent. */
     const VkResult r = vkCreateInstance(&ci, nullptr, &instance_);
     if (r != VK_SUCCESS) {
-        setError(error, "vkCreateInstance", r);
+        setError(error, "vkCreateInstance(Vulkan 1.3)", r);
         return false;
     }
     return true;
@@ -530,7 +538,15 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
     VkPhysicalDevice best = VK_NULL_HANDLE;
     int bestScore = -1;
     uint32_t bestFamily = 0;
+    bool anyVulkan13Device = false;
     for (VkPhysicalDevice dev : devices) {
+        VkPhysicalDeviceProperties p{};
+        vkGetPhysicalDeviceProperties(dev, &p);
+        /* A 1.3-capable loader can enumerate a physical device whose core API is older.
+           Never label that as native Vulkan 1.3: let the factory select safe GLES instead. */
+        if (!supportsRequestedVulkanCore(VK_VERSION_MAJOR(p.apiVersion),
+                                         VK_VERSION_MINOR(p.apiVersion))) continue;
+        anyVulkan13Device = true;
         uint32_t qcount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(dev, &qcount, nullptr);
         std::vector<VkQueueFamilyProperties> queues(qcount);
@@ -540,8 +556,6 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
             VkBool32 present = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(dev, q, surface_, &present);
             if (!present) continue;
-            VkPhysicalDeviceProperties p{};
-            vkGetPhysicalDeviceProperties(dev, &p);
             int score = 0;
             switch (p.deviceType) {
                 case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   score = 400; break;
@@ -558,7 +572,9 @@ bool VulkanRenderer::pickPhysicalDevice(std::string* error) {
         }
     }
     if (best == VK_NULL_HANDLE) {
-        *error = "no Vulkan device with a graphics+present queue for this surface";
+        *error = anyVulkan13Device
+            ? "no Vulkan 1.3 device with a graphics+present queue for this surface"
+            : "no Vulkan 1.3 physical device (older Vulkan cannot run this opt-in backend)";
         return false;
     }
     phys_ = best;

@@ -29,11 +29,14 @@ playback inside the viewer, not an encoded recording.
   source tree and precompiled 13-stage SPIR-V table. Existing GLES shaders and 12-stage table
   remain independent. Removed the old async ASTC/ETC2 encoder from this restoration rather than
   adding a second live texture-owner race; the Vulkan path uploads uncompressed atlases/mips.
-- Explicit `RenderSettings.backend` opt-in goes through JNI to the native factory. Startup tries
-  Vulkan then GLES when Vulkan initialization fails; the app reports the **actual** backend and
-  journals a fallback. Changing API recreates the native renderer on its owning thread, preserving
-  camera, engine attachment, clip selection and overlays. Old persisted `preferVulkan` alone
-  cannot silently select the experimental backend.
+- Explicit `RenderSettings.backend` opt-in goes through JNI to the native factory. The Vulkan path
+  requests **Vulkan 1.3 core** and selects only 1.3-or-newer physical devices; an older loader or
+  GPU falls back to GLES. Vulkan ignores the `.304` driver patch when creating an instance: the
+  phone's `1.3.304` is reported capability, not an exact patch requirement or a quality setting.
+  Existing Vulkan-1.0-targeted SPIR-V is valid under 1.3; no new 1.3-only rendering feature is
+  enabled just by this request. The app reports the **actual** backend and journals a fallback.
+  Changing API recreates the renderer on its owning thread, preserving camera, engine attachment,
+  clip selection and overlays. Old persisted `preferVulkan` alone cannot silently select it.
 - The Vulkan backend owns an Android window reference across surface recreation. It propagates
   unrecoverable `vkAcquire`/`vkResetCommandBuffer`/record/submit/present and target-rebuild errors
   through `frameError()` to JNI's exception and one safe GLES recovery. Atlas upload, white
@@ -51,8 +54,9 @@ playback inside the viewer, not an encoded recording.
 - `bash tools/build_host.sh test`: **411 checks, 0 failures** (host kernel, incl. UV/rig).
   This environment needed a compatible local zlib header (`/usr/local/include/node`) and symlink
   to the system libz; neither is committed or shipped.
-- `bash tools/test_renderer_host.sh`: **81 checks, 0 failures** (real GLES/EGL mock and a
-  factory-only Vulkan double). It does not execute Vulkan commands.
+- `bash tools/test_renderer_host.sh`: **87 checks, 0 failures** (real GLES/EGL mock,
+  factory-only Vulkan double and pure 1.3 physical-device version gate). It does not execute
+  Vulkan commands.
 - `python3 tools/test_renderer_artifacts.py`: **3 tests pass**; package/linkage logic only.
 - `python3 tools/test_embed_vulkan_shaders.py`: **6 tests pass**. Sources and the actual checked-in
   SPIR-V table match the byte-identical pre-removal snapshot; mutations to either are rejected.

@@ -4,6 +4,7 @@
  */
 #include "gl_mock.h"
 #include "af_render.h"
+#include "af_vk_version.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -172,9 +173,17 @@ void angleDriverIsStillGles() {
           "fixture submits an animated-avatar frame through the native GLES path");
     r.reset(); check(resourcesReleased(), "translated GLES context teardown releases resources");
 }
-/* A settings value is not a GPU allocation licence. These two cases used to reach glTexImage2D and
-   glRenderbufferStorageMultisample unchanged, so a stale/corrupt preference could ask for a 16 GB
-   shadow map and lose the context on a device that was rendering fine a frame earlier. */
+/* A Vulkan 1.3 instance request alone does not prove the chosen physical GPU exposes 1.3.
+   The native backend must not select a 1.0/1.1/1.2 device even if the loader accepts 1.3. */
+void vulkanCoreVersionGate() {
+    check(!af::supportsRequestedVulkanCore(1, 0), "Vulkan 1.0 device does not satisfy native 1.3 target");
+    check(!af::supportsRequestedVulkanCore(1, 1), "Vulkan 1.1 device does not satisfy native 1.3 target");
+    check(!af::supportsRequestedVulkanCore(1, 2), "Vulkan 1.2 device does not satisfy native 1.3 target");
+    check(af::supportsRequestedVulkanCore(1, 3), "Vulkan 1.3 qualifies regardless of reported patch");
+    check(af::supportsRequestedVulkanCore(1, 4), "future Vulkan 1.x device remains eligible");
+    check(af::supportsRequestedVulkanCore(2, 0), "future Vulkan 2.0 device remains eligible");
+}
+
 void vulkanSelection() {
     af_test::reset(); af_test_vk::reset();
     af::RendererOptions request = options();
@@ -278,7 +287,7 @@ int main() {
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
     swapFailureIsRecoverableByOwner();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
-    selector(); vulkanSelection(); optionSanitisation(); renderAbi();
+    selector(); vulkanCoreVersionGate(); vulkanSelection(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
     return failures ? 1 : 0;
 }

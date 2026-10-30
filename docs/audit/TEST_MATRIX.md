@@ -5,7 +5,7 @@
 | Gate | Result | Limit |
 |---|---|---|
 | Host kernel/UV/clip | **411 checks / 0 failures** | CPU and atlas invariants; not Samsung pixels |
-| GLES mocks + Vulkan selector double | **81 / 0** | No native Vulkan commands or GPU presentation |
+| GLES mocks + Vulkan selector/version gate | **87 / 0** | 1.0/1.2 rejected; 1.3+ accepted in host policy. No native Vulkan commands or GPU presentation |
 | Dual-API package guard unit tests | **3 / 0** | APK linkage still requires exact-head CI |
 | Vulkan SPIR-V provenance regressions | **6 / 0** | No local NDK `glslc` or `spirv-val`; CI compiles/validates |
 | Vulkan translation-unit syntax | **pass** with fetched headers | Not an NDK build or real GPU driver |

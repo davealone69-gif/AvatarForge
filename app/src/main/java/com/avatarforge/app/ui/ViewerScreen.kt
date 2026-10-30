@@ -455,7 +455,7 @@ private fun RenderPanel(settings: RenderSettings, onSettings: (RenderSettings) -
     ToggleRow("Native Vulkan (experimental)", settings.backend == RenderBackend.VULKAN) { enabled ->
         onSettings(settings.copy(backend = if (enabled) RenderBackend.VULKAN else RenderBackend.GLES))
     }
-    Text("Changing backend recreates the viewer. If Vulkan cannot start, GLES is used; the line above shows the actual app backend. ANGLE-on-Vulkan still counts as GLES.",
+    Text("Native Vulkan requires API 1.3 core (the driver reports its own patch, such as .304). Changing backend recreates the viewer; if 1.3 is unavailable, GLES is used. ANGLE-on-Vulkan still counts as GLES.",
         style = MaterialTheme.typography.labelSmall)
     ToggleRow("Shadows", settings.shadows) { onSettings(settings.copy(shadows = it)) }
     ToggleRow("Bloom", settings.bloom) { onSettings(settings.copy(bloom = it)) }

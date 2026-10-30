@@ -23,9 +23,9 @@ the host cannot judge at all.
 
 | | |
 |---|---|
-| Device | arm64 Android 8.0+ (API 26) with **OpenGL ES 3.1**; that is the only backend AvatarForge implements |
+| Device | arm64 Android 8.0+ (API 26) with **OpenGL ES 3.1** for the default; native Vulkan additionally needs a Vulkan **1.3-core** loader and physical device, or falls back to GLES |
 | Host | `adb` from platform-tools, and a copy of this repo (for `tools/validate_glb.py`) |
-| Artifact | `artifacts/avatarforge-debug-arm64.apk` (or the release one, see §1) |
+| Artifact | Exact-commit Android CI artifact `AvatarForge-debug-arm64.apk` (or a locally built debug APK; see §1) |
 | Free storage | ~2 GB on the device: every generation writes a 33–39 MB `.glb` plus its textures |
 | Time | 15 minutes for the smoke path, 45 for the full sheet |
 
@@ -34,8 +34,8 @@ the host cannot judge at all.
 ## 1. Install
 
 ```bash
-adb install -r artifacts/avatarforge-debug-arm64.apk
-# or, after `tools/build_gradle.sh :app:assembleRelease`:
+adb install -r AvatarForge-debug-arm64.apk   # extracted from exact-head Android CI artifact
+# or, after a locally signed release build:
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -224,9 +224,10 @@ system Vulkan capability and frame counters alone do not prove visible/sharp pix
    The older `ANGLE ((Samsung Xclipse 940) on Vulkan 1.3.304)` report describes Android's GLES
    translation layer, **not** this app's native Vulkan renderer.
 2. In RENDER settings opt into **Native Vulkan (experimental)**. The viewer must recreate the
-   native renderer. Capture another diagnostics export: `Backend: vulkan` with `API: Vulkan ...`
-   and the app's device/driver string confirms the distinct API was selected. If it still reports
-   `gles31`, initialization fell back; save the BACKEND_FALLBACK journal entry and
+   native renderer and request **Vulkan 1.3 core**. Capture another diagnostics export:
+   `Backend: vulkan` with a physical-device `API: Vulkan 1.3.x` and the app's device/driver string
+   confirms the distinct API was selected. The `.304` patch is driver-reported, not an app target.
+   If the report still says `gles31`, initialization fell back; save the BACKEND_FALLBACK journal entry and
    `adb logcat -s AvatarForgeRenderer:V` showing the Vulkan error. Test `walk`, `run`, rotation,
    background/foreground, zoom/orbit and **Safe recovery**; a fatal VkResult must stop Vulkan and
    re-create using safe GLES, not count blank frames. A third-party Vulkan Checker result does not
