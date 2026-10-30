@@ -93,6 +93,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     @Volatile private var requestedOverlays = RequestedOverlays(false, false, -1)
 
     /** Native handle of the engine currently attached (0 = none). */
+    private val engineAttachmentState = EngineAttachmentState()
     @Volatile var attachedEngineHandle: Long = 0L
         private set
 
@@ -211,10 +212,26 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     /** Attaches a freshly generated engine so the viewer shows it. */
+    @Synchronized
     fun attachEngine(engineHandle: Long) {
+        val attachment = engineAttachmentState.attach(engineHandle)
         attachedEngineHandle = engineHandle
         pendingEngineHandle = engineHandle
-        onRenderThread { it.renderer?.attachEngine(engineHandle) }
+        onRenderThread { view ->
+            val attached = view.engineAttachmentState.attachIfCurrent(attachment) { currentHandle ->
+                view.renderer?.attachEngine(currentHandle)
+            }
+            if (!attached) {
+                view.retireEngineAttachment(attachment)
+            }
+        }
+    }
+
+    @Synchronized
+    private fun retireEngineAttachment(attachment: EngineAttachmentState.Attachment) {
+        if (!engineAttachmentState.retire(attachment)) return
+        attachedEngineHandle = 0L
+        pendingEngineHandle = 0L
     }
 
     /** Tells the renderer the engine's geometry changed (new pose, blendshapes, clip frame). */
@@ -460,7 +477,9 @@ class RenderSurfaceView @JvmOverloads constructor(
                 )
             }
             created.setCamera(camera)
-            if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            engineAttachmentState.attachCurrent { currentHandle ->
+                created.attachEngine(currentHandle)
+            }
             /* Reapply after engine attachment so a recreated renderer cannot silently return to
                production output and so the selected rung is authoritative for the next frame. */
             created.setDiagnosticRung(_requestedDiagnosticRung.value.value)
