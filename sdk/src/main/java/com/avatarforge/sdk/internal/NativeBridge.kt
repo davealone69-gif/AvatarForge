@@ -117,7 +117,7 @@ internal object NativeBridge {
     external fun engineJointInfo(handle: Long, joint: Int, outInts: IntArray, outFloats: FloatArray, outName: Array<String?>): Int
     external fun engineJointMatrices(handle: Long, out: FloatArray): Int
     external fun engineTextureInfo(handle: Long, slot: Int, out: IntArray): Long
-    external fun engineCopyTexture(handle: Long, slot: Int, dst: ByteBuffer): Int
+    external fun engineCopyTexture(handle: Long, slot: Int, dst: ByteBuffer): Long
 
     /* ------------------------------------------------------------------ output --------------- */
 
