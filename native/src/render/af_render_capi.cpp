@@ -146,9 +146,22 @@ const char* af_renderer_last_error(void) { return g_lastError.c_str(); }
 
 /* ------------------------------------------------------------------ framing --------------- */
 int32_t af_renderer_resize(void* handle, int32_t width, int32_t height) {
+    g_lastError.clear();
     af::Renderer* r = asRenderer(handle);
-    if (!r) return AF_ERR_INVALID_ARG;
-    return r->resize(width, height) ? AF_OK : AF_ERR_INTERNAL;
+    if (!r) {
+        g_lastError = "af_renderer_resize: renderer handle is null";
+        return AF_ERR_INVALID_ARG;
+    }
+    if (width <= 0 || height <= 0) {
+        g_lastError = "af_renderer_resize: dimensions must be positive";
+        return AF_ERR_INVALID_ARG;
+    }
+    if (!r->resize(width, height)) {
+        g_lastError = "af_renderer_resize: backend rejected surface resize to " +
+                      std::to_string(width) + "x" + std::to_string(height);
+        return AF_ERR_INTERNAL;
+    }
+    return AF_OK;
 }
 
 int32_t af_renderer_attach_engine(void* handle, af_engine* engine) {
