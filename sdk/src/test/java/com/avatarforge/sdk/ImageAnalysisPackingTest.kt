@@ -58,4 +58,16 @@ class ImageAnalysisPackingTest {
             ImageAnalysisPacking.unpack(FloatArray(ImageAnalysisPacking.FLOAT_COUNT), -1)
         }
     }
+
+    @Test
+    fun `texture copy JNI declaration returns the native byte-count type`() {
+        val method = NativeBridge::class.java.getDeclaredMethod(
+            "engineCopyTexture",
+            Long::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            java.nio.ByteBuffer::class.java,
+        )
+        assertEquals(Long::class.javaPrimitiveType, method.returnType)
+    }
+
 }
