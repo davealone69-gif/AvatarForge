@@ -218,11 +218,12 @@ class RenderSurfaceView @JvmOverloads constructor(
         attachedEngineHandle = engineHandle
         pendingEngineHandle = engineHandle
         onRenderThread { view ->
-            if (!view.engineAttachmentState.isCurrent(attachment)) {
-                view.retireEngineAttachment(attachment)
-                return@onRenderThread
+            val attached = view.engineAttachmentState.attachIfCurrent(attachment) { currentHandle ->
+                view.renderer?.attachEngine(currentHandle)
             }
-            view.renderer?.attachEngine(attachment.engineHandle)
+            if (!attached) {
+                view.retireEngineAttachment(attachment)
+            }
         }
     }
 
@@ -476,7 +477,9 @@ class RenderSurfaceView @JvmOverloads constructor(
                 )
             }
             created.setCamera(camera)
-            if (pendingEngineHandle != 0L) created.attachEngine(pendingEngineHandle)
+            engineAttachmentState.attachCurrent { currentHandle ->
+                created.attachEngine(currentHandle)
+            }
             /* Reapply after engine attachment so a recreated renderer cannot silently return to
                production output and so the selected rung is authoritative for the next frame. */
             created.setDiagnosticRung(_requestedDiagnosticRung.value.value)
