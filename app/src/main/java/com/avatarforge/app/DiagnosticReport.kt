@@ -33,7 +33,6 @@ internal fun buildDiagnosticReport(
     nativeLibraryError: String?,
     nativeEngineInitialized: Boolean,
     requestedBackend: String,
-    effectiveBackend: String,
     rendererInfo: RendererInfo?,
     stats: RendererStats?,
     diagnosticRung: DiagnosticRung,
@@ -59,8 +58,8 @@ internal fun buildDiagnosticReport(
     appendLine("Engine: ${if (nativeLibraryLoaded && nativeEngineInitialized) "initialized" else if (nativeLibraryLoaded) "not initialized" else "unavailable"}")
     appendLine("Engine version / ABI: $engineVersion / $engineAbiVersion")
     appendLine("Renderer: ${if (rendererInfo == null) "not initialized" else "initialized"}")
-    appendLine("Backend requested / effective: $requestedBackend / $effectiveBackend")
-    appendLine("Backend active: ${rendererInfo?.backend ?: "not initialized"}")
+    appendLine("Backend requested: $requestedBackend")
+    appendLine("Backend actual: ${rendererInfo?.backend ?: "not initialized"}")
 
     if (rendererInfo != null) {
         appendLine("Graphics device/renderer: ${rendererInfo.deviceName.ifBlank { "unavailable" }}")

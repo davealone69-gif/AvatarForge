@@ -622,7 +622,6 @@ class MainActivity : ComponentActivity() {
                 nativeLibraryError = health.problem,
                 nativeEngineInitialized = engine.isNativeEngineInitialized,
                 requestedBackend = settings.backend.name,
-                effectiveBackend = effectiveSettings.backend.name,
                 rendererInfo = surfaceViewState?.rendererInfo?.value ?: noRendererInfo.value,
                 stats = surfaceViewState?.stats?.value ?: noRendererStats.value,
                 diagnosticRung = selectedDiagnosticRung,

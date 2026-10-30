@@ -21,7 +21,7 @@ class DiagnosticReportTest {
     private val device = DiagnosticDeviceIdentity("Samsung", "SM-S921B", "16", 36)
 
     @Test
-    fun `report includes build identity renderer details counters and pixel outcome`() {
+    fun `report separates requested Vulkan from actual gles31 fallback and renderer metadata`() {
         val info = RendererInfo(
             backend = "gles31",
             deviceName = "ANGLE (Samsung Xclipse 940) on Vulkan",
@@ -66,7 +66,6 @@ class DiagnosticReportTest {
             nativeLibraryError = null,
             nativeEngineInitialized = true,
             requestedBackend = "VULKAN",
-            effectiveBackend = "GLES",
             rendererInfo = info,
             stats = stats,
             diagnosticRung = DiagnosticRung.TRIANGLE,
@@ -82,8 +81,8 @@ class DiagnosticReportTest {
             "Source commit: 51bdb602d8d35e9c6e81a6f0060411056dbb9328",
             "Device: Samsung SM-S921B",
             "Engine: initialized",
-            "Backend requested / effective: VULKAN / GLES",
-            "Backend active: gles31",
+            "Backend requested: VULKAN",
+            "Backend actual: gles31",
             "GLES GL_RENDERER: ANGLE (Samsung Xclipse 940) on Vulkan",
             "GLES GL_VENDOR: Samsung Electronics",
             "GLES GL_VERSION: OpenGL ES 3.2",
@@ -111,7 +110,6 @@ class DiagnosticReportTest {
             nativeLibraryError = null,
             nativeEngineInitialized = false,
             requestedBackend = "VULKAN",
-            effectiveBackend = "VULKAN",
             rendererInfo = null,
             stats = RendererStats(
                 frameMs = -1f,
@@ -135,6 +133,7 @@ class DiagnosticReportTest {
         assertTrue(report.contains("Source commit: unavailable"))
         assertTrue(report.contains("Engine: not initialized"))
         assertTrue(report.contains("Renderer: not initialized"))
+        assertTrue(report.contains("Backend actual: not initialized"))
         assertTrue(report.contains("FPS: not measured"))
         assertTrue(report.contains("Pixel diagnostic: not run (no pixel readback requested)"))
         assertTrue(report.contains("Vulkan initialization warning: none recorded"))
@@ -163,7 +162,6 @@ class DiagnosticReportTest {
             nativeLibraryError = null,
             nativeEngineInitialized = true,
             requestedBackend = "VULKAN",
-            effectiveBackend = "VULKAN",
             rendererInfo = info,
             stats = null,
             diagnosticRung = DiagnosticRung.PRODUCTION_AVATAR,
@@ -171,6 +169,8 @@ class DiagnosticReportTest {
             pixelCheck = null,
             lastError = null,
         )
+        assertTrue(report.contains("Backend requested: VULKAN"))
+        assertTrue(report.contains("Backend actual: gles31"))
         assertTrue(report.contains("Vulkan initialization warning: $completeWarning"))
 
         val startupError = "Renderer::create failed (-6): Vulkan: vkCreateInstance failed\nfull driver detail; OpenGL ES 3.1: eglInitialize failed"
