@@ -132,6 +132,7 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val engine = remember { AvatarEngine.get(context) }
         val scope = rememberCoroutineScope()
+        val analysisRequestGuard = remember { ImageAnalysisRequestGuard() }
         val health = remember { AvatarEngine.health() }
 
         /* Stable stand-ins for the viewer's flows. The surface view is created during layout, so
@@ -261,9 +262,12 @@ class MainActivity : ComponentActivity() {
             /* Off the main thread: the native analyser downsamples and histograms a 1600 px image,
                which is long enough to drop frames if it ran inside composition. */
             fun analyseReferences(bitmapA: Bitmap?, bitmapB: Bitmap?) {
+                val request = analysisRequestGuard.begin()
+                /* Do not let Generate reuse measurements from the previous selection while the
+                   current pair is being analysed. */
+                analysedImages = emptyList()
+                analysisNote = null
                 if (bitmapA == null) {
-                    analysedImages = emptyList()
-                    analysisNote = null
                     return
                 }
                 /* The pixel copy into a direct buffer happens on the IO thread too: a 1600 px
@@ -276,6 +280,7 @@ class MainActivity : ComponentActivity() {
                             engine.analyseImages(listOfNotNull(refA, refB))
                         }.getOrNull()
                     }
+                    if (!analysisRequestGuard.isCurrent(request)) return@launch
                     if (analysed == null) {
                         analysedImages = emptyList()
                         analysisNote =
