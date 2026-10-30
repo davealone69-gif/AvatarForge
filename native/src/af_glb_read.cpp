@@ -464,11 +464,27 @@ int buildPrimitive(const uint8_t* bin, size_t binSize, const json::Json& doc, co
             (*pool)[i].uv[1] = scratch[i * 2 + 1];
         }
     }
-    present = readVec("COLOR_0", 4, &scratch);
-    if (present < 0) return present;
-    if (present == 0) {
+    int colorIndex = -1;
+    if (attribute(prim, "COLOR_0", &colorIndex)) {
+        const json::Json& colorAccessor = doc["accessors"].atOrNull(static_cast<size_t>(colorIndex));
+        const std::string colorType = colorAccessor["type"].stringOr("");
+        if (colorType != "VEC3" && colorType != "VEC4") {
+            if (error) *error = "glTF: COLOR_0 accessor must be VEC3 or VEC4";
+            return AF_ERR_INVALID_ARG;
+        }
+        const int colorComponents = colorType == "VEC3" ? 3 : 4;
+        size_t colorCount = 0;
+        rc = readAccessorFloats(bin, binSize, doc, colorIndex, colorComponents, &scratch, &colorCount, error);
+        if (rc != AF_OK) return rc;
+        if (colorCount != vertexCount) {
+            if (error) *error = "glTF: COLOR_0 count differs from POSITION count";
+            return AF_ERR_INVALID_ARG;
+        }
         for (size_t i = 0; i < vertexCount; ++i) {
-            for (int c = 0; c < 4; ++c) (*pool)[i].color[c] = scratch[i * 4 + static_cast<size_t>(c)];
+            for (int c = 0; c < 3; ++c) (*pool)[i].color[c] = scratch[i * static_cast<size_t>(colorComponents) + static_cast<size_t>(c)];
+            (*pool)[i].color[3] = colorComponents == 4
+                                      ? scratch[i * 4 + 3]
+                                      : 1.0f;
         }
     }
     present = readVec("JOINTS_0", 4, &scratch);

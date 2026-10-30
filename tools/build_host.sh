@@ -54,13 +54,20 @@ build_tests() {
         $(kernel_sources) "$NATIVE/src/render/af_shaders.cpp" -lz -pthread
     echo "    $OUT/host_tests"
 }
+build_importer_tests() {
+    echo "==> glb_import_compat_tests"
+    "$CXX" "${KERNEL_FLAGS[@]}" -o "$OUT/glb_import_compat_tests" \
+        "$NATIVE/tests/glb_import_compat_tests.cpp" \
+        "$NATIVE/src/af_glb_read.cpp" "$NATIVE/src/af_json.cpp" "$NATIVE/src/af_png_decode.cpp" -lz
+    echo "    $OUT/glb_import_compat_tests"
+}
 
 case "$TARGET" in
     kernel) build_kernel ;;
     # `test` rebuilds the shared library as well: the harness compiles the sources directly, so
     # without this the probes (and the Rust crates) would keep linking yesterday's libafcore.so
     # while the harness reports a fresh pass - a stale-artifact trap that costs an hour to notice.
-    test)   build_kernel; build_tests; echo; exec "$OUT/host_tests" "${@:2}" ;;
-    all)    build_kernel; build_tests ;;
+    test)   build_kernel; build_tests; build_importer_tests; echo; "$OUT/host_tests" "${@:2}"; echo; exec "$OUT/glb_import_compat_tests" ;;
+    all)    build_kernel; build_tests; build_importer_tests ;;
     *)      echo "usage: $0 [all|kernel|test]" >&2; exit 2 ;;
 esac
