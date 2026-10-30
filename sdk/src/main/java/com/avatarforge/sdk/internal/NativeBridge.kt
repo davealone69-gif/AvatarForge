@@ -57,7 +57,7 @@ internal object NativeBridge {
     external fun engineCreate(ints: IntArray, floats: FloatArray, prompt: String?, callbacks: Any?): Long
     external fun engineDestroy(handle: Long)
     external fun engineReset(handle: Long, ints: IntArray, floats: FloatArray, prompt: String?): Int
-    external fun engineSetMemoryBudget(handle: Long, bytes: Long)
+    external fun engineSetMemoryBudget(handle: Long, bytes: Long): Int
     external fun engineLastError(handle: Long): String
 
     /* ------------------------------------------------------------------ inputs --------------- */
