@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.avatarforge.sdk.internal.NativeBridge
 
 class ImageAnalysisPackingTest {
 
@@ -58,4 +59,14 @@ class ImageAnalysisPackingTest {
             ImageAnalysisPacking.unpack(FloatArray(ImageAnalysisPacking.FLOAT_COUNT), -1)
         }
     }
+    @Test
+    fun `memory budget JNI declaration returns the native status type`() {
+        val method = NativeBridge::class.java.getDeclaredMethod(
+            "engineSetMemoryBudget",
+            Long::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType,
+        )
+        assertEquals(Int::class.javaPrimitiveType, method.returnType)
+    }
+
 }
