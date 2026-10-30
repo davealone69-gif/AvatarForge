@@ -175,25 +175,48 @@ void swapFailureIsRecoverableByOwner() {
 void resizeAllocationFailureRestoresTargetsAndSignalsOwner() {
     af_test::reset();
     std::string error;
-    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
     check(r != nullptr, "resize-failure fixture initializes");
     if (r) {
+        r->renderFrame(1.0f / 60.0f);
+        check(r->frameError().empty(), "resize-failure fixture completes its initial target rebuild");
+        const int framesBefore = r->stats().frames;
+        const int drawsBefore = af_test::state.draws;
         const int framebuffersBefore = af_test::state.liveFramebuffers;
         const int renderbuffersBefore = af_test::state.liveRenderbuffers;
         const int texturesBefore = af_test::state.liveTextures;
+        af_test::state.surfaceWidth = 900;
+        af_test::state.surfaceHeight = 1600;
         af_test::state.incompleteNextTextureFramebuffer = true;
-        check(!r->resize(900, 1600), "failed target allocation returns resize failure to the owner");
-        check(contains(r->frameError(), "GLES resize target allocation failed") &&
-              contains(r->frameError(), "previous targets restored") &&
-              contains(r->frameError(), "HDR colour framebuffer"),
-              "resize failure carries the allocation cause and confirms target restoration");
+        const af::ResizeOutcome direct = r->resizeWithResult(900, 1600);
+        check(direct.status == af::ResizeStatus::PREVIOUS_TARGETS_RESTORED && direct.attempted,
+              "direct resize reports that the previous targets were restored");
+        check(direct.surfaceWidth == 900 && direct.surfaceHeight == 1600 &&
+              direct.targetWidth == 720 && direct.targetHeight == 1280 &&
+              !direct.targetsMatchSurface(),
+              "restored target extent is explicit and differs from the new surface");
+        check(contains(direct.diagnostic, "GLES resize target allocation failed") &&
+              contains(direct.diagnostic, "previous targets restored") &&
+              contains(direct.diagnostic, "HDR colour framebuffer"),
+              "typed resize result preserves the allocation cause and restoration outcome");
         check(af_test::state.liveFramebuffers == framebuffersBefore &&
               af_test::state.liveRenderbuffers == renderbuffersBefore &&
               af_test::state.liveTextures == texturesBefore,
               "failed resize releases partial targets and restores the prior target set");
+
+        af_test::state.incompleteNextTextureFramebuffer = true;
         r->renderFrame(1.0f / 60.0f);
-        check(r->frameError().empty() && r->stats().frames == 1,
-              "renderer can submit a frame with restored targets after reporting resize failure");
+        const af::ResizeOutcome implicit = r->lastFrameResizeOutcome();
+        check(implicit.status == af::ResizeStatus::PREVIOUS_TARGETS_RESTORED && implicit.attempted,
+              "implicit frame resize exposes its restored-target outcome");
+        check(!implicit.targetsMatchSurface() && contains(implicit.diagnostic, "HDR colour framebuffer"),
+              "frame outcome warns that restored targets are not safe for the changed surface");
+        check(r->stats().frames == framesBefore && af_test::state.draws == drawsBefore,
+              "renderer submits no frame using restored targets at a mismatched extent");
+        check(af_test::state.liveFramebuffers == framebuffersBefore &&
+              af_test::state.liveRenderbuffers == renderbuffersBefore &&
+              af_test::state.liveTextures == texturesBefore,
+              "implicit failed resize also restores resources without leaking partial targets");
     }
     r.reset();
     check(resourcesReleased(), "resize-failure teardown releases every tracked resource");
@@ -201,20 +224,28 @@ void resizeAllocationFailureRestoresTargetsAndSignalsOwner() {
 void resizeTargetRestoreFailurePreservesFatalDiagnostic() {
     af_test::reset();
     std::string error;
-    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
     check(r != nullptr, "resize-restore-failure fixture initializes");
     if (r) {
+        r->renderFrame(1.0f / 60.0f);
+        check(r->frameError().empty(), "resize-restore-failure fixture completes its initial target rebuild");
+        const int drawsBefore = af_test::state.draws;
+        af_test::state.surfaceWidth = 900;
+        af_test::state.surfaceHeight = 1600;
         af_test::state.incompleteNextTextureFramebuffer = true;
         af_test::state.rejectNextMsaa = true;
         af_test::state.rejectSingleSample = true;
-        check(!r->resize(900, 1600), "resize returns failure when old targets cannot be restored");
-        check(contains(r->frameError(), "previous targets could not be restored") &&
-              contains(r->frameError(), "single-sample render-target allocation"),
-              "fatal resize failure reports both the original and restoration errors");
         r->renderFrame(1.0f / 60.0f);
+        const af::ResizeOutcome result = r->lastFrameResizeOutcome();
+        check(result.status == af::ResizeStatus::FATAL && result.attempted,
+              "implicit resize is fatal when neither new nor previous targets are usable");
+        check(result.targetWidth == 0 && result.targetHeight == 0 &&
+              contains(result.diagnostic, "previous targets could not be restored") &&
+              contains(result.diagnostic, "single-sample render-target allocation"),
+              "fatal resize failure reports both the original and restoration errors");
         check(contains(r->frameError(), "previous targets could not be restored"),
-              "fatal frame rejection preserves the detailed resize diagnostic");
-        check(af_test::state.draws == 0,
+              "JNI-facing frame error preserves the detailed resize diagnostic");
+        check(af_test::state.draws == drawsBefore,
               "renderer does not submit draws after target restoration fails");
     }
     r.reset();
@@ -384,6 +415,12 @@ void selector() {
     std::unique_ptr<af::Renderer> r(af::Renderer::create(window(), options(), &error));
     check(r != nullptr && error.empty() && af_test::state.contextsCreated == 1,
           "factory initializes exactly one GLES context");
+    if (r) {
+        const af::ResizeOutcome resize = r->resizeWithResult(800, 1400);
+        check(resize.status == af::ResizeStatus::RESIZED && resize.attempted &&
+              resize.targetsMatchSurface(),
+              "typed resize outcome is forwarded through the GLES budget wrapper");
+    }
     r.reset(); af_test::reset();
     check(af::Renderer::create(nullptr, options(), &error) == nullptr && contains(error, "no native window"),
           "factory rejects a missing window");

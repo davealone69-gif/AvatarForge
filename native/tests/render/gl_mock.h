@@ -45,6 +45,7 @@ struct MockState {
     int timerQueriesGenerated = 0, timerQueriesDeleted = 0, liveQueries = 0;
     int glFinishCalls = 0;
     int contextsCreated = 0, contextsDestroyed = 0, surfacesCreated = 0, surfacesDestroyed = 0;
+    EGLint surfaceWidth = 720, surfaceHeight = 1280;
     int livePrograms = 0, liveShaders = 0, liveBuffers = 0, liveTextures = 0;
     int liveFramebuffers = 0, liveRenderbuffers = 0, liveVaos = 0;
     int msaaAttempts = 0, framebufferChecks = 0, draws = 0;

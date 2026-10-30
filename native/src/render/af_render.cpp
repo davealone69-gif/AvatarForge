@@ -72,6 +72,8 @@ public:
     ~BudgetRenderer() override { delete backend_; }
 
     bool resize(int w, int h) override { return backend_->resize(w, h); }
+    ResizeOutcome resizeWithResult(int w, int h) override { return backend_->resizeWithResult(w, h); }
+    ResizeOutcome lastFrameResizeOutcome() const override { return backend_->lastFrameResizeOutcome(); }
     void attachEngine(af_engine* e) override { backend_->attachEngine(e); }
     void invalidateMesh() override { backend_->invalidateMesh(); }
     void setCamera(const CameraState& c) override { backend_->setCamera(c); }

@@ -133,6 +133,27 @@ struct RendererInfo {
 };
 
 /* ------------------------------------------------------------------ the renderer ---------- */
+enum class ResizeStatus : int32_t {
+    RESIZED = 0,
+    PREVIOUS_TARGETS_RESTORED = 1,
+    FATAL = 2,
+};
+
+struct ResizeOutcome {
+    ResizeStatus status = ResizeStatus::RESIZED;
+    bool attempted = false;
+    int surfaceWidth = 0;
+    int surfaceHeight = 0;
+    int targetWidth = 0;
+    int targetHeight = 0;
+    std::string diagnostic;
+
+    bool targetsMatchSurface() const {
+        return surfaceWidth > 0 && surfaceHeight > 0 &&
+               targetWidth == surfaceWidth && targetHeight == surfaceHeight;
+    }
+};
+
 /*
  *  Ownership: one Renderer per surface. All methods must be called from the thread that created
  *  it (the app runs a dedicated render thread that owns the ANativeWindow). attachEngine() does
@@ -147,13 +168,26 @@ public:
 
     virtual ~Renderer() {}
 
-    /* Non-empty after a frame failed. JNI converts this into an exception so the bounded
-       recovery policy can act; an empty string means no frame error was recorded. */
+    /* Non-empty after a frame or resize failed. JNI converts frame failures into an exception;
+       typed resize callers receive this diagnostic in ResizeOutcome. */
     virtual std::string frameError() const { return {}; }
 
     /* Surface size in pixels. Safe to call every frame with the current size; the backend
        recreates swapchain/framebuffers only when the size actually changed. */
     virtual bool resize(int width, int height) = 0;
+
+    /* Typed result for SDK callers. Backends that only implement the legacy boolean contract are
+       conservatively classified as fatal on failure; GLES overrides this to report a restored
+       previous target set separately. */
+    virtual ResizeOutcome resizeWithResult(int width, int height) {
+        if (resize(width, height))
+            return {ResizeStatus::RESIZED, true, width, height, width, height, {}};
+        return {ResizeStatus::FATAL, true, width, height, 0, 0, frameError()};
+    }
+
+    /* Outcome of an implicit resize performed while rendering a frame. Unchanged backends report
+       no attempt and retain their existing frameError-based failure behavior. */
+    virtual ResizeOutcome lastFrameResizeOutcome() const { return {}; }
 
     /* Points the renderer at an engine handle. The handle stays owned by the caller and must
        outlive the renderer. Passing nullptr detaches (renders an empty stage). */

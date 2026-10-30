@@ -290,6 +290,8 @@ public:
     ~GlRenderer() override;
 
     bool resize(int width, int height) override;
+    ResizeOutcome resizeWithResult(int width, int height) override;
+    ResizeOutcome lastFrameResizeOutcome() const override { return lastFrameResizeOutcome_; }
     void attachEngine(af_engine* engine) override;
     void invalidateMesh() override;
     void setCamera(const CameraState& camera) override { camera_ = camera; }
@@ -406,6 +408,7 @@ private:
     bool targetsDirty_ = false;
     bool contextLost_ = false;
     std::string frameError_;
+    ResizeOutcome lastFrameResizeOutcome_{};
 };
 
 /* ============================================================================================
@@ -1485,6 +1488,8 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         if (frameError_.empty()) frameError_ = "EGL context lost or display unavailable";
         return;
     }
+    lastFrameResizeOutcome_ = {ResizeStatus::RESIZED, false, surfaceWidth_, surfaceHeight_,
+                               surfaceWidth_, surfaceHeight_, {}};
     frameError_.clear();
     ++stats_.frameAttempts;
     if (targetsDirty_) {
@@ -1518,7 +1523,11 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     eglQuerySurface(display_, surface_, EGL_WIDTH, &w);
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &h);
     if (w > 0 && h > 0 && (w != surfaceWidth_ || h != surfaceHeight_)) {
-        if (!resize(w, h)) return;
+        lastFrameResizeOutcome_ = resizeWithResult(w, h);
+        if (lastFrameResizeOutcome_.status != ResizeStatus::RESIZED) {
+            frameError_ = lastFrameResizeOutcome_.diagnostic;
+            return;
+        }
     }
 
     updateScene(deltaSeconds);
@@ -1586,17 +1595,38 @@ void GlRenderer::attachEngine(af_engine* engine) {
 void GlRenderer::invalidateMesh() { meshDirty_ = true; }
 
 bool GlRenderer::resize(int width, int height) {
-    frameError_.clear();
-    if (context_ == EGL_NO_CONTEXT) {
-        frameError_ = "GLES resize failed: no EGL context";
-        return false;
+    return resizeWithResult(width, height).status == ResizeStatus::RESIZED;
+}
+
+ResizeOutcome GlRenderer::resizeWithResult(int width, int height) {
+    ResizeOutcome result;
+    result.attempted = true;
+    result.surfaceWidth = width;
+    result.surfaceHeight = height;
+    if (contextLost_ || display_ == EGL_NO_DISPLAY || context_ == EGL_NO_CONTEXT) {
+        if (frameError_.empty()) frameError_ = "GLES resize failed: context or display unavailable";
+        result.status = ResizeStatus::FATAL;
+        result.targetWidth = 0;
+        result.targetHeight = 0;
+        result.diagnostic = frameError_;
+        return result;
     }
+    frameError_.clear();
     if (width <= 0 || height <= 0) {
         frameError_ = "GLES resize failed: invalid surface dimensions " +
                       std::to_string(width) + "x" + std::to_string(height);
-        return false;
+        result.status = ResizeStatus::FATAL;
+        result.targetWidth = surfaceWidth_;
+        result.targetHeight = surfaceHeight_;
+        result.diagnostic = frameError_;
+        return result;
     }
-    if (width == surfaceWidth_ && height == surfaceHeight_) return true;
+    if (width == surfaceWidth_ && height == surfaceHeight_) {
+        result.status = ResizeStatus::RESIZED;
+        result.targetWidth = surfaceWidth_;
+        result.targetHeight = surfaceHeight_;
+        return result;
+    }
 
     const int previousWidth = surfaceWidth_ > 0 ? surfaceWidth_ : 1080;
     const int previousHeight = surfaceHeight_ > 0 ? surfaceHeight_ : 1920;
@@ -1605,31 +1635,41 @@ bool GlRenderer::resize(int width, int height) {
     surfaceHeight_ = height;
     destroyTargets();
     std::string error;
-    if (!createTargets(&error)) {
-        destroyTargets();
-        surfaceWidth_ = previousWidth;
-        surfaceHeight_ = previousHeight;
-        options_ = previousOptions;
+    if (createTargets(&error)) {
+        activeTargetOptions_ = options_;
+        result.status = ResizeStatus::RESIZED;
+        result.targetWidth = surfaceWidth_;
+        result.targetHeight = surfaceHeight_;
+        return result;
+    }
 
-        std::string restoreError;
-        if (createTargets(&restoreError)) {
-            activeTargetOptions_ = previousOptions;
-            frameError_ = "GLES resize target allocation failed: " +
-                          (error.empty() ? std::string("unspecified failure") : error) +
-                          "; previous targets restored";
-            return false;
-        }
+    destroyTargets();
+    surfaceWidth_ = previousWidth;
+    surfaceHeight_ = previousHeight;
+    options_ = previousOptions;
 
+    std::string restoreError;
+    if (createTargets(&restoreError)) {
+        activeTargetOptions_ = previousOptions;
+        frameError_ = "GLES resize target allocation failed: " +
+                      (error.empty() ? std::string("unspecified failure") : error) +
+                      "; previous targets restored";
+        result.status = ResizeStatus::PREVIOUS_TARGETS_RESTORED;
+        result.targetWidth = surfaceWidth_;
+        result.targetHeight = surfaceHeight_;
+    } else {
         destroyTargets();
         contextLost_ = true;
         frameError_ = "GLES resize target allocation failed: " +
                       (error.empty() ? std::string("unspecified failure") : error) +
                       "; previous targets could not be restored: " +
                       (restoreError.empty() ? std::string("unspecified failure") : restoreError);
-        return false;
+        result.status = ResizeStatus::FATAL;
+        result.targetWidth = 0;
+        result.targetHeight = 0;
     }
-    activeTargetOptions_ = options_;
-    return true;
+    result.diagnostic = frameError_;
+    return result;
 }
 
 void GlRenderer::destroyTargets() {

@@ -52,7 +52,10 @@ EGLSurface eglCreateWindowSurface(EGLDisplay, EGLConfig, EGLNativeWindowType, co
     ++state.surfacesCreated; return reinterpret_cast<EGLSurface>(uintptr_t(4));
 }
 EGLBoolean eglMakeCurrent(EGLDisplay, EGLSurface, EGLSurface, EGLContext context) { state.currentContext = context; return EGL_TRUE; }
-EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint key, EGLint* value) { *value = key == EGL_WIDTH ? 720 : 1280; return EGL_TRUE; }
+EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint key, EGLint* value) {
+    *value = key == EGL_WIDTH ? state.surfaceWidth : state.surfaceHeight;
+    return EGL_TRUE;
+}
 EGLBoolean eglDestroySurface(EGLDisplay, EGLSurface) { ++state.surfacesDestroyed; return EGL_TRUE; }
 EGLBoolean eglDestroyContext(EGLDisplay, EGLContext) { ++state.contextsDestroyed; return EGL_TRUE; }
 EGLBoolean eglTerminate(EGLDisplay) { return EGL_TRUE; }
