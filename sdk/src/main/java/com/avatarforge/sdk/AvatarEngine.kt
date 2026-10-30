@@ -699,7 +699,7 @@ class AvatarEngine private constructor(private val appContext: Context) {
                     NativeBridge.engineSetMemoryBudget(h, request.memoryBudgetBytes)
                 }
                 check(budgetRc == 0) {
-                    "memory-budget setup failed (\${NativeBridge.engineLastError(h)})"
+                    "memory-budget setup failed (${NativeBridge.engineLastError(h)})"
                 }
                 val resetRc = KernelAccess.withKernel {
                     NativeBridge.engineReset(
