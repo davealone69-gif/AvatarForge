@@ -172,6 +172,54 @@ void swapFailureIsRecoverableByOwner() {
     r.reset();
     check(resourcesReleased(), "swap-failure teardown releases tracked resources");
 }
+void resizeAllocationFailureRestoresTargetsAndSignalsOwner() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "resize-failure fixture initializes");
+    if (r) {
+        const int framebuffersBefore = af_test::state.liveFramebuffers;
+        const int renderbuffersBefore = af_test::state.liveRenderbuffers;
+        const int texturesBefore = af_test::state.liveTextures;
+        af_test::state.incompleteNextTextureFramebuffer = true;
+        check(!r->resize(900, 1600), "failed target allocation returns resize failure to the owner");
+        check(contains(r->frameError(), "GLES resize target allocation failed") &&
+              contains(r->frameError(), "previous targets restored") &&
+              contains(r->frameError(), "HDR colour framebuffer"),
+              "resize failure carries the allocation cause and confirms target restoration");
+        check(af_test::state.liveFramebuffers == framebuffersBefore &&
+              af_test::state.liveRenderbuffers == renderbuffersBefore &&
+              af_test::state.liveTextures == texturesBefore,
+              "failed resize releases partial targets and restores the prior target set");
+        r->renderFrame(1.0f / 60.0f);
+        check(r->frameError().empty() && r->stats().frames == 1,
+              "renderer can submit a frame with restored targets after reporting resize failure");
+    }
+    r.reset();
+    check(resourcesReleased(), "resize-failure teardown releases every tracked resource");
+}
+void resizeTargetRestoreFailurePreservesFatalDiagnostic() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "resize-restore-failure fixture initializes");
+    if (r) {
+        af_test::state.incompleteNextTextureFramebuffer = true;
+        af_test::state.rejectNextMsaa = true;
+        af_test::state.rejectSingleSample = true;
+        check(!r->resize(900, 1600), "resize returns failure when old targets cannot be restored");
+        check(contains(r->frameError(), "previous targets could not be restored") &&
+              contains(r->frameError(), "single-sample render-target allocation"),
+              "fatal resize failure reports both the original and restoration errors");
+        r->renderFrame(1.0f / 60.0f);
+        check(contains(r->frameError(), "previous targets could not be restored"),
+              "fatal frame rejection preserves the detailed resize diagnostic");
+        check(af_test::state.draws == 0,
+              "renderer does not submit draws after target restoration fails");
+    }
+    r.reset();
+    check(resourcesReleased(), "failed target restoration teardown releases every tracked resource");
+}
 void failureCase(af_test::Fault fault, const char* expected, const char* label, bool ext = false) {
     af_test::reset();
     af_test::state.fault = fault;
@@ -368,7 +416,8 @@ int main() {
     failureCase(af_test::Fault::ProgramLink, "link forward/forward: injected link failure", "shader link failure");
     failureCase(af_test::Fault::VertexArray, "vertex array configuration: GL_INVALID_OPERATION (0x0502)", "vertex array failure");
     failureCase(af_test::Fault::MsaaStorage, "single-sample render-target allocation", "single-sample allocation failure");
-    swapFailureIsRecoverableByOwner();
+    swapFailureIsRecoverableByOwner(); resizeAllocationFailureRestoresTargetsAndSignalsOwner();
+    resizeTargetRestoreFailurePreservesFatalDiagnostic();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
     selector(); defaultBackendSelection(); vulkanSelection(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);

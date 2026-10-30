@@ -1481,11 +1481,11 @@ void GlRenderer::drawComposite() {
 }
 
 void GlRenderer::renderFrame(float deltaSeconds) {
-    frameError_.clear();
     if (contextLost_ || display_ == EGL_NO_DISPLAY) {
-        frameError_ = "EGL context lost or display unavailable";
+        if (frameError_.empty()) frameError_ = "EGL context lost or display unavailable";
         return;
     }
+    frameError_.clear();
     ++stats_.frameAttempts;
     if (targetsDirty_) {
         targetsDirty_ = false;
@@ -1586,12 +1586,48 @@ void GlRenderer::attachEngine(af_engine* engine) {
 void GlRenderer::invalidateMesh() { meshDirty_ = true; }
 
 bool GlRenderer::resize(int width, int height) {
-    if (context_ == EGL_NO_CONTEXT || width <= 0 || height <= 0) return false;
+    frameError_.clear();
+    if (context_ == EGL_NO_CONTEXT) {
+        frameError_ = "GLES resize failed: no EGL context";
+        return false;
+    }
+    if (width <= 0 || height <= 0) {
+        frameError_ = "GLES resize failed: invalid surface dimensions " +
+                      std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    if (width == surfaceWidth_ && height == surfaceHeight_) return true;
+
+    const int previousWidth = surfaceWidth_ > 0 ? surfaceWidth_ : 1080;
+    const int previousHeight = surfaceHeight_ > 0 ? surfaceHeight_ : 1920;
+    const RendererOptions previousOptions = activeTargetOptions_;
     surfaceWidth_ = width;
     surfaceHeight_ = height;
     destroyTargets();
     std::string error;
-    if (!createTargets(&error)) return false;
+    if (!createTargets(&error)) {
+        destroyTargets();
+        surfaceWidth_ = previousWidth;
+        surfaceHeight_ = previousHeight;
+        options_ = previousOptions;
+
+        std::string restoreError;
+        if (createTargets(&restoreError)) {
+            activeTargetOptions_ = previousOptions;
+            frameError_ = "GLES resize target allocation failed: " +
+                          (error.empty() ? std::string("unspecified failure") : error) +
+                          "; previous targets restored";
+            return false;
+        }
+
+        destroyTargets();
+        contextLost_ = true;
+        frameError_ = "GLES resize target allocation failed: " +
+                      (error.empty() ? std::string("unspecified failure") : error) +
+                      "; previous targets could not be restored: " +
+                      (restoreError.empty() ? std::string("unspecified failure") : restoreError);
+        return false;
+    }
     activeTargetOptions_ = options_;
     return true;
 }
