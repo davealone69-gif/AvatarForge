@@ -249,7 +249,7 @@ jobs:
           APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
           "$APKSIGNER" verify --verbose --print-certs dist/AvatarForge-release-arm64.apk
           jarsigner -verify dist/AvatarForge-release-arm64.aab
-          python3 tools/verify_gles_artifacts.py dist/AvatarForge-debug-arm64.apk dist/AvatarForge-release-UNSIGNED-arm64.aab dist/AvatarForge-sdk.aar
+          python3 tools/verify_gles_artifacts.py dist/AvatarForge-release-arm64.apk dist/AvatarForge-release-arm64.aab dist/AvatarForge-sdk.aar
           (cd dist && sha256sum * > SHA256SUMS)
       - name: Publish signed release
         uses: softprops/action-gh-release@v2
