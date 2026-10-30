@@ -960,7 +960,18 @@ JNIEXPORT jboolean JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_render
         throwIllegalArgument(env, "renderer handle is not open");
         return JNI_FALSE;
     }
-    return renderer->resize(width, height) ? JNI_TRUE : JNI_FALSE;
+    if (width <= 0 || height <= 0) {
+        throwIllegalArgument(env, "rendererResize dimensions must be positive");
+        return JNI_FALSE;
+    }
+    if (!renderer->resize(width, height)) {
+        const std::string detail =
+            "backend rejected surface resize to " + std::to_string(width) + "x" +
+            std::to_string(height);
+        throwIllegalState(env, "rendererResize", AF_ERR_INTERNAL, detail);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
 }
 
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_rendererAttachEngine(
