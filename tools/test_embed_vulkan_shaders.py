@@ -52,9 +52,18 @@ class VulkanShaderSnapshotTests(unittest.TestCase):
         ok = subprocess.CompletedProcess([], 0, "", "")
         with patch.object(vk.subprocess, "run", return_value=ok) as run:
             self.assertTrue(vk.validate_historical_table(self.stages, self.header, Path("/bin/true")))
-            self.assertEqual(13, run.call_count)
-            self.assertTrue(all(call.args[0][1:3] == ["--target-env", "vulkan1.0"]
-                                for call in run.call_args_list))
+            self.assertEqual(26, run.call_count)
+            targets = [call.args[0][2] for call in run.call_args_list]
+            self.assertEqual(13, targets.count("vulkan1.0"))
+            self.assertEqual(13, targets.count("vulkan1.3"))
+
+    def test_historical_path_rejects_a_module_invalid_for_vulkan13(self):
+        def fake_validator(args, **_kwargs):
+            return subprocess.CompletedProcess(args, 1 if args[2] == "vulkan1.3" else 0, "", "bad SPIR-V")
+
+        with patch.object(vk.subprocess, "run", side_effect=fake_validator):
+            with self.assertRaisesRegex(RuntimeError, "rejected for vulkan1.3"):
+                vk.validate_historical_table(self.stages, self.header, Path("/bin/true"))
 
 
 if __name__ == "__main__":

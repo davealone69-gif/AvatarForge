@@ -58,14 +58,15 @@ playback inside the viewer, not an encoded recording.
   factory-only Vulkan double and pure 1.3 physical-device version gate). It does not execute
   Vulkan commands.
 - `python3 tools/test_renderer_artifacts.py`: **3 tests pass**; package/linkage logic only.
-- `python3 tools/test_embed_vulkan_shaders.py`: **6 tests pass**. Sources and the actual checked-in
+- `python3 tools/test_embed_vulkan_shaders.py`: **7 tests pass**. Sources and the actual checked-in
   SPIR-V table match the byte-identical pre-removal snapshot; mutations to either are rejected.
   Validator calls are mocked in this local test, **not** a local SPIR-V compilation.
 - `g++ -fsyntax-only` against temporarily fetched Vulkan headers: `af_vk.cpp` and its helper
   translation units compile on the host. **Not an NDK build or GPU test.** `python3
   tools/embed_vulkan_shaders.py --check` requires NDK `glslc`, unavailable locally; CI runs it.
 - Android APK workflow compiles both shader dialects, validates the SHA-pinned historical Vulkan
-  SPIR-V modules with NDK `spirv-val`, and gates ARM64 native build, JVM tests and APK packaging.
+  SPIR-V modules with NDK `spirv-val` for both Vulkan 1.0 and 1.3 target environments, and gates
+  ARM64 native build, JVM tests and APK packaging.
   **Check the run for the current commit before treating its APK as built**; a green build still
   cannot approve pixels. No `adb`, local Android SDK/NDK, or SM-S921B is attached here, so
   neither backend's live image has been visually approved.

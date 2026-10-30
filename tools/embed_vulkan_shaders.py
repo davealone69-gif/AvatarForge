@@ -5,7 +5,8 @@ The Vulkan dialect lives in shaders_vk/, independent of GLES's shaders/. With no
 compiler, --check fails and regeneration never touches the checked-in table. A
 pre-removal SPIR-V snapshot is allowed if BOTH source and table hashes match the
 known-good predecessor, and its modules pass spirv-val. Different compiler
-versions can otherwise emit different SPIR-V for byte-identical GLSL sources.
+versions can otherwise emit different SPIR-V for byte-identical GLSL sources. Both
+legacy and freshly compiled modules are validated for Vulkan 1.0 and 1.3 in CI.
 """
 import argparse
 import hashlib
@@ -134,10 +135,12 @@ def validate_historical_table(stages, header, validator):
         for (name, stage), words in entries:
             output = Path(directory) / f"{name}.{stage}.spv"
             output.write_bytes(struct.pack(f"<{len(words)}I", *words))
-            result = subprocess.run([str(validator), "--target-env", "vulkan1.0", str(output)],
-                                    capture_output=True, text=True)
-            if result.returncode:
-                raise RuntimeError(f"embedded SPIR-V rejected: {name}.{stage}: {result.stdout}{result.stderr}")
+            for target in ("vulkan1.0", "vulkan1.3"):
+                result = subprocess.run([str(validator), "--target-env", target, str(output)],
+                                        capture_output=True, text=True)
+                if result.returncode:
+                    raise RuntimeError(f"embedded SPIR-V rejected for {target}: "
+                                       f"{name}.{stage}: {result.stdout}{result.stderr}")
     return True
 
 
@@ -166,10 +169,12 @@ def main():
             if result.returncode:
                 raise RuntimeError(f"Vulkan compile failed: {name}.{stage}\n{result.stdout}{result.stderr}")
             if validator.is_file():
-                result = subprocess.run([str(validator), "--target-env", "vulkan1.0", str(output)],
-                                        capture_output=True, text=True)
-                if result.returncode:
-                    raise RuntimeError(f"spirv-val rejected {name}.{stage}: {result.stdout}{result.stderr}")
+                for target in ("vulkan1.0", "vulkan1.3"):
+                    result = subprocess.run([str(validator), "--target-env", target, str(output)],
+                                            capture_output=True, text=True)
+                    if result.returncode:
+                        raise RuntimeError(f"spirv-val rejected {name}.{stage} for {target}: "
+                                           f"{result.stdout}{result.stderr}")
             blob = output.read_bytes()
             if len(blob) % 4 or blob[:4] != b"\x03\x02\x23\x07":
                 raise RuntimeError(f"invalid SPIR-V header: {name}.{stage}")
