@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.avatarforge.app.ui.AppBitmaps
 import com.avatarforge.app.ui.DiagnosticsDialog
@@ -65,7 +66,6 @@ import com.avatarforge.sdk.GenerationRequest
 import com.avatarforge.sdk.ImageReference
 import com.avatarforge.sdk.ImageRole
 import com.avatarforge.sdk.JobHandle
-import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.render.CameraSettings
 import com.avatarforge.sdk.render.DiagnosticRung
 import com.avatarforge.sdk.render.RenderSurfaceView
@@ -81,9 +81,9 @@ import com.avatarforge.sdk.recovery.RecoveryRecordKind
 import com.avatarforge.sdk.recovery.RendererRecoveryPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-
-private enum class Screen { INPUT, PROGRESS, VIEWER }
 
 /** Explicitly unknown timing is used before a renderer has produced a valid frame-loop sample. */
 private val EMPTY_RENDERER_STATS = RendererStats(-1f, -1f, -1f, 0f, 0, 0, 0, 0, 1, 0, 0)
@@ -114,14 +114,16 @@ class MainActivity : ComponentActivity() {
     /** The render surface, owned by the activity so it survives recomposition. */
     private var surfaceView: RenderSurfaceView? = null
     private var ownedEngine: AvatarEngine? = null
+    private lateinit var generationSession: GenerationSessionState
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        generationSession = ViewModelProvider(this)[GenerationSessionViewModel::class.java].state
         enableEdgeToEdge()
         AppBitmaps.install(this)
         setContent {
             MaterialTheme {
-                Surface(Modifier.fillMaxSize()) { App() }
+                Surface(Modifier.fillMaxSize()) { App(generationSession) }
             }
         }
     }
@@ -136,7 +138,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun App() {
+    private fun App(session: GenerationSessionState) {
         val context = LocalContext.current
         val engine = remember { AvatarEngine.get(context).also { ownedEngine = it } }
         val scope = rememberCoroutineScope()
@@ -151,7 +153,7 @@ class MainActivity : ComponentActivity() {
         val noRendererError = remember { MutableStateFlow<String?>(null) }
 
         var surfaceViewState by remember { mutableStateOf<RenderSurfaceView?>(null) }
-        var screen by remember { mutableStateOf(Screen.INPUT) }
+        var screen by session.screen
         var prompt by remember { mutableStateOf("") }
         var spec by remember { mutableStateOf(AvatarSpec()) }
         var imageA by remember { mutableStateOf<Bitmap?>(null) }
@@ -161,9 +163,9 @@ class MainActivity : ComponentActivity() {
         /* The measurements the last successful reference-image analysis produced, kept so the
            spec the user sees and approves is exactly the spec that gets built. */
         var analysedImages by remember { mutableStateOf<List<ImageReference>>(emptyList()) }
-        var job by remember { mutableStateOf<JobHandle?>(null) }
-        var status by remember { mutableStateOf(JobStatus()) }
-        var result by remember { mutableStateOf<EngineResult?>(null) }
+        var job by session.job
+        var status by session.status
+        var result by session.result
 
         var camera by remember { mutableStateOf(CameraSettings()) }
         val settingsStore = remember { SettingsStore(context) }
@@ -248,26 +250,10 @@ class MainActivity : ComponentActivity() {
             }
 
             fun begin(started: JobHandle) {
+                status = started.status.value
+                result = null
                 job = started
                 screen = Screen.PROGRESS
-                scope.launch {
-                    val outcome = runCatching { started.await() }
-                    outcome.onSuccess {
-                        result = it
-                        /* A new avatar starts with a neutral face; the previous channel weights
-                           belong to the previous mesh. */
-                        expressionWeights = FloatArray(expressionNames.size)
-                        surfaceView?.attachEngine(engine.nativeHandle)
-                        screen = Screen.VIEWER
-                    }.onFailure { error ->
-                        Toast.makeText(
-                            context,
-                            "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        screen = Screen.INPUT
-                    }
-                }
             }
 
             /* Off the main thread: the native analyser downsamples and histograms a 1600 px image,
@@ -301,7 +287,35 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-        LaunchedEffect(job) { job?.status?.collect { status = it } }
+        LaunchedEffect(job) {
+            val started = job ?: return@LaunchedEffect
+            val statusCollector = launch { started.status.collect { status = it } }
+            try {
+                /* This effect is Activity-scoped, but the SDK job is not. During configuration
+                   recreation the old waiter is cancelled and the new composition awaits the same
+                   retained handle. Do not turn that waiter cancellation into a generation failure. */
+                val outcome = runCatching { started.await() }
+                currentCoroutineContext().ensureActive()
+                if (job?.id != started.id) return@LaunchedEffect
+                outcome.onSuccess {
+                    result = it
+                    /* A new avatar starts with a neutral face; the previous channel weights
+                       belong to the previous mesh. */
+                    expressionWeights = FloatArray(expressionNames.size)
+                    surfaceView?.attachEngine(engine.nativeHandle)
+                    screen = Screen.VIEWER
+                }.onFailure { error ->
+                    Toast.makeText(
+                        context,
+                        "Avatar generation failed: ${error.message ?: error.javaClass.simpleName}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    screen = Screen.INPUT
+                }
+            } finally {
+                statusCollector.cancel()
+            }
+        }
         LaunchedEffect(surfaceViewState) {
             surfaceViewState?.effectiveSettings?.collect { effectiveSettings = it }
         }
