@@ -32,9 +32,14 @@ GLES: EGL context/surface → shadow pass → forward pass → bloom → composi
    when the selected queue has valid timestamp bits and the device supports timestamp queries; it
    reads results after the in-flight fence, masks counter wrap, and leaves `gpuMs = -1` on
    unsupported or invalid results. The existing C ABI/JNI stats surface GPU time plus draw calls,
-   triangles and texture bytes. Host tests cover the conversion and unknown sentinel, but this
-   sandbox has no Vulkan headers or GPU, so the Vulkan translation unit and device path remain
-   **UNVERIFIED**. GLES GPU timer queries are not implemented, and its GPU timing remains unknown.
+   triangles and texture bytes. The Android NDK debug build compiled `af_vk.cpp` and `af_gl.cpp` for
+   arm64-v8a and x86_64, so the native translation units are compile-verified. No GPU is attached;
+   Vulkan commands, device timestamps and pixels remain **UNVERIFIED**. The renderer host test skipped
+   its pinned-header Vulkan API-version helper because those pinned headers were not present; the
+   installed NDK headers are revision 1.3.237. GLES resolves `EXT_disjoint_timer_query` only when the
+   active context advertises it and all required entry points resolve. A three-query ring polls
+   without waiting, discards disjoint results and preserves `gpuMs = -1` when unsupported or no valid
+   result is ready. Host mocks test these branches; actual GLES device timing remains **UNVERIFIED**.
 4. Shader tools require NDK `glslc` for compilation/freshness checks, and cannot silently emit an
    empty Vulkan table. CI checks both shader dialects separately. Source/host checks alone do
    not establish a runnable APK or sharp image.
@@ -43,13 +48,18 @@ GLES: EGL context/surface → shadow pass → forward pass → bloom → composi
 
 ## Verification
 
-The full host kernel suite passed **437 checks, 0 failures**, including the AF-038 1024/2048
-atlas checks and AF-043 handle regressions. Renderer selection/GLES fault-injection passed **87/0**;
-diagnostic metadata and timestamp-conversion tests passed in the renderer host script. The Vulkan
-translation unit was not syntax-checked because Vulkan/NDK headers were unavailable, and hardware
-tests are **none on this branch**. Check exact-head Android CI status in
-[PROJECT_STATUS.md](../../PROJECT_STATUS.md), then follow [DEVICE.md](../../DEVICE.md) for
-both-backend comparison and fallback exercises.
+   On the current local follow-up, `bash tools/build_host.sh test` passed **438/438**; the 2048 atlas
+   fixture measured **0/14,412** sub-texel chart interiors. `bash tools/test_model_host.sh` passed
+   **40/40**, with waist/shoulder **0.743** and shoulder/hip **1.052**. Renderer fault injection passed
+   **102/102**, including timer-query pending/disjoint/cleanup cases; its pinned-header Vulkan version
+   helper was skipped. The app and SDK JVM suites passed **3/3** and **38/38** after forced execution.
+   `:app:assembleDebug` succeeded; CMake compiled both native backends for arm64-v8a and x86_64. The
+   debug APK was signature-verified, contains both native ABIs, and has no INTERNET permission. The
+   public CI run independently checked here is on earlier commit `401a005`; it does not verify this
+   follow-up based on `f6929e9`. This audit records local build/test evidence only and makes no claim
+   about a later exact-head CI run. ADB reports no attached device. See
+   [the local verification record](VERIFICATION_RESULTS.md) and [project status](../../PROJECT_STATUS.md),
+   then follow [DEVICE.md](../../DEVICE.md) for both-backend comparison and fallback exercises.
 
 ## Diagnostic scene ladder
 

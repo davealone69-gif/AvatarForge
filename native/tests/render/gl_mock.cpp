@@ -29,6 +29,16 @@ using af_test::raiseGlError;
 
 extern "C" {
 EGLDisplay eglGetDisplay(EGLNativeDisplayType) { return reinterpret_cast<EGLDisplay>(uintptr_t(1)); }
+EGLProc eglGetProcAddress(const char* name) {
+    if (!name || !state.timerFunctionsAvailable) return nullptr;
+    if (!std::strcmp(name, "glGenQueriesEXT")) return reinterpret_cast<EGLProc>(glGenQueriesEXT);
+    if (!std::strcmp(name, "glDeleteQueriesEXT")) return reinterpret_cast<EGLProc>(glDeleteQueriesEXT);
+    if (!std::strcmp(name, "glBeginQueryEXT")) return reinterpret_cast<EGLProc>(glBeginQueryEXT);
+    if (!std::strcmp(name, "glEndQueryEXT")) return reinterpret_cast<EGLProc>(glEndQueryEXT);
+    if (!std::strcmp(name, "glGetQueryObjectuivEXT")) return reinterpret_cast<EGLProc>(glGetQueryObjectuivEXT);
+    if (!std::strcmp(name, "glGetQueryObjectui64vEXT")) return reinterpret_cast<EGLProc>(glGetQueryObjectui64vEXT);
+    return nullptr;
+}
 EGLint eglGetError(void) { const EGLint e = state.eglError; state.eglError = EGL_SUCCESS; return e; }
 EGLBoolean eglInitialize(EGLDisplay, EGLint*, EGLint*) { return EGL_TRUE; }
 EGLBoolean eglChooseConfig(EGLDisplay, const EGLint*, EGLConfig* out, EGLint, EGLint* count) {
@@ -127,7 +137,7 @@ void glDrawElements(GLenum, GLsizei, GLenum, const void*) {
 }
 void glEnable(GLenum) {}
 void glEnableVertexAttribArray(GLuint) {}
-void glFinish(void) {}
+void glFinish(void) { ++state.glFinishCalls; }
 void glFramebufferRenderbuffer(GLenum, GLenum, GLenum, GLuint) {}
 void glFramebufferTexture2D(GLenum, GLenum, GLenum, GLuint, GLint) {}
 void glFrontFace(GLenum) {}
@@ -139,6 +149,45 @@ void glGenVertexArrays(GLsizei n, GLuint* p) {
     names(n, p, state.liveVaos);
     if (state.fault == af_test::Fault::VertexArray) { raiseGlError(GL_INVALID_OPERATION); }
 }
+void glGenQueriesEXT(GLsizei n, GLuint* p) {
+    names(n, p, state.liveQueries);
+    state.timerQueriesGenerated += n;
+}
+void glDeleteQueriesEXT(GLsizei n, const GLuint* p) {
+    for (GLsizei i = 0; i < n; ++i) {
+        if (!p[i]) continue;
+        --state.liveQueries;
+        ++state.timerQueriesDeleted;
+    }
+}
+void glBeginQueryEXT(GLenum target, GLuint query) {
+    if (target != 0x88BF || state.activeTimerQuery != 0 || !query) {
+        raiseGlError(GL_INVALID_OPERATION);
+        return;
+    }
+    state.activeTimerQuery = query;
+    ++state.timerQueryBeginCalls;
+}
+void glEndQueryEXT(GLenum target) {
+    if (target != 0x88BF || state.activeTimerQuery == 0) {
+        raiseGlError(GL_INVALID_OPERATION);
+        return;
+    }
+    state.activeTimerQuery = 0;
+    ++state.timerQueryEndCalls;
+}
+void glGetQueryObjectuivEXT(GLuint query, GLenum pname, GLuint* value) {
+    (void)query;
+    if (pname != 0x8867) { raiseGlError(GL_INVALID_ENUM); return; }
+    ++state.timerQueryResultPolls;
+    *value = state.timerResultAvailable ? GL_TRUE : GL_FALSE;
+}
+void glGetQueryObjectui64vEXT(GLuint query, GLenum pname, unsigned long long* value) {
+    (void)query;
+    if (pname != 0x8866) { raiseGlError(GL_INVALID_ENUM); return; }
+    ++state.timerQueryValueReads;
+    *value = state.timerResultNs;
+}
 void glGenerateMipmap(GLenum) {}
 void glGetFloatv(GLenum, GLfloat* value) { *value = 4.0f; }
 void glGetIntegerv(GLenum key, GLint* value) {
@@ -147,6 +196,7 @@ void glGetIntegerv(GLenum key, GLint* value) {
         case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: *value = 256; break;
         case GL_MAX_SAMPLES: *value = 4; break;
         case GL_NUM_EXTENSIONS: *value = GLint(extensionNames().size()); break;
+        case 0x8FBB: *value = state.gpuDisjoint ? GL_TRUE : GL_FALSE; break;
         default: *value = 1; break;
     }
 }

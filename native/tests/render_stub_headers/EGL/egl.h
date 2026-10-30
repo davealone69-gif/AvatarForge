@@ -9,6 +9,7 @@ typedef void* EGLDisplay; typedef void* EGLSurface; typedef void* EGLContext;
 typedef void* EGLConfig; typedef void* EGLNativeDisplayType;
 typedef void* EGLNativeWindowType; typedef void* EGLNativePixmapType;
 typedef intptr_t EGLAttrib;
+typedef void (*EGLProc)(void);
 #define EGL_DEFAULT_DISPLAY ((EGLNativeDisplayType)0)
 #define EGL_NO_DISPLAY ((EGLDisplay)0)
 #define EGL_NO_SURFACE ((EGLSurface)0)
@@ -49,6 +50,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay,EGLConfig,EGLNativeWindowType,const
 EGLBoolean eglDestroyContext(EGLDisplay,EGLContext);
 EGLBoolean eglDestroySurface(EGLDisplay,EGLSurface);
 EGLDisplay eglGetDisplay(EGLNativeDisplayType);
+EGLProc eglGetProcAddress(const char*);
 EGLint eglGetError(void);
 EGLBoolean eglInitialize(EGLDisplay,EGLint*,EGLint*);
 EGLBoolean eglMakeCurrent(EGLDisplay,EGLSurface,EGLSurface,EGLContext);

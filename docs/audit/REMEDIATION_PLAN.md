@@ -39,13 +39,15 @@ and shader checks pass; actual phone initialization/rendering remains unverified
 
 1. Device-retest the exact-head build with Vulkan default and explicit GLES during live walk/run clips; capture actual-backend diagnostics, matched paused/live PNGs, fallback/errors and thermal state. Camera is user-confirmed but exact-build evidence is still needed.
 2. ~~Add a full engine read/write fence or ownership transfer so render-thread reads cannot race UI mutations/generation.~~ **DONE (AF-020)** — source + host compile proof; a device soak with clip playback, camera drags and expression edits still has to run.
-3. Implement diagnostic scene ladder and label submission vs visible output separately.
+3. **PARTIAL (AF-016):** diagnostic rung names and pass criteria exist, but the selectable rendered-scene ladder and per-rung submission/visible-output reporting are still missing.
 4. Supply production signing credentials to unblock signed AAB/APK release.
 
 ## P1 — mobile stability
 
 5. Device-verify thermal cap and settings persistence; add current-session recovery advisor scoping.
-6. Add GPU timestamp queries where supported, with explicit unknown fallback.
+6. ~~Add GPU timestamp queries where supported, with explicit unknown fallback.~~ **HOST-VERIFIED** —
+   the GLES `EXT_disjoint_timer_query` ring is optional and non-blocking; actual device support,
+   timings and the Vulkan device path remain unverified.
 7. Soak test memory/thermal/FPS; add adaptive texture/LOD only after measurement.
 8. Wire GLB import end-to-end with bounded copy, JNI import, viewer attach, and malformed-file tests; only then restore a share target.
 8a. Decide the fate of `CustomizationSchemas` (AF-032): wire the JSON schema into the shipped editor, or
@@ -57,5 +59,5 @@ and shader checks pass; actual phone initialization/rendering remains unverified
 10. Benchmark meshoptimizer/KTX2/ozz-style improvements; adopt only with measured device gains.
 11. Add LICENSE, SBOM, SHA-pinned actions, wrapper checksum verification, and artifact provenance policy.
 12. Keep Rust bindings in the acceptance gate: default workspace tests are verified; test the optional renderer feature's compile-fail lifetime guard and keep C/Rust telemetry layouts aligned.
-13. Replace or formally constrain raw pointer-valued JNI handles; stale/double-destroy values currently have no native registry validation. Do not attempt a broad registry redesign without synchronized lifecycle tests.
+13. ~~Replace or formally constrain raw pointer-valued JNI handles.~~ **DONE (AF-043, host-verified):** typed slot-generation tokens and synchronized shared leases reject malformed, wrong-kind, stale and repeated values; the full current host suite passes **438/438**, and the Android NDK build compiles the JNI libraries for both ABIs. Device lifecycle stress remains open.
 14. **Source policy implemented:** Vulkan 1.3 target gates and `vulkan1.3` shader validation are in place. Capture the exact `AF_VK_CONTEXT` log on the SM-S921B, verify loader/device API ≥1.3, and run validation layers plus visible-frame tests; devices below the gate must be seen to fall back to GLES correctly.

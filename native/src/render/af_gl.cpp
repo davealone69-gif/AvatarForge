@@ -17,9 +17,11 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -80,6 +82,135 @@ const char* glErrorName(GLenum error) {
         default: return "GL error";
     }
 }
+
+/* Optional GLES GPU timer queries. The extension is resolved at runtime and is never required for
+   renderer startup. Each frame uses a free query from a small ring; pending results are polled but
+   never waited on, and a disjoint event invalidates every outstanding measurement. */
+struct GlesGpuTimer {
+    using GenQueries = void (*)(GLsizei, GLuint*);
+    using DeleteQueries = void (*)(GLsizei, const GLuint*);
+    using BeginQuery = void (*)(GLenum, GLuint);
+    using EndQuery = void (*)(GLenum);
+    using GetQueryObjectuiv = void (*)(GLuint, GLenum, GLuint*);
+    using GetQueryObjectui64v = void (*)(GLuint, GLenum, unsigned long long*);
+
+    struct Slot { GLuint query = 0; bool pending = false; bool discarded = false; };
+    static constexpr size_t kSlotCount = 3;
+    static constexpr GLenum kTimeElapsed = 0x88BF;
+    static constexpr GLenum kQueryResult = 0x8866;
+    static constexpr GLenum kQueryResultAvailable = 0x8867;
+    static constexpr GLenum kGpuDisjoint = 0x8FBB;
+
+    GenQueries genQueries = nullptr;
+    DeleteQueries deleteQueries = nullptr;
+    BeginQuery beginQuery = nullptr;
+    EndQuery endQuery = nullptr;
+    GetQueryObjectuiv getQueryObjectuiv = nullptr;
+    GetQueryObjectui64v getQueryObjectui64v = nullptr;
+    std::array<Slot, kSlotCount> slots{};
+    size_t nextSlot = 0;
+    int activeSlot = -1;
+    bool supported = false;
+    bool disjointThisFrame = false;
+
+    template <typename Function>
+    static Function resolve(const char* name) {
+        return reinterpret_cast<Function>(eglGetProcAddress(name));
+    }
+
+    void initialize(bool extensionPresent) {
+        if (!extensionPresent) return;
+        genQueries = resolve<GenQueries>("glGenQueriesEXT");
+        deleteQueries = resolve<DeleteQueries>("glDeleteQueriesEXT");
+        beginQuery = resolve<BeginQuery>("glBeginQueryEXT");
+        endQuery = resolve<EndQuery>("glEndQueryEXT");
+        getQueryObjectuiv = resolve<GetQueryObjectuiv>("glGetQueryObjectuivEXT");
+        getQueryObjectui64v = resolve<GetQueryObjectui64v>("glGetQueryObjectui64vEXT");
+        if (!genQueries || !deleteQueries || !beginQuery || !endQuery ||
+            !getQueryObjectuiv || !getQueryObjectui64v) return;
+        GLuint names[kSlotCount] = {};
+        genQueries(static_cast<GLsizei>(kSlotCount), names);
+        const GLenum error = glGetError();
+        bool valid = error == GL_NO_ERROR;
+        for (size_t i = 0; i < kSlotCount; ++i) {
+            slots[i].query = names[i];
+            valid = valid && names[i] != 0;
+        }
+        if (!valid) {
+            if (std::any_of(names, names + kSlotCount, [](GLuint name) { return name != 0; }))
+                deleteQueries(static_cast<GLsizei>(kSlotCount), names);
+            slots = {};
+            for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
+            return;
+        }
+        supported = true;
+    }
+
+    void poll(RendererStats& stats) {
+        if (!supported) return;
+        disjointThisFrame = false;
+        GLint disjoint = GL_FALSE;
+        glGetIntegerv(kGpuDisjoint, &disjoint);
+        if (disjoint == GL_TRUE) {
+            disjointThisFrame = true;
+            stats.gpuMs = -1.0f;
+            for (Slot& slot : slots) if (slot.pending) slot.discarded = true;
+        }
+        for (Slot& slot : slots) {
+            if (!slot.pending) continue;
+            GLuint available = GL_FALSE;
+            getQueryObjectuiv(slot.query, kQueryResultAvailable, &available);
+            if (available != GL_TRUE) continue;
+            if (!disjoint && !slot.discarded) {
+                unsigned long long elapsedNs = 0;
+                getQueryObjectui64v(slot.query, kQueryResult, &elapsedNs);
+                const double elapsedMs = static_cast<double>(elapsedNs) / 1000000.0;
+                if (elapsedNs > 0 && std::isfinite(elapsedMs) &&
+                    elapsedMs <= static_cast<double>(std::numeric_limits<float>::max())) {
+                    stats.gpuMs = static_cast<float>(elapsedMs);
+                } else {
+                    stats.gpuMs = -1.0f;
+                }
+            }
+            slot.pending = false;
+            slot.discarded = false;
+        }
+    }
+
+    void begin() {
+        if (!supported || activeSlot >= 0 || disjointThisFrame) return;
+        for (size_t offset = 0; offset < kSlotCount; ++offset) {
+            const size_t index = (nextSlot + offset) % kSlotCount;
+            if (slots[index].pending) continue;
+            beginQuery(kTimeElapsed, slots[index].query);
+            activeSlot = static_cast<int>(index);
+            return;
+        }
+    }
+
+    void end() {
+        if (!supported || activeSlot < 0) return;
+        endQuery(kTimeElapsed);
+        Slot& slot = slots[static_cast<size_t>(activeSlot)];
+        slot.pending = true;
+        slot.discarded = false;
+        nextSlot = (static_cast<size_t>(activeSlot) + 1) % kSlotCount;
+        activeSlot = -1;
+    }
+
+    void destroy() {
+        if (deleteQueries) {
+            GLuint names[kSlotCount] = {};
+            for (size_t i = 0; i < kSlotCount; ++i) names[i] = slots[i].query;
+            if (std::any_of(names, names + kSlotCount, [](GLuint name) { return name != 0; }))
+                deleteQueries(static_cast<GLsizei>(kSlotCount), names);
+        }
+        slots = {};
+        supported = false;
+        disjointThisFrame = false;
+        activeSlot = -1;
+    }
+};
 
 const char* eglErrorName(EGLint error) {
     switch (error) {
@@ -258,6 +389,7 @@ private:
     float clipTime_ = 0.0f;
     int32_t vertexCount_ = 0;
     int32_t indexCount_ = 0;
+    GlesGpuTimer gpuTimer_{};
     uint32_t materialStride_ = 256;
     int materialCount_ = 0;
     uint32_t lineVertexCount_ = 0;
@@ -359,7 +491,10 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
     info_.supportsMsaa = maxSamples > 1;
     info_.supportsShadows = true;
     info_.supportsAnisotropy = hasExtension("GL_EXT_texture_filter_anisotropic");
-    return checkGlError("context capability queries", error);
+    if (!checkGlError("context capability queries", error)) return false;
+    gpuTimer_.initialize(hasExtension("GL_EXT_disjoint_timer_query"));
+    stats_.gpuTimingSupported = gpuTimer_.supported;
+    return true;
 }
 
 /* ============================================================================================
@@ -1261,10 +1396,13 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     updateAnimation(deltaSeconds);
     ensureGeometryBuffers();
 
+    gpuTimer_.poll(stats_);
+    gpuTimer_.begin();
     drawShadowPass();
     drawForwardPass();
     drawBloom();
     drawComposite();
+    gpuTimer_.end();
     ++stats_.frameSubmissions;
 
     std::string frameError;
@@ -1345,6 +1483,7 @@ void GlRenderer::destroyTargets() {
 void GlRenderer::destroyAll() {
     if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT &&
         eglMakeCurrent(display_, surface_, surface_, context_)) {
+        gpuTimer_.destroy();
         destroyTargets();
         const GLuint programs[7] = {forwardProgram_, shadowProgram_, groundProgram_, lineProgram_,
                                     bloomDownProgram_, bloomUpProgram_, compositeProgram_};

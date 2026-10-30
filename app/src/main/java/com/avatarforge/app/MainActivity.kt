@@ -594,7 +594,7 @@ class MainActivity : ComponentActivity() {
                     val cpuSubmit = if (frameStats.cpuMs.isFinite() && frameStats.cpuMs >= 0f)
                         "%.2f ms".format(frameStats.cpuMs) else "not measured"
                     appendLine("CPU submit  : $cpuSubmit; GPU time: %s".format(
-                        if (frameStats.gpuMs < 0f) "unknown (no timestamp query)" else "%.2f ms".format(frameStats.gpuMs)))
+                        if (frameStats.gpuMs < 0f) "unknown (unsupported, pending, or disjoint query)" else "%.2f ms".format(frameStats.gpuMs)))
                     appendLine("Frames      : %d attempts, %d submissions, %d accepted presents".format(
                         frameStats.frameAttempts, frameStats.frameSubmissions, frameStats.presentRequestsAccepted))
                     appendLine("Submitted   : %d tris, %d draw calls".format(frameStats.triangles, frameStats.drawCalls))

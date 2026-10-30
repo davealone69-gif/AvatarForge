@@ -113,7 +113,10 @@ BodyField::BodyField(const BodyMetrics& metrics) : m_(metrics), noise_(metrics.s
     /* rx (side-to-side half width) - note the pinch at the waist and the flare at the hips. */
     rxProfile_.add(crotch - 0.10f * H, m_.hip.rx * 0.86f);
     rxProfile_.add(crotch, m_.hip.rx * 0.94f);
-    rxProfile_.add(hipY, m_.hip.rx * 1.02f);
+    /* The athletic-female art target calls for shoulders just wider than hips. Narrow only this
+       profile knot; keep the solved hip ellipse/depth and caller's tape circumference unchanged. */
+    const float hipProfileScale = m_.sex == AF_SEX_FEMALE && m_.build == AF_BUILD_ATHLETIC ? 0.96f : 1.02f;
+    rxProfile_.add(hipY, m_.hip.rx * hipProfileScale);
     rxProfile_.add(lerpf(hipY, waistY, 0.5f), lerpf(m_.hip.rx, m_.waist.rx, 0.45f) * 1.01f);
     rxProfile_.add(waistY, m_.waist.rx);
     rxProfile_.add(lerpf(waistY, underbustY, 0.5f), lerpf(m_.waist.rx, m_.underbust.rx, 0.55f));

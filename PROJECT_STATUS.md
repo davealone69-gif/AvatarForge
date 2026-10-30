@@ -1,6 +1,6 @@
 # Project status
 
-## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; CI-verified source commit `401a005eac045371c0d3625baf4c523a55288435`)
+## Current branch — 2026-10-30 (`fix/verify-clean-checkout-output-dir`; prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`; recorded CI run on `401a005eac045371c0d3625baf4c523a55288435`)
 
 The owner-approved engineering directive was applied on the existing branch, preserving the three
 pre-existing local commits (clean-checkout verifier log, shoulder-width/image-role fixes, and stale
@@ -23,6 +23,39 @@ The ARM64 native build, 3 app / 38 SDK JVM tests and compile-only artifacts pass
 visible pixels, validation-layer output, thermal soak and production signing remain **UNVERIFIED/BLOCKED**. See
 [Vulkan target audit](docs/audit/VULKAN_TARGET_AUDIT.md), [device checklist](DEVICE.md), and the
 current exact-head test record in `docs/audit/VERIFICATION_RESULTS.md`.
+
+## Follow-up validation — 2026-10-30 (based on prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`)
+
+Repository: `/workspace/AvatarForge`; branch: `fix/verify-clean-checkout-output-dir`. The latest
+validation was performed on a working tree based on the prior pushed tip `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`.
+The public workflow run below is on earlier commit `401a005` and does not verify this follow-up; this
+record relies on local test/build evidence, not a CI or device result.
+
+- **AF-038 — REAL + VERIFIED (host metric):** a 2048-only 1.01-texel interior floor leaves the
+  1024 behavior unchanged. The final 2048 fixture reports **0/14,412** cells below one interior
+  texel, packed-cell coverage **0.82**, and the complete kernel suite passes **438/438**. The first
+  full run at the 1.00-texel floor failed on **19/14,412** cells; the 1.01 margin fixed that failure.
+  Device texture appearance remains unverified.
+- **AF-040 — REAL + VERIFIED (numeric host fixture):** the unclothed 1.72 m fixture measures
+  shoulder/waist **1.346**, waist/shoulder **0.743**, and shoulder/hip **1.052**; the focused model
+  suite passes **40/40**, with exact 68 cm waist and 96 cm hip inputs preserved within 0.01 cm. The
+  1.48 lower bound was removed because it contradicts the inverse reference target; finite upper cap
+  1.67 remains. Broader visual, garment and device acceptance is still open.
+- **Renderer — PARTIAL:** optional GLES `EXT_disjoint_timer_query` timing is host-tested (**102/102**)
+  and the Android NDK compiles the Vulkan and GLES renderer translation units for arm64-v8a and
+  x86_64. There is still no selectable visible diagnostic scene ladder; its eight rungs are metadata.
+  The host runner skipped its pinned-header Vulkan API-version helper. No device is connected, so
+  Vulkan/GLES runtime, GPU timings, pixels, fallback and thermal behavior are unverified.
+- **App/build:** forced JVM tests pass (**3 app + 38 SDK**). `:app:assembleDebug` succeeds and
+  packages both native ABIs. `/workspace/AvatarForge/app/build/outputs/apk/debug/app-debug.apk` is
+  11,771,041 bytes, verified with the debug APK v2 signature, and contains no INTERNET permission;
+  this is compile/package evidence only, not an installed or launched app.
+- **Other requested risks:** typed JNI handle registry checks are included in the passing 438-check
+  host suite and NDK build; stale reference-analysis guards are covered by the JVM suites. Rust ABI
+  parity remains **PARTIAL** at 15/47 symbols (32 unported). The release-workflow source contract
+  passes locally, and run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
+  succeeded on `401a005`; signed-tag production output remains unverified/blocked without release
+  credentials.
 
 ## Historical snapshot — prior `arena/aaf85469-avatarforge` branch (2026-10-29)
 PR #20 remained draft when recorded below; `main` was then at `40ef65b`. Statements that Vulkan
@@ -99,7 +132,9 @@ The unsigned AAB is compile proof only, not an installable production release. T
 - Production signed AAB/APK: **BLOCKED**, no credentials.
 - The ownership fence (AF-020) is implemented and compiled, but its absence of races is
   **UNVERIFIED** until a device soak runs camera drags + clip playback + expression edits + picking.
-- AF-016 remains **PARTIAL**: supported-device Vulkan timestamp recording and ladder metadata have host-tested contracts, but Vulkan device execution is unverified, GLES GPU timing is absent, and no selectable diagnostic scenes/UI exist.
+- AF-016 remains **PARTIAL**: Vulkan timestamp recording and the optional GLES `EXT_disjoint_timer_query`
+  ring have host-tested contracts, but device execution is unverified and no selectable diagnostic
+  scenes/UI exist. The diagnostic scene ladder remains metadata only.
 - `CustomizationSchemas` is loaded but unused (AF-032): integration or deletion is still a decision.
 - Rust crates remain **UNVERIFIED** by compilation (no toolchain here); metadata now matches 0.10.1.
 - Lash geometry, strand-level hair, facial texture smudges and teeth cost (38,965 tris) remain unaddressed; no superiority claim.

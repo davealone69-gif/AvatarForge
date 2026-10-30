@@ -295,14 +295,14 @@ static void athleticFemaleWaistRatioAndOpenHipGapAreMeasured() {
                 shoulder, waist, hip, shoulderWaist, waistShoulder, shoulderHip);
     check(shoulder > 0.0f && waist > 0.0f && hip > 0.0f,
           "biacromial landmark and extracted waist/hip mesh sections are measurable");
-    check(shoulderWaist >= 1.48f && shoulderWaist <= 1.67f,
-          "built athletic-female shoulder/waist ratio remains in the documented broad 1.48-1.67 guard");
-    check(shoulderHip > 0.0f, "built athletic-female shoulder:hip ratio is measurable");
-    if (waistShoulder < 0.74f || waistShoulder > 0.76f ||
-        shoulderHip < 1.05f || shoulderHip > 1.10f) {
-        std::printf("     AF-040 remains open: waist/shoulder %.3f (reference 0.74-0.76), shoulder/hip %.3f (reference 1.05-1.10); further hip/shoulder edits broke full-suite regressions.\n",
-                    waistShoulder, shoulderHip);
-    }
+    /* The former shoulder/waist lower bound of 1.48 contradicts the reference waist/shoulder
+       target: its inverse is only 1.316-1.351. The strict supplied-reference target is asserted. */
+    check(std::isfinite(shoulderWaist) && shoulderWaist <= 1.67f,
+          "extracted shoulder/waist remains finite below the legacy 1.67 upper safety limit");
+    check(waistShoulder >= 0.74f && waistShoulder <= 0.76f,
+          "extracted athletic-female waist/shoulder ratio meets the 0.74-0.76 reference");
+    check(shoulderHip >= 1.05f && shoulderHip <= 1.10f,
+          "extracted athletic-female shoulder/hip ratio meets the 1.05-1.10 reference");
 
     spec.waist_cm = 68.0f;
     spec.hip_cm = 96.0f;

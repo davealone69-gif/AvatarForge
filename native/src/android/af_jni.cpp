@@ -77,7 +77,11 @@ struct EngineHandle {
         bool attached = false;
         const jint status = javaVm->functions->GetEnv(javaVm, reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
         if (status == JNI_EDETACHED) {
+#if defined(__ANDROID__)
+            if (javaVm->functions->AttachCurrentThread(javaVm, &env, nullptr) != JNI_OK) return;
+#else
             if (javaVm->functions->AttachCurrentThread(javaVm, reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return;
+#endif
             attached = true;
         } else if (status != JNI_OK || !env) {
             return;

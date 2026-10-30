@@ -100,3 +100,55 @@ A final default Rust release build and `cargo test --workspace --offline` passed
 The target label **Vulkan 1.3.304** is not treated as an API, header, loader or driver version. The app requests the standard Vulkan 1.3 API level; the installed NDK headers are revision 1.3.237. The shader target, compiled Vulkan headers, runtime loader, device-reported API, extensions/features, queue support, formats and limits are distinct evidence fields. The host tests and shader validator do not query the SM-S921B or execute Vulkan commands, present pixels, verify visual quality, test GLES recovery on device, or demonstrate thermal/stress behaviour. Those device gates remain open in `DEVICE.md`.
 
 The remote `arena/c87f5c50-avatarforge` tip was `f82287b6e13c1dc131c5d1b5d4566b30d9e74d62`, two commits past the local branch’s common base. No rebase, merge, force-push or direct push to the arena branch was performed. The normal push created `origin/fix/verify-clean-checkout-output-dir` at `401a005eac045371c0d3625baf4c523a55288435`; the arena ref remained unchanged. Exact-head Android APK workflow [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082) succeeded on that commit, including artifact staging, verification and upload. Uploaded artifact `AvatarForge-Android-401a005eac045371c0d3625baf4c523a55288435` has ID `12954506148`, size 18,048,697 bytes, and is not expired. The runner emitted non-blocking Node.js 20 / Node.js 24 and `actions/setup-java@v4` deprecation warnings. Production signing remains blocked without release credentials.
+
+## Follow-up validation on the branch — 2026-10-30
+
+Repository `/workspace/AvatarForge`, branch `fix/verify-clean-checkout-output-dir`, local/remote
+branch tip at validation start `f6929e98d23a7e45c31d7f6bac35f7560e4fcf9a`. The tests below ran on a
+working tree based on that tip; the successful public CI run above is on earlier commit `401a005` and
+does not verify this follow-up. This section records local test/build evidence only.
+
+### Tests and builds
+
+- `bash tools/build_host.sh test` initially failed **1/438** checks: with a 1.00-texel packed
+  interior, **19/14,412** 2048 chart cells still had a sub-texel dimension. The floor was changed to
+  **1.01 texels** to preserve a full texel after float UV bounds are stored. The final rerun passed
+  **438/438**, reporting **0/14,412** sub-texel cells and 0.82 packed-cell coverage. This fixes the
+  numeric host gate; visual/device bake confirmation is not claimed.
+- `bash tools/test_model_host.sh` first failed **1/39** because shoulder/hip measured **1.048**, just
+  below the 1.05 lower target. After the bounded hip-profile adjustment it passed **39/39** at
+  **1.052**; the final run, with an additional finite shoulder/waist upper safety assertion, passed
+  **40/40**. Final no-garment ratios: shoulder/waist **1.346**, waist/shoulder **0.743**, shoulder/hip
+  **1.052**. Exact 68 cm waist and 96 cm hip tape inputs remain within 0.01 cm.
+- `bash tools/test_renderer_host.sh`: **102 checks, 0 failures**. The output also says
+  `SKIP Vulkan version helper unit test (pinned NDK Vulkan headers not found)`. Installed NDK headers
+  are revision 1.3.237; no test result is claimed for the missing pinned-header helper.
+- `ANDROID_HOME=/home/ubuntu/Android/Sdk ANDROID_SDK_ROOT=/home/ubuntu/Android/Sdk bash gradlew
+  --no-daemon --console=plain --rerun-tasks :app:testDebugUnitTest :sdk:testDebugUnitTest`:
+  **3 app tests and 38 SDK tests passed** on the forced execution.
+- `python3 tools/test_release_workflow.py`: both source-contract checks passed (signed artifact
+  staging/verification and `fix/**` trigger/version-provenance separation).
+- `ANDROID_HOME=/home/ubuntu/Android/Sdk ANDROID_SDK_ROOT=/home/ubuntu/Android/Sdk bash gradlew
+  --no-daemon --console=plain :app:assembleDebug`: **BUILD SUCCESSFUL**. CMake compiled
+  `af_vk.cpp`, `af_gl.cpp`, and JNI/native libraries for arm64-v8a and x86_64. The generated debug
+  APK is `/workspace/AvatarForge/app/build/outputs/apk/debug/app-debug.apk`, **11,771,041 bytes**,
+  SHA-256 `ea00a8dbe4f7d050d582e3febfe412a86909b9f6aaee55cec0b112765efdc931`. `apksigner verify`
+  succeeded using APK Signature Scheme v2; the package contains both native ABIs and does not request
+  `android.permission.INTERNET`. This is debug build/package verification, not production signing.
+- `adb devices -l`: no attached device. The APK was not installed or launched; AvatarForge runtime,
+  Vulkan/GLES GPU timing, visible pixels, fallback, thermal behavior and device-side stale-handle
+  stress remain **UNVERIFIED**.
+
+### Corrected intermediate failures and build diagnostics
+
+- `./gradlew --no-daemon :app:assembleDebug` failed with `Permission denied`; the wrapper is not
+  executable in this checkout. `bash gradlew --no-daemon :app:assembleDebug` then failed because no
+  Android SDK location was configured. Supplying `ANDROID_HOME`/`ANDROID_SDK_ROOT` reached the NDK,
+  where the first compile failed at `native/src/android/af_jni.cpp:80`: the Android NDK expects
+  `JNIEnv**` for `AttachCurrentThread`, but the code passed `void**`. The Android-specific call was
+  corrected while preserving the host-JDK signature; the final two-ABI NDK build above passed.
+- Final Android build emitted non-fatal SDK XML v4/tool-version, `extractNativeLibs`, and existing
+  unused-parameter/variable warnings. They did not prevent build completion.
+- Earlier public CI run [41002485082](https://github.com/davealone69-gif/AvatarForge/actions/runs/41002485082)
+  was independently confirmed successful on `401a005`; this local verification record does not claim
+  CI validation for the follow-up changes.

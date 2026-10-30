@@ -1124,6 +1124,9 @@ static void testTexturing() {
             }
             CHECK(outOfBounds == 0, "all 2048 chart cells remain inside the atlas (%zu outside)",
                   outOfBounds);
+            CHECK(subTexelInterior == 0,
+                  "every 2048 chart cell has at least one interior texel in both axes (%zu of %zu sub-texel)",
+                  subTexelInterior, productionLayout.charts.size());
             std::printf("     2048 chart cells with a sub-texel interior dimension: %zu of %zu\n",
                         subTexelInterior, productionLayout.charts.size());
         }

@@ -32,6 +32,7 @@ af::RendererOptions options() {
 bool resourcesReleased() {
     const auto& s = af_test::state;
     return s.livePrograms == 0 && s.liveShaders == 0 && s.liveBuffers == 0 && s.liveTextures == 0 &&
+           s.liveQueries == 0 &&
            s.liveFramebuffers == 0 && s.liveRenderbuffers == 0 && s.liveVaos == 0 &&
            s.contextsCreated == s.contextsDestroyed && s.surfacesCreated == s.surfacesDestroyed;
 }
@@ -92,6 +93,67 @@ void successAndOwnership() {
     }
     r.reset();
     check(resourcesReleased(), "successful renderer teardown releases every tracked resource");
+}
+void glesGpuTimerQueries() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r && !r->stats().gpuTimingSupported && r->stats().gpuMs < 0.0f,
+          "GLES without the timer extension reports GPU timing as unsupported and unknown");
+    check(af_test::state.timerQueriesGenerated == 0,
+          "GLES without the timer extension makes no timer-query allocations");
+    r.reset();
+    check(resourcesReleased(), "unsupported GLES timer path leaves renderer ownership clean");
+
+    af_test::reset();
+    af_test::state.extensions = "GL_EXT_disjoint_timer_query";
+    af_test::state.timerFunctionsAvailable = false;
+    r.reset(af::createGlRenderer(window(), options(), &error));
+    check(r && !r->stats().gpuTimingSupported && r->stats().gpuMs < 0.0f,
+          "advertised timer extension with missing entry points remains optional");
+    check(af_test::state.timerQueriesGenerated == 0 && af_test::state.glErrors.empty(),
+          "missing timer procedures neither allocate queries nor fail GLES initialization");
+    r.reset();
+    check(resourcesReleased(), "missing GLES timer procedures do not leak resources");
+
+    af_test::reset();
+    af_test::state.extensions = "GL_EXT_disjoint_timer_query";
+    r.reset(af::createGlRenderer(window(), options(), &error));
+    check(r && r->stats().gpuTimingSupported && af_test::state.timerQueriesGenerated == 3,
+          "supported GLES context allocates a bounded three-query timing ring");
+    if (r) {
+        r->renderFrame(1.0f / 60.0f);
+        check(r->stats().gpuMs < 0.0f && af_test::state.timerQueryValueReads == 0,
+              "pending GLES timer results remain unknown without blocking for a value");
+        check(af_test::state.timerQueryBeginCalls == 1 && af_test::state.timerQueryEndCalls == 1 &&
+              af_test::state.glFinishCalls == 0,
+              "GLES GPU work is bracketed without glFinish synchronization");
+        af_test::state.timerResultAvailable = true;
+        r->renderFrame(1.0f / 60.0f);
+        check(std::fabs(r->stats().gpuMs - 4.2f) < 0.001f &&
+              af_test::state.timerQueryValueReads == 1,
+              "completed nanosecond query is converted to finite milliseconds");
+        af_test::state.timerResultAvailable = false;
+        af_test::state.gpuDisjoint = true;
+        const int beginsBeforeDisjoint = af_test::state.timerQueryBeginCalls;
+        r->renderFrame(1.0f / 60.0f);
+        check(r->stats().gpuMs < 0.0f &&
+              af_test::state.timerQueryBeginCalls == beginsBeforeDisjoint,
+              "GPU disjoint invalidates old timing and suppresses a query for that frame");
+        af_test::state.gpuDisjoint = false;
+        af_test::state.timerResultAvailable = true;
+        r->renderFrame(1.0f / 60.0f);
+        check(r->stats().gpuMs < 0.0f,
+              "a completed result from a disjoint interval is discarded");
+        r->renderFrame(1.0f / 60.0f);
+        check(std::fabs(r->stats().gpuMs - 4.2f) < 0.001f && r->frameError().empty(),
+              "GLES timing resumes only after a fresh valid query completes");
+    }
+    r.reset();
+    check(af_test::state.liveQueries == 0 &&
+          af_test::state.timerQueriesDeleted == af_test::state.timerQueriesGenerated,
+          "GLES timer-query objects are deleted with the current context");
+    check(resourcesReleased(), "timer-query teardown releases all renderer resources");
 }
 void swapFailureIsRecoverableByOwner() {
     af_test::reset();
@@ -300,6 +362,7 @@ void defaultBackendSelection() {
 }  // namespace
 int main() {
     successAndOwnership();
+    glesGpuTimerQueries();
     failureCase(af_test::Fault::EglContext, "eglCreateContext(ES3): EGL_BAD_CONFIG (0x3005)", "EGL context failure");
     failureCase(af_test::Fault::FragmentCompile, "fragment shader forward: injected compile failure", "shader compile failure");
     failureCase(af_test::Fault::ProgramLink, "link forward/forward: injected link failure", "shader link failure");

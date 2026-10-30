@@ -35,6 +35,15 @@ struct MockState {
     std::vector<std::pair<GLuint, GLint>> samplerWrites;
     std::vector<std::pair<GLuint, GLuint>> elementDraws;
     int swapBuffers = 0;
+    bool timerFunctionsAvailable = true;
+    bool timerResultAvailable = false;
+    bool gpuDisjoint = false;
+    unsigned long long timerResultNs = 4200000;
+    GLuint activeTimerQuery = 0;
+    int timerQueryBeginCalls = 0, timerQueryEndCalls = 0;
+    int timerQueryResultPolls = 0, timerQueryValueReads = 0;
+    int timerQueriesGenerated = 0, timerQueriesDeleted = 0, liveQueries = 0;
+    int glFinishCalls = 0;
     int contextsCreated = 0, contextsDestroyed = 0, surfacesCreated = 0, surfacesDestroyed = 0;
     int livePrograms = 0, liveShaders = 0, liveBuffers = 0, liveTextures = 0;
     int liveFramebuffers = 0, liveRenderbuffers = 0, liveVaos = 0;

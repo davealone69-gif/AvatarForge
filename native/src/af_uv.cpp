@@ -342,13 +342,9 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         density = std::sqrt(0.52f * static_cast<float>(texWidth) * static_cast<float>(texHeight) / totalArea);
     }
 
-    /*
-     * The per-chart floor has to answer to the atlas, not just to the chart: at 2048 with 14 460
-     * charts a 6-texel interior fits comfortably, but the same floor at 1024 needs 136 % of the
-     * atlas before a single texel of real content is placed, and the packer can never succeed.
-     * So the floor is derived from a budget: the interiors together may claim at most a third of
-     * the atlas, and the requested 6 texels is what is used when that budget allows it.
-     */
+    /* A 2048 product atlas can afford a one-texel interior for every chart. A small 1% packing
+       margin absorbs precision loss when the packed bounds are stored as float UVs. Keep 1024
+       behavior unchanged, and let skyline density backoff remain the fit control. */
     struct Placement { float x, y, w, h; bool rotated; };
     std::vector<Placement> placement(charts.size());
     std::vector<size_t> order(charts.size());
@@ -368,9 +364,9 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
          * is especially costly for AF-038's 8,000+ singleton charts: the gutters are real, but
          * the empty row area is not. Keep a compact skyline (x-coordinate plus filled height)
          * and place each chart at the lowest valid bottom-left position. Both orientations are
-         * considered; ties prefer the unrotated form, then the leftmost candidate. This is still
-         * deterministic, does not invent a per-chart interior floor, and leaves the density
-         * search as the explicit fit/quality control for both 1024 and 2048 atlases.
+         * considered; ties prefer the unrotated form, then the leftmost candidate. This remains
+         * deterministic; only the 2048 product path applies a 1.01-texel minimum to both interior
+         * axes, and density backoff remains the explicit fit/quality control.
          */
         struct SkylineNode { float x, height; };
         std::vector<SkylineNode> skyline{{0.0f, 0.0f}};
@@ -444,8 +440,12 @@ bool unwrapAtlas(Mesh* mesh, int texWidth, int texHeight, UVLayout* outLayout) {
         for (size_t idx : order) {
             const Vec2 sz = projected[idx].bounds.size();
             /* `usedDensity` is texels per METRE; the skyline lives in 0..1 UV space. */
-            const float innerW = sz.x * usedDensity / static_cast<float>(texWidth);
-            const float innerH = sz.y * usedDensity / static_cast<float>(texHeight);
+            float innerW = sz.x * usedDensity / static_cast<float>(texWidth);
+            float innerH = sz.y * usedDensity / static_cast<float>(texHeight);
+            if (texWidth >= 2048 && texHeight >= 2048) {
+                innerW = std::max(innerW, 1.01f / static_cast<float>(texWidth));
+                innerH = std::max(innerH, 1.01f / static_cast<float>(texHeight));
+            }
             const float w0 = innerW + gutterUV * 2.0f;
             const float h0 = innerH + gutterUV * 2.0f;
             float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;

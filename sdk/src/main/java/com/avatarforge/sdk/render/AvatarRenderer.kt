@@ -52,7 +52,7 @@ data class RendererStats(
     val msaaSamples: Int,
     val bloomLevels: Int,
     val qualityLevel: Int,
-    /** -1 means no GPU timestamp query is implemented; never display this as measured GPU time. */
+    /** -1 means GPU timing is unsupported, unavailable, pending, or invalidated; never show it as measured. */
     val gpuMs: Float = -1f,
     val frameAttempts: Int = 0,
     val frameSubmissions: Int = 0,
