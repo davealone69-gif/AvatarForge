@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.avatarforge.sdk.internal.NativeBridge
 
 class ImageAnalysisPackingTest {
 
