@@ -54,7 +54,7 @@ Renderer* createVulkanRenderer(ANativeWindow*, const RendererOptions&, std::stri
         if (error) error->clear();
         return new VkFactoryDouble();
     }
-    if (error) *error = "vkCreateInstance failed (injected)";
+    if (error) *error = "vkCreateInstance failed (VkResult -3)";
     return nullptr;
 }
 } /* namespace af */

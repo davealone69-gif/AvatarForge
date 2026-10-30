@@ -406,9 +406,9 @@ void vulkanSelection() {
     check(af_test_vk::attempts == 1 && r && r->info().backend == "gles31" && error.empty() &&
           af_test::state.contextsCreated == 1,
           "failed Vulkan initialization falls back to a real GLES renderer with actual backend info");
-    check(r && contains(r->info().vulkanInitializationWarning, "vkCreateInstance failed (injected)") &&
-          contains(r->info().vulkanInitializationWarning, "trying OpenGL ES 3.1"),
-          "successful GLES fallback retains the complete Vulkan initialization warning");
+    check(r && r->info().vulkanInitializationWarning ==
+          "Native Vulkan initialization failed: vkCreateInstance failed (VkResult -3); trying OpenGL ES 3.1",
+          "successful GLES fallback retains the failing Vulkan stage and VkResult in its shareable warning");
     r.reset(); check(resourcesReleased(), "GLES fallback resources are released");
 
     af_test::reset(); af_test_vk::reset();
