@@ -5,6 +5,8 @@ import java.util.concurrent.CancellationException
 /** What the progress screen's back/cancel action should do while a job is still awaiting completion. */
 internal enum class ProgressExitAction { WAIT_FOR_COMPLETION, RETURN_TO_EDITOR }
 
+internal enum class ProgressDestination { PROGRESS, VIEWER }
+
 internal data class ProgressJobSnapshot(
     val running: Boolean,
     val cancelled: Boolean,
@@ -17,25 +19,59 @@ internal data class ProgressExitTransition(
     val uiState: GenerationProgressUiState,
 )
 
+internal sealed interface ProgressAwaitResolution<out T> {
+    val uiState: GenerationProgressUiState
+    val destination: ProgressDestination
+    val result: T?
+
+    data class Success<T>(
+        override val result: T,
+        override val uiState: GenerationProgressUiState,
+    ) : ProgressAwaitResolution<T> {
+        override val destination = ProgressDestination.VIEWER
+    }
+
+    data class Failure(
+        override val uiState: GenerationProgressUiState,
+    ) : ProgressAwaitResolution<Nothing> {
+        override val destination = ProgressDestination.PROGRESS
+        override val result: Nothing? = null
+    }
+}
+
 internal fun progressExitTransition(
     hasJob: Boolean,
     jobRunning: Boolean,
     current: GenerationProgressUiState,
     cancelJob: () -> Unit,
 ): ProgressExitTransition {
-    val action = if (!hasJob || current.awaitCompleted || (!jobRunning && !current.stopping)) {
+    /* A finished status is not enough: await() may still be about to return a valid EngineResult. */
+    val action = if (!hasJob || current.awaitCompleted) {
         ProgressExitAction.RETURN_TO_EDITOR
     } else {
         ProgressExitAction.WAIT_FOR_COMPLETION
     }
-    val next = if (action == ProgressExitAction.WAIT_FOR_COMPLETION && !current.stopping) {
-        if (jobRunning) cancelJob()
+    val next = if (action == ProgressExitAction.WAIT_FOR_COMPLETION && !current.stopping && jobRunning) {
+        cancelJob()
         current.requestStop()
     } else {
         current
     }
     return ProgressExitTransition(action, next)
 }
+
+internal fun <T> resolveProgressAwait(
+    current: GenerationProgressUiState,
+    status: ProgressJobSnapshot,
+    outcome: Result<T>,
+): ProgressAwaitResolution<T> = outcome.fold(
+    onSuccess = { generated ->
+        ProgressAwaitResolution.Success(generated, current.completeAwait(status, failure = null))
+    },
+    onFailure = { failure ->
+        ProgressAwaitResolution.Failure(current.completeAwait(status, failure))
+    },
+)
 
 /** UI-only terminal details for cases where JobStatus alone is not enough to describe await(). */
 internal data class GenerationProgressUiState(
@@ -66,12 +102,13 @@ internal data class GenerationProgressUiState(
         )
     }
 
-    fun isTerminal(status: ProgressJobSnapshot): Boolean =
-        !stopping && (awaitCompleted || (!status.running && awaitFailure == null))
+    fun isTerminal(): Boolean = awaitCompleted && !stopping
 
-    fun isCancelled(status: ProgressJobSnapshot): Boolean = status.cancelled || cancellationObservedByAwait
+    fun isCancelled(status: ProgressJobSnapshot): Boolean =
+        awaitCompleted && (status.cancelled || cancellationObservedByAwait)
 
-    fun isFailed(status: ProgressJobSnapshot): Boolean = status.failed || awaitFailure != null
+    fun isFailed(status: ProgressJobSnapshot): Boolean =
+        awaitCompleted && (status.failed || awaitFailure != null)
 
     fun canRetry(status: ProgressJobSnapshot): Boolean = isCancelled(status) || isFailed(status)
 }

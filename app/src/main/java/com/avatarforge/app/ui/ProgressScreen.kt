@@ -46,7 +46,8 @@ internal fun ProgressScreen(
         failed = status.failed,
         error = status.error,
     )
-    val terminal = uiState.isTerminal(jobState)
+    val terminal = uiState.isTerminal()
+    val settling = !status.running && !uiState.awaitCompleted && !uiState.stopping
     val failed = uiState.isFailed(jobState)
     val cancelled = uiState.isCancelled(jobState)
     val retryable = uiState.canRetry(jobState)
@@ -60,6 +61,7 @@ internal fun ProgressScreen(
         Text(
             when {
                 uiState.stopping -> "Stopping generation…"
+                settling -> "Finalizing generation…"
                 failed -> "Generation didn’t finish"
                 cancelled -> "Generation cancelled"
                 else -> "Building your avatar"
@@ -70,6 +72,8 @@ internal fun ProgressScreen(
         Text(
             if (uiState.stopping) {
                 "Cancellation requested. Waiting for the job to finish; it is not cancelled yet."
+            } else if (settling) {
+                "Generation has stopped; checking its final result before showing the viewer."
             } else {
                 "Everything below happens on this device: no server, no upload, no network. You can turn the radio off and it will still finish."
             },
@@ -93,9 +97,13 @@ internal fun ProgressScreen(
                         .fillMaxWidth()
                         .height(4.dp),
                 )
-                if (uiState.stopping || status.message.isNotBlank()) {
+                if (uiState.stopping || settling || status.message.isNotBlank()) {
                     Text(
-                        if (uiState.stopping) "Waiting for cancellation to finish…" else status.message,
+                        when {
+                            uiState.stopping -> "Waiting for cancellation to finish…"
+                            settling -> "Waiting for the final generation result…"
+                            else -> status.message
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -144,10 +152,16 @@ internal fun ProgressScreen(
         } else {
             OutlinedButton(
                 onClick = onCancel,
-                enabled = !uiState.stopping,
+                enabled = !uiState.stopping && !settling,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (uiState.stopping) "Stopping…" else "Cancel generation")
+                Text(
+                    when {
+                        uiState.stopping -> "Stopping…"
+                        settling -> "Finishing…"
+                        else -> "Cancel generation"
+                    },
+                )
             }
         }
     }

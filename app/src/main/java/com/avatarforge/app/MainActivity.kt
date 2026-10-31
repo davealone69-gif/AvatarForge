@@ -230,29 +230,28 @@ class MainActivity : ComponentActivity() {
                 screen = Screen.PROGRESS
                 scope.launch {
                     val outcome = runCatching { started.await() }
-                    if (job?.id != started.id || screen != Screen.PROGRESS) return@launch
+                    if (job?.id != started.id) return@launch
                     status = started.status.value
-                    progressUi = progressUi.completeAwait(
-                        ProgressJobSnapshot(
+                    val resolution = resolveProgressAwait(
+                        current = progressUi,
+                        status = ProgressJobSnapshot(
                             running = status.running,
                             cancelled = status.cancelled,
                             failed = status.failed,
                             error = status.error,
                         ),
-                        outcome.exceptionOrNull(),
+                        outcome = outcome,
                     )
-                    outcome.fold(
-                        onSuccess = { generated ->
-                            result = generated
+                    progressUi = resolution.uiState
+                    when (resolution.destination) {
+                        ProgressDestination.VIEWER -> {
+                            result = requireNotNull(resolution.result) {
+                                "a successful generation await must carry its EngineResult"
+                            }
                             screen = Screen.VIEWER
-                        },
-                        onFailure = {
-                            /* Keep the terminal status on the progress screen. It carries the
-                               engine's failure details and offers retry/back actions. */
-                            status = started.status.value
-                            screen = Screen.PROGRESS
-                        },
-                    )
+                        }
+                        ProgressDestination.PROGRESS -> screen = Screen.PROGRESS
+                    }
                 }
             }
 
