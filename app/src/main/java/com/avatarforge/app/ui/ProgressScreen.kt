@@ -1,13 +1,7 @@
 /*
  * AvatarForge :: ProgressScreen.kt
  *
- * The generation screen. It shows the kernel's own stage progress (not a fake spinner): the job's
- * StateFlow carries the stage, the fraction within it, a weighted overall fraction and the message
- * the kernel emitted, and every one of those numbers comes from the engine's progress callback.
- *
- * The elapsed clock and the per-stage timings are the honest answer to "is it stuck?" - a mid-range
- * phone spends about two thirds of the wall clock in the geometry stage, and the weighted bar is
- * built on that measurement so it does not lie in either direction.
+ * Shows the engine's actual generation progress and keeps cancellation/failure outcomes explicit.
  */
 package com.avatarforge.app.ui
 
@@ -27,6 +21,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,8 +34,10 @@ import com.avatarforge.sdk.Stage
 fun ProgressScreen(
     status: JobStatus,
     onCancel: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val terminal = !status.running
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -48,7 +45,11 @@ fun ProgressScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        Text("Building your avatar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (status.failed) "Generation didn’t finish" else if (status.cancelled) "Generation cancelled" else "Building your avatar",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
         Text(
             "Everything below happens on this device: no server, no upload, no network. You can turn the radio off and it will still finish.",
             style = MaterialTheme.typography.bodyMedium,
@@ -80,27 +81,46 @@ fun ProgressScreen(
 
         StageList(status.stage)
 
-        val failure = status.error
-        if (failure != null) {
-            Card {
-                Column(Modifier.padding(16.dp)) {
+        when {
+            status.failed -> Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Generation failed", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    Text(failure, style = MaterialTheme.typography.bodySmall)
+                    Text(status.error ?: "The engine did not provide an error message.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            status.cancelled -> Card {
+                Column(Modifier.padding(16.dp)) {
+                    Text("No completed avatar was produced. You can return to the editor or try again.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            terminal -> Card {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Generation ended without a result.", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
 
         Spacer(Modifier.weight(1f))
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text(if (status.failed) "Back" else "Cancel")
+        if (terminal) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                    Text("Back to editor")
+                }
+                if (status.failed || status.cancelled) {
+                    TextButton(onClick = onRetry, modifier = Modifier.weight(1f)) {
+                        Text("Try again")
+                    }
+                }
+            }
+        } else {
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                Text("Cancel generation")
+            }
         }
     }
 }
 
-/**
- * The stage list with the measured share of the wall clock next to each stage. These are the same
- * weights the progress bar uses; showing them makes the bar explicable instead of mysterious.
- */
+/** The stage list labels the engine pipeline; the progress value itself is the kernel's report. */
 @Composable
 private fun StageList(current: Stage) {
     val weights = mapOf(
@@ -129,8 +149,7 @@ private fun StageList(current: Stage) {
                         stage.ordinal < current.ordinal -> MaterialTheme.colorScheme.onSurfaceVariant
                         else -> MaterialTheme.colorScheme.outline
                     },
-                    modifier = Modifier
-                        .fillMaxWidth(0.22f),
+                    modifier = Modifier.fillMaxWidth(0.22f),
                 )
                 Text(stage.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 Text(weights[stage] ?: "", style = MaterialTheme.typography.bodySmall)
