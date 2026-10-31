@@ -35,6 +35,7 @@ fun DiagnosticsDialog(
     onExportReport: () -> Unit,
     onClearJournal: () -> Unit,
     onDismiss: () -> Unit,
+    rendererControlsAvailable: Boolean = true,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -53,30 +54,40 @@ fun DiagnosticsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
-                Text(
-                    "Diagnostic ladder",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-                DiagnosticRung.entries.forEach { rung ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onDiagnosticRungSelected(rung) }
-                            .padding(vertical = 2.dp),
-                    ) {
-                        RadioButton(
-                            selected = rung == selectedDiagnosticRung,
-                            onClick = { onDiagnosticRungSelected(rung) },
-                        )
-                        Column(Modifier.padding(start = 8.dp, top = 7.dp, bottom = 7.dp)) {
-                            Text(rung.displayName, style = MaterialTheme.typography.bodyMedium)
-                            Text(rung.passCriterion, style = MaterialTheme.typography.bodySmall)
+                if (rendererControlsAvailable) {
+                    Text(
+                        "Diagnostic ladder",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                    DiagnosticRung.entries.forEach { rung ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onDiagnosticRungSelected(rung) }
+                                .padding(vertical = 2.dp),
+                        ) {
+                            RadioButton(
+                                selected = rung == selectedDiagnosticRung,
+                                onClick = { onDiagnosticRungSelected(rung) },
+                            )
+                            Column(Modifier.padding(start = 8.dp, top = 7.dp, bottom = 7.dp)) {
+                                Text(rung.displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(rung.passCriterion, style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
+                } else {
+                    Text(
+                        "Renderer-specific controls are unavailable for this GLB viewer. The current viewer state is included in the report.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    TextButton(onClick = onSafeRecovery) { Text("Safe recovery") }
+                    if (rendererControlsAvailable) {
+                        TextButton(onClick = onSafeRecovery) { Text("Safe recovery") }
+                    }
                     TextButton(onClick = onExportReport) { Text("Export report") }
                     TextButton(onClick = {
                         onClearJournal()
