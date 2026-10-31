@@ -315,7 +315,7 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
         if (asset != null && !resourceLoadInProgress && !resolvingExternalResources) {
             applyCameraIfChanged()
             advanceAnimation(frameTimeNanos)
-            val began = currentRenderer.beginFrame(currentSwapChain)
+            val began = currentRenderer.beginFrame(currentSwapChain, frameTimeNanos)
             if (began) {
                 try {
                     currentRenderer.render(view ?: return)
@@ -541,9 +541,10 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
             mappedSourceBuffers.clear()
             scene?.addEntities(loaded.entities)
             val box = loaded.boundingBox
-            if (!box.isEmpty) {
+            val halfExtent = box.halfExtent
+            if (halfExtent.any { it > 0f }) {
                 boundsCenter = box.center
-                boundsHalfExtent = box.halfExtent
+                boundsHalfExtent = halfExtent
             } else {
                 boundsCenter = floatArrayOf(0f, 0.95f, 0f)
                 boundsHalfExtent = floatArrayOf(0.45f, 0.95f, 0.35f)
@@ -690,7 +691,9 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
 
         val currentEngine = engine
         if (currentEngine != null) {
-            runCatching { scene?.removeAllEntities() }
+            runCatching {
+                scene?.let { currentScene -> currentScene.removeEntities(currentScene.entities) }
+            }
             if (directionalLightEntity != 0) {
                 runCatching { currentEngine.lightManager.destroy(directionalLightEntity) }
                 runCatching { currentEngine.destroyEntity(directionalLightEntity) }
@@ -699,9 +702,9 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
                 runCatching { currentEngine.destroyCameraComponent(cameraEntity) }
                 runCatching { currentEngine.destroyEntity(cameraEntity) }
             }
-            runCatching { renderer?.let(currentEngine::destroy) }
-            runCatching { view?.let(currentEngine::destroy) }
-            runCatching { scene?.let(currentEngine::destroy) }
+            runCatching { renderer?.let(currentEngine::destroyRenderer) }
+            runCatching { view?.let(currentEngine::destroyView) }
+            runCatching { scene?.let(currentEngine::destroyScene) }
             renderer = null
             view = null
             scene = null
