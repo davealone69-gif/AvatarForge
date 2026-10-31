@@ -490,24 +490,45 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
                 mappedSourceBuffers += buffer
             }
             val currentAsset = asset ?: return
-            resourceLoadInProgress = true
-            if (!loader.asyncBeginLoad(currentAsset)) {
-                resourceLoadInProgress = false
-                releaseAsset()
-                failOnRenderThread(FilamentViewerStage.RESOURCES, "Filament could not start loading this GLB's buffers and textures.")
-                return
-            }
             resourceLoadGeneration = generation
             resourceLoadInProgress = true
-            mutableState.value = FilamentViewerState.LoadingAsset
+            when (val outcome = beginResourceLoadSafely(
+                begin = { loader.asyncBeginLoad(currentAsset) },
+                cleanup = { cleanupFailedResourceLoadStart(generation) },
+            )) {
+                ResourceLoadStartOutcome.Started -> mutableState.value = FilamentViewerState.LoadingAsset
+                ResourceLoadStartOutcome.Rejected -> {
+                    failOnRenderThread(
+                        FilamentViewerStage.RESOURCES,
+                        "Filament could not start loading this GLB's buffers and textures.",
+                    )
+                }
+                is ResourceLoadStartOutcome.Failed -> {
+                    val outOfMemory = outcome.failure is OutOfMemoryError
+                    val message = if (outOfMemory) {
+                        "Not enough memory to upload this GLB's resources."
+                    } else {
+                        outcome.failure.message ?: "Could not load this GLB's buffers and textures."
+                    }
+                    failOnRenderThread(FilamentViewerStage.RESOURCES, message, outOfMemory = outOfMemory)
+                }
+            }
         } catch (failure: OutOfMemoryError) {
-            cancelResourceLoad()
-            releaseAsset()
+            cleanupFailedResourceLoadStart(generation)
             failOnRenderThread(FilamentViewerStage.RESOURCES, "Not enough memory to upload this GLB's resources.", outOfMemory = true)
         } catch (failure: Exception) {
-            releaseAsset()
+            cleanupFailedResourceLoadStart(generation)
             failOnRenderThread(FilamentViewerStage.RESOURCES, failure.message ?: "Could not load this GLB's buffers and textures.")
         }
+    }
+
+    private fun cleanupFailedResourceLoadStart(generation: Long) {
+        cancelResourceLoad()
+        if (generation == loadGeneration.get()) {
+            fileLoadFuture?.cancel(true)
+            fileLoadFuture = null
+        }
+        releaseAsset()
     }
 
     private fun updateAsyncResourceLoad() {
@@ -567,6 +588,7 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
                 }
             }
             resourceLoadInProgress = false
+            resourceLoadGeneration = 0L
             resolvingExternalResources = false
             lastAppliedCamera = null
             applyCameraIfChanged(force = true)
@@ -641,11 +663,10 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
     }
 
     private fun cancelResourceLoad() {
-        if (resourceLoadInProgress) {
-            runCatching { resourceLoader?.asyncCancelLoad() }
-            resourceLoadInProgress = false
-            runCatching { resourceLoader?.evictResourceData() }
-        }
+        if (resourceLoadInProgress) runCatching { resourceLoader?.asyncCancelLoad() }
+        resourceLoadInProgress = false
+        resourceLoadGeneration = 0L
+        runCatching { resourceLoader?.evictResourceData() }
         resolvingExternalResources = false
     }
 

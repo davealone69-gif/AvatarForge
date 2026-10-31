@@ -10,10 +10,14 @@ import com.google.android.filament.gltfio.ResourceLoader
 import com.google.android.filament.gltfio.UbershaderProvider
 import java.io.File
 import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,6 +43,7 @@ class FilamentGlbCompatibilityTest {
         val glbBuffer = FileChannel.open(file.toPath(), StandardOpenOption.READ).use { channel ->
             channel.map(FileChannel.MapMode.READ_ONLY, 0L, channel.size())
         }
+        assertEmbeddedImageMetadata(glbBuffer)
 
         Filament.init()
         var engine: Engine? = null
@@ -68,7 +73,7 @@ class FilamentGlbCompatibilityTest {
 
             assertTrue("GLB produced no renderable entities", asset!!.renderableEntities.isNotEmpty())
             assertTrue(
-                "Expected all five textures to be embedded, got URIs: ${asset!!.resourceUris.contentToString()}",
+                "GLB should not require external sidecar resources: ${asset!!.resourceUris.contentToString()}",
                 asset!!.resourceUris.isEmpty(),
             )
 
@@ -115,6 +120,41 @@ class FilamentGlbCompatibilityTest {
         }
     }
 
+    private fun assertEmbeddedImageMetadata(glb: ByteBuffer) {
+        val header = glb.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(GLB_MAGIC, header.getInt(0))
+        assertEquals(GLB_VERSION, header.getInt(4))
+        assertEquals(EXPECTED_FILE_LENGTH.toInt(), header.getInt(8))
+
+        val jsonChunkLength = header.getInt(GLB_HEADER_BYTES)
+        assertEquals(JSON_CHUNK_TYPE, header.getInt(GLB_HEADER_BYTES + Int.SIZE_BYTES))
+        assertTrue(
+            "Invalid GLB JSON chunk length: $jsonChunkLength",
+            jsonChunkLength > 0 && GLB_JSON_OFFSET.toLong() + jsonChunkLength <= glb.capacity().toLong(),
+        )
+        val jsonBytes = ByteArray(jsonChunkLength)
+        header.position(GLB_JSON_OFFSET)
+        header.limit(GLB_JSON_OFFSET + jsonChunkLength)
+        header.get(jsonBytes)
+
+        val document = JSONObject(String(jsonBytes, Charsets.UTF_8).trimEnd(' ', '\t', '\r', '\n', '\u0000'))
+        val images = document.getJSONArray("images")
+        assertEquals(EXPECTED_EMBEDDED_IMAGES, images.length())
+        for (index in 0 until images.length()) {
+            val image = images.getJSONObject(index)
+            assertFalse("Image $index must not declare an external URI", image.has("uri"))
+            assertTrue("Image $index must be embedded in a bufferView", image.has("bufferView"))
+            assertEquals("image/png", image.getString("mimeType"))
+        }
+
+        val textures = document.getJSONArray("textures")
+        assertEquals(EXPECTED_EMBEDDED_TEXTURES, textures.length())
+        for (index in 0 until textures.length()) {
+            val sourceIndex = textures.getJSONObject(index).getInt("source")
+            assertTrue("Texture $index references missing image $sourceIndex", sourceIndex in 0 until images.length())
+        }
+    }
+
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         FileInputStream(file).use { input ->
@@ -131,9 +171,16 @@ class FilamentGlbCompatibilityTest {
     }
 
     private companion object {
+        const val GLB_MAGIC = 0x46546C67
+        const val GLB_VERSION = 2
+        const val GLB_HEADER_BYTES = 12
+        const val JSON_CHUNK_TYPE = 0x4E4F534A
+        const val GLB_JSON_OFFSET = 20
         const val EXPECTED_FILE_NAME = "agent-af-native-generated.glb"
         const val EXPECTED_FILE_LENGTH = 40_782_696L
         const val EXPECTED_SHA256 = "84069e147a703a8ca6aae887c79508bececbd472fced56b67a98c067efac1809"
+        const val EXPECTED_EMBEDDED_IMAGES = 5
+        const val EXPECTED_EMBEDDED_TEXTURES = 5
         const val RESOURCE_LOAD_TIMEOUT_MILLIS = 60_000L
         val EXPECTED_ANIMATION_NAMES = listOf(
             "idle", "breathe", "walk", "jog", "run", "squat", "jump", "wave", "punch", "kick",
