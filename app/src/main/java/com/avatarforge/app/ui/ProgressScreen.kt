@@ -27,17 +27,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.avatarforge.app.ProgressJobSnapshot
+import com.avatarforge.app.GenerationProgressUiState
 import com.avatarforge.sdk.JobStatus
 import com.avatarforge.sdk.Stage
 
 @Composable
-fun ProgressScreen(
+internal fun ProgressScreen(
     status: JobStatus,
+    uiState: GenerationProgressUiState,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val terminal = !status.running
+    val jobState = ProgressJobSnapshot(
+        running = status.running,
+        cancelled = status.cancelled,
+        failed = status.failed,
+        error = status.error,
+    )
+    val terminal = uiState.isTerminal(jobState)
+    val failed = uiState.isFailed(jobState)
+    val cancelled = uiState.isCancelled(jobState)
+    val retryable = uiState.canRetry(jobState)
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -46,12 +58,21 @@ fun ProgressScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text(
-            if (status.failed) "Generation didn’t finish" else if (status.cancelled) "Generation cancelled" else "Building your avatar",
+            when {
+                uiState.stopping -> "Stopping generation…"
+                failed -> "Generation didn’t finish"
+                cancelled -> "Generation cancelled"
+                else -> "Building your avatar"
+            },
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
         )
         Text(
-            "Everything below happens on this device: no server, no upload, no network. You can turn the radio off and it will still finish.",
+            if (uiState.stopping) {
+                "Cancellation requested. Waiting for the job to finish; it is not cancelled yet."
+            } else {
+                "Everything below happens on this device: no server, no upload, no network. You can turn the radio off and it will still finish."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -72,8 +93,11 @@ fun ProgressScreen(
                         .fillMaxWidth()
                         .height(4.dp),
                 )
-                if (status.message.isNotBlank()) {
-                    Text(status.message, style = MaterialTheme.typography.bodySmall)
+                if (uiState.stopping || status.message.isNotBlank()) {
+                    Text(
+                        if (uiState.stopping) "Waiting for cancellation to finish…" else status.message,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 Text("Elapsed %.1f s".format(status.elapsedMs / 1000f), style = MaterialTheme.typography.bodySmall)
             }
@@ -82,13 +106,18 @@ fun ProgressScreen(
         StageList(status.stage)
 
         when {
-            status.failed -> Card {
+            failed && !uiState.stopping -> Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Generation failed", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    Text(status.error ?: "The engine did not provide an error message.", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        status.error?.takeIf { it.isNotBlank() }
+                            ?: uiState.awaitFailure
+                            ?: "The engine did not provide an error message.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
-            status.cancelled -> Card {
+            cancelled && !uiState.stopping -> Card {
                 Column(Modifier.padding(16.dp)) {
                     Text("No completed avatar was produced. You can return to the editor or try again.", style = MaterialTheme.typography.bodySmall)
                 }
@@ -106,15 +135,19 @@ fun ProgressScreen(
                 OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
                     Text("Back to editor")
                 }
-                if (status.failed || status.cancelled) {
+                if (retryable) {
                     TextButton(onClick = onRetry, modifier = Modifier.weight(1f)) {
                         Text("Try again")
                     }
                 }
             }
         } else {
-            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                Text("Cancel generation")
+            OutlinedButton(
+                onClick = onCancel,
+                enabled = !uiState.stopping,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (uiState.stopping) "Stopping…" else "Cancel generation")
             }
         }
     }

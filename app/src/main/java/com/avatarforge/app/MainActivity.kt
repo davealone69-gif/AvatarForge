@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
         var analysedImages by remember { mutableStateOf<List<ImageReference>>(emptyList()) }
         var job by remember { mutableStateOf<JobHandle?>(null) }
         var status by remember { mutableStateOf(JobStatus()) }
+        var progressUi by remember { mutableStateOf(GenerationProgressUiState()) }
         var result by remember { mutableStateOf<EngineResult?>(null) }
         var retryRequest by remember { mutableStateOf<GenerationRequest?>(null) }
         var viewerState by remember { mutableStateOf<FilamentViewerState>(FilamentViewerState.WaitingForSurface) }
@@ -147,14 +148,26 @@ class MainActivity : ComponentActivity() {
         val recoveryJournal = remember { RecoveryJournal(context.filesDir) }
         var recoveryReportToSave by remember { mutableStateOf<String?>(null) }
 
+        fun exitProgress() {
+            val currentJob = job
+            val transition = progressExitTransition(
+                hasJob = currentJob != null,
+                jobRunning = currentJob?.status?.value?.running == true,
+                current = progressUi,
+                cancelJob = { currentJob?.cancel() },
+            )
+            progressUi = transition.uiState
+            when (transition.action) {
+                ProgressExitAction.RETURN_TO_EDITOR -> screen = Screen.INPUT
+                ProgressExitAction.WAIT_FOR_COMPLETION -> Unit
+            }
+        }
+
         Box(Modifier.fillMaxSize()) {
             BackHandler(enabled = screen != Screen.INPUT) {
                 when (screen) {
                     Screen.VIEWER -> screen = Screen.INPUT
-                    Screen.PROGRESS -> {
-                        job?.cancel()
-                        screen = Screen.INPUT
-                    }
+                    Screen.PROGRESS -> exitProgress()
                     Screen.INPUT -> Unit
                 }
             }
@@ -210,17 +223,24 @@ class MainActivity : ComponentActivity() {
 
             fun begin(request: GenerationRequest) {
                 retryRequest = request
+                progressUi = GenerationProgressUiState()
                 val started = engine.generate(request)
                 job = started
                 status = started.status.value
                 screen = Screen.PROGRESS
                 scope.launch {
                     val outcome = runCatching { started.await() }
-                    if (job?.id != started.id) return@launch
-                    if (started.isCancelled || screen != Screen.PROGRESS) {
-                        status = started.status.value
-                        return@launch
-                    }
+                    if (job?.id != started.id || screen != Screen.PROGRESS) return@launch
+                    status = started.status.value
+                    progressUi = progressUi.completeAwait(
+                        ProgressJobSnapshot(
+                            running = status.running,
+                            cancelled = status.cancelled,
+                            failed = status.failed,
+                            error = status.error,
+                        ),
+                        outcome.exceptionOrNull(),
+                    )
                     outcome.fold(
                         onSuccess = { generated ->
                             result = generated
@@ -347,10 +367,8 @@ class MainActivity : ComponentActivity() {
 
             Screen.PROGRESS -> ProgressScreen(
                 status = status,
-                onCancel = {
-                    job?.takeIf { it.status.value.running }?.cancel()
-                    screen = Screen.INPUT
-                },
+                uiState = progressUi,
+                onCancel = ::exitProgress,
                 onRetry = {
                     retryRequest?.let { request ->
                         if (hasStorageForExport()) begin(request)
