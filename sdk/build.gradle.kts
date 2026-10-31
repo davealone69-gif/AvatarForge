@@ -36,6 +36,7 @@ android {
 
     defaultConfig {
         minSdk = 26
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // A library does not set targetSdk: the consuming app's value is the one that applies.
 
         /* arm64-v8a is the primary target: every device that can hold this pipeline at 30 FPS is
@@ -124,5 +125,28 @@ dependencies {
        published AAR is a licence/size cost with no code behind it. */
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Filament 1.75.1 is the compatible published release for this compileSdk 34 / AGP 8.5.2 app.
+    // Keep Kotlin and AndroidX transitive versions aligned with this Kotlin 1.9.24 SDK.
+    implementation("com.google.android.filament:filament-android:1.75.1") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+    }
+    implementation("com.google.android.filament:gltfio-android:1.75.1") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+    }
+    // Same release pin; runtime-only because this renderer uses no filament-utils Kotlin APIs.
+    runtimeOnly("com.google.android.filament:filament-utils-android:1.75.1") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib-jdk8")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-android")
+    }
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
