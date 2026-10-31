@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <glob.h>
 #include <iterator>
 #include <thread>
 
@@ -646,6 +647,7 @@ static int g_logCalls = 0;
 static int g_cancelFlag = 0;
 static int g_cancelAfterPolls = 0;
 static int g_cancelPolls = 0;
+static int g_cancelOnLog = 0;
 static void testAbiProgress(void* user, int stage, float fraction, const char* message) {
     (void)stage; (void)fraction; (void)message; (void)user;
     ++g_progressCalls;
@@ -654,6 +656,18 @@ static void testAbiLog(void* user, int severity, const char* message) {
     (void)user;
     if (severity == AF_LOG_ERROR) { std::printf("     [abi error] %s\n", message); }
     ++g_logCalls;
+    if (g_cancelOnLog) {
+        g_cancelOnLog = 0;
+        g_cancelFlag = 1;
+    }
+}
+static bool hasSiblingTemp(const char* destination) {
+    const std::string pattern = std::string(destination) + ".tmp.*";
+    glob_t matches{};
+    const int rc = ::glob(pattern.c_str(), 0, nullptr, &matches);
+    const bool found = rc == 0 && matches.gl_pathc > 0;
+    ::globfree(&matches);
+    return found;
 }
 static int testAbiCancel(void* user) {
     (void)user;
@@ -1005,6 +1019,21 @@ static void testAbi() {
         if (existing) std::fclose(existing);
         CHECK(preservedBytes == sizeof(keep) - 1 && std::strcmp(preserved, keep) == 0,
               "cancelled export leaves the existing destination byte-for-byte untouched");
+
+        g_cancelFlag = 0;
+        g_cancelOnLog = 1;
+        const int32_t logCancelledExport = af_engine_export_glb(engine, cancelledPath);
+        g_cancelOnLog = 0;
+        g_cancelFlag = 0;
+        CHECK(logCancelledExport == AF_ERR_CANCELLED,
+              "cancellation from on_log is observed before the staged GLB replaces the destination");
+        std::memset(preserved, 0, sizeof(preserved));
+        existing = std::fopen(cancelledPath, "rb");
+        const size_t preservedAfterLogBytes = existing ? std::fread(preserved, 1, sizeof(preserved) - 1, existing) : 0;
+        if (existing) std::fclose(existing);
+        CHECK(preservedAfterLogBytes == sizeof(keep) - 1 && std::strcmp(preserved, keep) == 0,
+              "on_log cancellation leaves the sentinel destination byte-for-byte untouched");
+        CHECK(!hasSiblingTemp(cancelledPath), "on_log cancellation removes its same-directory temporary file");
     }
 
     af_engine_destroy(engine);
