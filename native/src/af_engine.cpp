@@ -32,6 +32,7 @@
 #include "af_uv.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -43,6 +44,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace af;
@@ -1278,14 +1280,24 @@ int32_t exportToVector(af_engine* e, std::vector<uint8_t>* out) {
     go.includeMorphTargets = e->rig.jointCount() > 0;
     go.includeAnimations = !e->clipCache.empty();
     go.groundToZero = true;
+    go.cancelled = [e]() { return e->cancelled(); };
     GlbResult res;
     /* Export the BIND pose: the current mesh may be posed, and a glTF skin is defined against the
        bind pose plus joint rotations. Sending a posed mesh with a rest skeleton would double the
        deformation. */
     if (!writeGlb(e->restMesh, &e->layout, e->rig.jointCount() > 0 ? &e->rig : nullptr,
                   e->textures.width > 0 ? &e->textures : nullptr, e->metrics, e->spec, go, out, &res)) {
+        if (e->cancelled()) {
+            e->lastError = "GLB export cancelled";
+            return static_cast<int32_t>(AF_ERR_CANCELLED);
+        }
         e->lastError = "GLB export failed";
         return static_cast<int32_t>(AF_ERR_INTERNAL);
+    }
+    if (e->cancelled()) {
+        out->clear();
+        e->lastError = "GLB export cancelled";
+        return static_cast<int32_t>(AF_ERR_CANCELLED);
     }
     e->tExport = res.millis;
     /* Sized from the format string rather than guessed: the composed message is up to ~330 bytes
@@ -1305,6 +1317,57 @@ int32_t exportToVector(af_engine* e, std::vector<uint8_t>* out) {
     return static_cast<int32_t>(AF_OK);
 }
 
+int32_t writeStagedGlb(af_engine* engine, const char* absolute_path, const std::vector<uint8_t>& bytes) {
+    /* The temp suffix keeps staging on the destination filesystem, so rename is atomic. */
+    std::string tempPath = std::string(absolute_path) + ".tmp.XXXXXX";
+    int fd = ::mkstemp(&tempPath[0]);
+    if (fd < 0) {
+        const int err = errno;
+        engine->lastError = std::string("cannot create temporary GLB beside ") + absolute_path + ": " +
+                            std::strerror(err);
+        return static_cast<int32_t>(AF_ERR_IO);
+    }
+    auto cleanup = [&]() {
+        if (fd >= 0) { ::close(fd); fd = -1; }
+        if (!tempPath.empty()) { ::unlink(tempPath.c_str()); tempPath.clear(); }
+    };
+    auto cancelled = [&]() {
+        cleanup();
+        engine->lastError = "GLB export cancelled";
+        return static_cast<int32_t>(AF_ERR_CANCELLED);
+    };
+    auto ioFailure = [&](const char* operation, int err) {
+        cleanup();
+        engine->lastError = std::string(operation) + " for " + absolute_path + ": " + std::strerror(err);
+        return static_cast<int32_t>(AF_ERR_IO);
+    };
+
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+        if (engine->cancelled()) return cancelled();
+        const size_t chunk = std::min<size_t>(1024u * 1024u, bytes.size() - offset);
+        const ssize_t written = ::write(fd, bytes.data() + offset, chunk);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            return ioFailure("cannot write staged GLB", errno);
+        }
+        if (written == 0) return ioFailure("short write to staged GLB", EIO);
+        offset += static_cast<size_t>(written);
+    }
+    if (::fsync(fd) != 0) return ioFailure("cannot sync staged GLB", errno);
+    if (::close(fd) != 0) {
+        const int err = errno;
+        fd = -1;
+        return ioFailure("cannot close staged GLB", err);
+    }
+    fd = -1;
+    /* In particular, catch cancellation requested by on_log after serialization completed. */
+    if (engine->cancelled()) return cancelled();
+    if (::rename(tempPath.c_str(), absolute_path) != 0) return ioFailure("cannot replace GLB", errno);
+    tempPath.clear();
+    return static_cast<int32_t>(AF_OK);
+}
+
 } // namespace
 
 int32_t af_engine_export_glb(af_engine* engine, const char* absolute_path) {
@@ -1315,27 +1378,18 @@ int32_t af_engine_export_glb(af_engine* engine, const char* absolute_path) {
         std::vector<uint8_t> bytes;
         const int32_t rc = exportToVector(engine, &bytes);
         if (rc != AF_OK) return rc;
-        std::ofstream f(absolute_path, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            engine->lastError = std::string("cannot open ") + absolute_path + " for writing";
-            return static_cast<int32_t>(AF_ERR_IO);
-        }
-        f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        f.close();
-        if (!f) {
-            engine->lastError = std::string("short write to ") + absolute_path;
-            return static_cast<int32_t>(AF_ERR_IO);
-        }
+        const int32_t writeRc = writeStagedGlb(engine, absolute_path, bytes);
+        if (writeRc != AF_OK) return writeRc;
         engine->progress(AF_STAGE_EXPORT, 1.0f, "GLB written");
         return static_cast<int32_t>(AF_OK);
     });
 }
 
 int32_t af_engine_export_glb_to_memory(af_engine* engine, uint8_t** out_bytes, size_t* out_size) {
+    if (out_bytes) *out_bytes = nullptr;
+    if (out_size) *out_size = 0;
     return guard(engine, "export_glb_to_memory", [&]() {
         if (!out_bytes || !out_size) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
-        *out_bytes = nullptr;
-        *out_size = 0;
         std::vector<uint8_t> bytes;
         const int32_t rc = exportToVector(engine, &bytes);
         if (rc != AF_OK) return rc;
