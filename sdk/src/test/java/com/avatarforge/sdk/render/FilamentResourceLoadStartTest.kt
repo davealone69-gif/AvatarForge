@@ -46,4 +46,20 @@ class FilamentResourceLoadStartTest {
         assertEquals(1, cleanupCalls)
         assertSame(expectedFailure, (outcome as ResourceLoadStartOutcome.Failed).failure)
     }
+
+    @Test
+    fun fatalNonOutOfMemoryErrorRunsCleanupOnceAndRethrowsTheSameError() {
+        var cleanupCalls = 0
+        val expectedFailure = AssertionError("fatal resource start")
+        var actualFailure: AssertionError? = null
+
+        try {
+            beginResourceLoadSafely(begin = { throw expectedFailure }) { cleanupCalls++ }
+        } catch (failure: AssertionError) {
+            actualFailure = failure
+        }
+
+        assertEquals(1, cleanupCalls)
+        assertSame(expectedFailure, actualFailure)
+    }
 }

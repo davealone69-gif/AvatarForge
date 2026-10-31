@@ -482,6 +482,12 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
 
     private fun beginAsyncResourceLoad(generation: Long, resources: List<Pair<String, MappedByteBuffer>>) {
         if (generation != loadGeneration.get() || asset == null) return
+        var cleanupAttempted = false
+        fun cleanupFailedStartOnce() {
+            if (cleanupAttempted) return
+            cleanupAttempted = true
+            cleanupFailedResourceLoadStart(generation)
+        }
         try {
             val loader = resourceLoader ?: error("The glTF resource loader is unavailable.")
             resources.forEach { (uri, buffer) ->
@@ -494,7 +500,7 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
             resourceLoadInProgress = true
             when (val outcome = beginResourceLoadSafely(
                 begin = { loader.asyncBeginLoad(currentAsset) },
-                cleanup = { cleanupFailedResourceLoadStart(generation) },
+                cleanup = ::cleanupFailedStartOnce,
             )) {
                 ResourceLoadStartOutcome.Started -> mutableState.value = FilamentViewerState.LoadingAsset
                 ResourceLoadStartOutcome.Rejected -> {
@@ -513,12 +519,26 @@ class FilamentGlbViewerController(context: Context) : AutoCloseable {
                     failOnRenderThread(FilamentViewerStage.RESOURCES, message, outOfMemory = outOfMemory)
                 }
             }
-        } catch (failure: OutOfMemoryError) {
-            cleanupFailedResourceLoadStart(generation)
-            failOnRenderThread(FilamentViewerStage.RESOURCES, "Not enough memory to upload this GLB's resources.", outOfMemory = true)
-        } catch (failure: Exception) {
-            cleanupFailedResourceLoadStart(generation)
-            failOnRenderThread(FilamentViewerStage.RESOURCES, failure.message ?: "Could not load this GLB's buffers and textures.")
+        } catch (failure: Throwable) {
+            cleanupFailedStartOnce()
+            when (failure) {
+                is OutOfMemoryError -> failOnRenderThread(
+                    FilamentViewerStage.RESOURCES,
+                    "Not enough memory to upload this GLB's resources.",
+                    outOfMemory = true,
+                )
+                is Exception -> failOnRenderThread(
+                    FilamentViewerStage.RESOURCES,
+                    failure.message ?: "Could not load this GLB's buffers and textures.",
+                )
+                else -> {
+                    failOnRenderThread(
+                        FilamentViewerStage.RESOURCES,
+                        failure.message ?: "A fatal error occurred while loading this GLB's resources.",
+                    )
+                    throw failure
+                }
+            }
         }
     }
 

@@ -17,12 +17,16 @@ internal inline fun beginResourceLoadSafely(
 ): ResourceLoadStartOutcome {
     val started = try {
         begin()
-    } catch (failure: OutOfMemoryError) {
-        cleanup()
-        return ResourceLoadStartOutcome.Failed(failure)
-    } catch (failure: Exception) {
-        cleanup()
-        return ResourceLoadStartOutcome.Failed(failure)
+    } catch (failure: Throwable) {
+        try {
+            cleanup()
+        } catch (cleanupFailure: Throwable) {
+            if (cleanupFailure !== failure) runCatching { failure.addSuppressed(cleanupFailure) }
+        }
+        if (failure is OutOfMemoryError || failure is Exception) {
+            return ResourceLoadStartOutcome.Failed(failure)
+        }
+        throw failure
     }
 
     if (started) return ResourceLoadStartOutcome.Started
