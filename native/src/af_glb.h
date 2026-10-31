@@ -26,6 +26,7 @@
 #include "af_uv.h"
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace af {
@@ -53,6 +54,8 @@ struct GlbOptions {
      */
     bool groundToZero = true;
     bool prettyExtras = false;
+    /* Optional safe-point poll; a cancelled export is discarded before any destination is opened. */
+    std::function<bool()> cancelled;
 };
 
 struct GlbResult {

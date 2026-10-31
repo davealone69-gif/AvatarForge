@@ -1278,14 +1278,24 @@ int32_t exportToVector(af_engine* e, std::vector<uint8_t>* out) {
     go.includeMorphTargets = e->rig.jointCount() > 0;
     go.includeAnimations = !e->clipCache.empty();
     go.groundToZero = true;
+    go.cancelled = [e]() { return e->cancelled(); };
     GlbResult res;
     /* Export the BIND pose: the current mesh may be posed, and a glTF skin is defined against the
        bind pose plus joint rotations. Sending a posed mesh with a rest skeleton would double the
        deformation. */
     if (!writeGlb(e->restMesh, &e->layout, e->rig.jointCount() > 0 ? &e->rig : nullptr,
                   e->textures.width > 0 ? &e->textures : nullptr, e->metrics, e->spec, go, out, &res)) {
+        if (e->cancelled()) {
+            e->lastError = "GLB export cancelled";
+            return static_cast<int32_t>(AF_ERR_CANCELLED);
+        }
         e->lastError = "GLB export failed";
         return static_cast<int32_t>(AF_ERR_INTERNAL);
+    }
+    if (e->cancelled()) {
+        out->clear();
+        e->lastError = "GLB export cancelled";
+        return static_cast<int32_t>(AF_ERR_CANCELLED);
     }
     e->tExport = res.millis;
     /* Sized from the format string rather than guessed: the composed message is up to ~330 bytes
@@ -1332,10 +1342,10 @@ int32_t af_engine_export_glb(af_engine* engine, const char* absolute_path) {
 }
 
 int32_t af_engine_export_glb_to_memory(af_engine* engine, uint8_t** out_bytes, size_t* out_size) {
+    if (out_bytes) *out_bytes = nullptr;
+    if (out_size) *out_size = 0;
     return guard(engine, "export_glb_to_memory", [&]() {
         if (!out_bytes || !out_size) return static_cast<int32_t>(AF_ERR_INVALID_ARG);
-        *out_bytes = nullptr;
-        *out_size = 0;
         std::vector<uint8_t> bytes;
         const int32_t rc = exportToVector(engine, &bytes);
         if (rc != AF_OK) return rc;

@@ -142,6 +142,42 @@ int representativeRegion(int material) {
     return 0;
 }
 
+struct MaterialFactors {
+    Vec3 baseColor;
+    float metallic;
+    float roughness;
+};
+
+/* Keep GLB PBR factors identical to rebuildSubmeshesAndMaterials() in the preview path. */
+MaterialFactors materialFactorsForSpec(int region, const af_spec& spec) {
+    const MaterialDef& md = materialForRegion(region);
+    Vec3 base = md.baseColor;
+    if (region == REGION_CLOTH_UPPER || region == REGION_CLOTH_LOWER) {
+        if (spec.cloth_tone[0] > 0.0f || spec.cloth_tone[1] > 0.0f || spec.cloth_tone[2] > 0.0f) {
+            base = Vec3(spec.cloth_tone[0], spec.cloth_tone[1], spec.cloth_tone[2]);
+        }
+    } else if (region == REGION_GEAR || region == REGION_SHOE) {
+        if (spec.gear_tone[0] > 0.0f || spec.gear_tone[1] > 0.0f || spec.gear_tone[2] > 0.0f) {
+            base = Vec3(spec.gear_tone[0], spec.gear_tone[1], spec.gear_tone[2]);
+        }
+    } else if (region == REGION_HAIR) {
+        if (spec.hair_tone[0] > 0.0f || spec.hair_tone[1] > 0.0f || spec.hair_tone[2] > 0.0f) {
+            base = Vec3(spec.hair_tone[0], spec.hair_tone[1], spec.hair_tone[2]);
+        }
+    }
+    const float metallic = (spec.gear_metalness >= 0.0f &&
+                            (region == REGION_GEAR || region == REGION_SHOE))
+                               ? spec.gear_metalness : md.metallic;
+    const float roughness = (spec.cloth_roughness >= 0.0f &&
+                             (region == REGION_CLOTH_UPPER || region == REGION_CLOTH_LOWER))
+                                ? spec.cloth_roughness : md.roughness;
+    return {base, metallic, roughness};
+}
+
+bool exportCancelled(const GlbOptions& options) {
+    return options.cancelled && options.cancelled();
+}
+
 } // namespace
 
 bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const TextureSet* textures,
@@ -151,6 +187,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
     const auto tStart = std::chrono::steady_clock::now();
     out->clear();
     GlbResult res;
+    if (exportCancelled(options)) return false;
 
     const size_t vcount = mesh.vertexCount();
     const size_t triCount = mesh.triangleCount();
@@ -182,6 +219,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
     std::vector<float> tan4;
     std::vector<float> uvs2(vcount * 2, 0.0f);
     for (size_t i = 0; i < vcount; ++i) {
+        if ((i & 8191u) == 0 && exportCancelled(options)) return false;
         const Vec3& p = mesh.positions[i];
         pos[i * 3 + 0] = p.x;
         pos[i * 3 + 1] = p.y + dy;
@@ -210,6 +248,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
     {
         Vec3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
         for (size_t i = 0; i < vcount; ++i) {
+            if ((i & 8191u) == 0 && exportCancelled(options)) return false;
             mn.x = std::min(mn.x, pos[i * 3 + 0]); mn.y = std::min(mn.y, pos[i * 3 + 1]); mn.z = std::min(mn.z, pos[i * 3 + 2]);
             mx.x = std::max(mx.x, pos[i * 3 + 0]); mx.y = std::max(mx.y, pos[i * 3 + 1]); mx.z = std::max(mx.z, pos[i * 3 + 2]);
         }
@@ -245,6 +284,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
         std::vector<uint16_t> ji(vcount * 4);
         std::vector<float> wt(vcount * 4);
         for (size_t i = 0; i < vcount; ++i) {
+            if ((i & 8191u) == 0 && exportCancelled(options)) return false;
             const SkinWeights& sw = rig->weights()[i];
             float sum = 0.0f;
             for (int k = 0; k < 4; ++k) {
@@ -275,6 +315,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
      * ======================================================================================== */
     std::map<int, std::vector<uint32_t>> groups;
     for (size_t t = 0; t < triCount; ++t) {
+        if ((t & 16383u) == 0 && exportCancelled(options)) return false;
         int region = 0;
         if (!mesh.regions.empty()) {
             const int32_t r = mesh.regions[mesh.indices[t * 3]];
@@ -329,6 +370,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
             idx.reserve(4096);
             vals.reserve(4096 * 3);
             for (size_t i = 0; i < vcount; ++i) {
+                if ((i & 8191u) == 0 && exportCancelled(options)) return false;
                 const Vec3& d = deltas[i];
                 if (std::fabs(d.x) > kEps || std::fabs(d.y) > kEps || std::fabs(d.z) > kEps) {
                     idx.push_back(static_cast<uint32_t>(i));
@@ -386,11 +428,13 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
         const int channels[5] = {4, 4, 4, 1, 4};
         int texIndex = 0;
         for (int m = 0; m < 5; ++m) {
+            if (exportCancelled(options)) return false;
             const size_t need = static_cast<size_t>(textures->width) * static_cast<size_t>(textures->height) *
                                 static_cast<size_t>(channels[m]);
             if (maps[m]->size() < need) continue;
             std::vector<uint8_t> png;
             if (!encodePng(maps[m]->data(), textures->width, textures->height, channels[m], &png)) continue;
+            if (exportCancelled(options)) return false;
             imageView[m] = b.addView(png.data(), png.size(), 0);
             textureSlot[m] = texIndex++;
             ++res.images;
@@ -467,6 +511,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
                 std::vector<float> trans(static_cast<size_t>(frames) * 3);
                 bool anyTranslation = false;
                 for (int f = 0; f < frames; ++f) {
+                    if ((f & 15) == 0 && exportCancelled(options)) return false;
                     const float t = times[static_cast<size_t>(f)];
                     const Quat q = tr.sample(t);
                     quats[static_cast<size_t>(f) * 4 + 0] = q.x;
@@ -650,18 +695,21 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
         const std::vector<std::string>& names = materialNames();
         j += "\"materials\":[";
         for (size_t mi = 0; mi < names.size(); ++mi) {
-            const MaterialDef& md = materialForRegion(representativeRegion(static_cast<int>(mi)));
+            if (exportCancelled(options)) return false;
+            const int region = representativeRegion(static_cast<int>(mi));
+            const MaterialDef& md = materialForRegion(region);
+            const MaterialFactors factors = materialFactorsForSpec(region, spec);
             if (mi) j += ',';
             j += "{\"name\":\"";
             jsonEscape(j, names[mi]);
             j += "\",\"doubleSided\":false,\"pbrMetallicRoughness\":{\"baseColorFactor\":[";
-            jsonNum(j, md.baseColor.x); j += ',';
-            jsonNum(j, md.baseColor.y); j += ',';
-            jsonNum(j, md.baseColor.z);
+            jsonNum(j, factors.baseColor.x); j += ',';
+            jsonNum(j, factors.baseColor.y); j += ',';
+            jsonNum(j, factors.baseColor.z);
             j += ",1],\"metallicFactor\":";
-            jsonNum(j, md.metallic);
+            jsonNum(j, factors.metallic);
             j += ",\"roughnessFactor\":";
-            jsonNum(j, md.roughness);
+            jsonNum(j, factors.roughness);
             if (texBaseColor >= 0) {
                 j += ",\"baseColorTexture\":{\"index\":";
                 j += std::to_string(texBaseColor);
@@ -935,6 +983,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
     while ((j.size() % 4) != 0) j += ' ';              /* JSON chunk pads with spaces */
     while ((b.bin.size() % 4) != 0) b.bin.push_back(0); /* BIN chunk pads with zeros   */
 
+    if (exportCancelled(options)) return false;
     const size_t total = 12 + 8 + j.size() + 8 + b.bin.size();
     out->reserve(total);
     pushU32(*out, 0x46546C67u);                        /* "glTF" */

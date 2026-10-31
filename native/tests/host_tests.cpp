@@ -644,6 +644,8 @@ static void testApparel() {
 static int g_progressCalls = 0;
 static int g_logCalls = 0;
 static int g_cancelFlag = 0;
+static int g_cancelAfterPolls = 0;
+static int g_cancelPolls = 0;
 static void testAbiProgress(void* user, int stage, float fraction, const char* message) {
     (void)stage; (void)fraction; (void)message; (void)user;
     ++g_progressCalls;
@@ -653,7 +655,11 @@ static void testAbiLog(void* user, int severity, const char* message) {
     if (severity == AF_LOG_ERROR) { std::printf("     [abi error] %s\n", message); }
     ++g_logCalls;
 }
-static int testAbiCancel(void* user) { (void)user; return g_cancelFlag; }
+static int testAbiCancel(void* user) {
+    (void)user;
+    if (g_cancelAfterPolls > 0 && ++g_cancelPolls >= g_cancelAfterPolls) return 1;
+    return g_cancelFlag;
+}
 
 static void testAbi() {
     std::printf("\n[11] public C ABI, end to end\n");
@@ -971,6 +977,34 @@ static void testAbi() {
         }
         CHECK(af_engine_export_glb(engine, "/nonexistent-directory/x.glb") == AF_ERR_IO,
               "a bad export path reports an I/O error");
+
+        uint8_t* cancelledBytes = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(1));
+        size_t cancelledSize = 1;
+        g_cancelFlag = 1;
+        const int32_t cancelledMemoryExport =
+            af_engine_export_glb_to_memory(engine, &cancelledBytes, &cancelledSize);
+        g_cancelFlag = 0;
+        CHECK(cancelledMemoryExport == AF_ERR_CANCELLED && cancelledBytes == nullptr && cancelledSize == 0,
+              "pre-cancelled memory export clears stale pointer and size outputs");
+
+        const char* cancelledPath = "/tmp/af_cancelled_export.glb";
+        const char keep[] = "preserve-existing-glb";
+        std::FILE* sentinel = std::fopen(cancelledPath, "wb");
+        const bool sentinelWritten = sentinel &&
+            std::fwrite(keep, 1, sizeof(keep) - 1, sentinel) == sizeof(keep) - 1;
+        if (sentinel) std::fclose(sentinel);
+        CHECK(sentinelWritten, "cancellation fixture has an existing destination");
+        g_cancelPolls = 0;
+        g_cancelAfterPolls = 4; /* inside GLB vertex serialization, after the ABI entry poll */
+        const int32_t cancelledExport = af_engine_export_glb(engine, cancelledPath);
+        g_cancelAfterPolls = 0;
+        CHECK(cancelledExport == AF_ERR_CANCELLED, "a cancellation during GLB serialization is reported");
+        char preserved[sizeof(keep)]{};
+        std::FILE* existing = std::fopen(cancelledPath, "rb");
+        const size_t preservedBytes = existing ? std::fread(preserved, 1, sizeof(preserved) - 1, existing) : 0;
+        if (existing) std::fclose(existing);
+        CHECK(preservedBytes == sizeof(keep) - 1 && std::strcmp(preserved, keep) == 0,
+              "cancelled export leaves the existing destination byte-for-byte untouched");
     }
 
     af_engine_destroy(engine);
@@ -1876,6 +1910,14 @@ static void testGlbImport() {
     spec.sex = AF_SEX_FEMALE;
     spec.height_m = 1.70f;
     spec.build = AF_BUILD_ATHLETIC;
+    spec.outfit = AF_OUTFIT_SUIT;
+    spec.footwear = AF_FOOTWEAR_BOOT;
+    spec.hair_style = AF_HAIR_LONG;
+    spec.cloth_tone[0] = 0.13f; spec.cloth_tone[1] = 0.24f; spec.cloth_tone[2] = 0.35f;
+    spec.gear_tone[0] = 0.31f; spec.gear_tone[1] = 0.42f; spec.gear_tone[2] = 0.53f;
+    spec.hair_tone[0] = 0.17f; spec.hair_tone[1] = 0.28f; spec.hair_tone[2] = 0.39f;
+    spec.cloth_roughness = 0.23f;
+    spec.gear_metalness = 0.67f;
     spec.seed = 4242;
     if (af_engine_create(&spec, nullptr, &engine) != AF_OK || !engine) {
         CHECK(false, "GLB import: engine creation");
@@ -1951,6 +1993,45 @@ static void testGlbImport() {
             if (!t.rgba.empty()) anyTexturePixels = true;
         }
         CHECK(anyTexturePixels, "GLB import: at least one embedded PNG decoded to pixels");
+
+        const af_material* previewMaterials = af_engine_materials(engine);
+        const int previewMaterialCount = af_engine_material_count(engine);
+        int materialMismatches = 0;
+        for (int i = 0; i < previewMaterialCount; ++i) {
+            const af_material& expected = previewMaterials[i];
+            const ImportedMaterial* actual = nullptr;
+            for (const ImportedMaterial& candidate : asset.materials) {
+                if (candidate.name == expected.name) { actual = &candidate; break; }
+            }
+            if (!actual) { ++materialMismatches; continue; }
+            for (int c = 0; c < 4; ++c) {
+                if (std::fabs(actual->baseColor[c] - expected.base_color_factor[c]) > 1e-6f)
+                    ++materialMismatches;
+            }
+            if (std::fabs(actual->metallic - expected.metallic) > 1e-6f) ++materialMismatches;
+            if (std::fabs(actual->roughness - expected.roughness) > 1e-6f) ++materialMismatches;
+        }
+        CHECK(previewMaterials != nullptr && previewMaterialCount == static_cast<int>(asset.materials.size()) &&
+                  materialMismatches == 0,
+              "GLB import: all exported base-colour, metallic and roughness factors match the preview (%d mismatches)",
+              materialMismatches);
+        auto previewMaterial = [&](const char* name) -> const af_material* {
+            for (int i = 0; i < previewMaterialCount; ++i) {
+                if (std::strcmp(previewMaterials[i].name, name) == 0) return &previewMaterials[i];
+            }
+            return nullptr;
+        };
+        const af_material* cloth = previewMaterial("cloth_upper");
+        const af_material* gear = previewMaterial("gear");
+        const af_material* hair = previewMaterial("hair");
+        CHECK(cloth && std::fabs(cloth->base_color_factor[0] - spec.cloth_tone[0]) < 1e-6f &&
+                  std::fabs(cloth->roughness - spec.cloth_roughness) < 1e-6f,
+              "fixture preview applies non-default cloth colour and roughness");
+        CHECK(gear && std::fabs(gear->base_color_factor[1] - spec.gear_tone[1]) < 1e-6f &&
+                  std::fabs(gear->metallic - spec.gear_metalness) < 1e-6f,
+              "fixture preview applies non-default gear colour and metallic factor");
+        CHECK(hair && std::fabs(hair->base_color_factor[2] - spec.hair_tone[2]) < 1e-6f,
+              "fixture preview applies non-default hair colour");
 
         /* Geometry identity: the imported positions must match the exported buffer within float
            precision. Compare the bounding box and the vertex count of the largest primitive. */
