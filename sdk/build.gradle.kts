@@ -124,5 +124,29 @@ dependencies {
        published AAR is a licence/size cost with no code behind it. */
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Latest matching Filament Android artifacts published to Maven Central at this pin. These
+    // AARs contain Java bindings only, but their published metadata requests Kotlin stdlib 2.4.0;
+    // keep this Kotlin 1.9.24 project on its own compiler/runtime instead of forcing that upgrade.
+    implementation("com.google.android.filament:filament-android:1.77.3") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+    }
+    implementation("com.google.android.filament:gltfio-android:1.77.3") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+    }
+    // Pinned with the other official AARs, but runtime-only: its Kotlin helper APIs were compiled
+    // with Kotlin 2.4 and this SDK intentionally stays on Kotlin 1.9.24; this renderer uses no
+    // filament-utils Kotlin APIs.
+    runtimeOnly("com.google.android.filament:filament-utils-android:1.77.3") {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib-jdk8")
+        exclude(group = "androidx.annotation", module = "annotation")
+        exclude(group = "androidx.annotation", module = "annotation-jvm")
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
+        exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-android")
+    }
     testImplementation("junit:junit:4.13.2")
 }
