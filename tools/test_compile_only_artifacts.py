@@ -34,7 +34,10 @@ for forbidden in (
     "AvatarForge-release-arm64.apk",
 ):
     assert forbidden not in workflow, f"workflow reintroduces production release behavior: {forbidden}"
-assert 'branches: [main, "arena/**", "fix/**"]' in workflow, "fix branches must receive Android CI"
+branch_trigger_match = re.search(r"(?m)^\s*branches:\s*\[(.*?)\]\s*$", workflow)
+assert branch_trigger_match, "push workflow must declare branch triggers"
+branch_triggers = branch_trigger_match.group(1)
+assert '"fix/**"' in branch_triggers, "fix branches must receive Android CI"
 assert "python3 tools/test_compile_only_artifacts.py" in workflow, "CI must run this policy regression"
 assert ":app:assembleDebug :app:bundleRelease :sdk:assembleRelease" in workflow, (
     "CI must keep debug APK, app AAB, and SDK AAR build tasks"
