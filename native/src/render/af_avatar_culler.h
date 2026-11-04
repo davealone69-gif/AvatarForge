@@ -1,18 +1,68 @@
 /*
  * af_avatar_culler.h -- bridge between the renderer's camera contract and the tested scene layer.
  *
- * The renderer backends share CameraState but their UBO maths lives in af_render_common.h, which
- * deliberately has its own small vector types. Keep the scene graph behind this PIMPL so the two
- * maths headers never collide in a renderer translation unit.
+ * The renderer backends share CameraState and the POD orbit pose below. Keep the scene graph behind
+ * this PIMPL so the scene and UBO vector/matrix types never collide in a renderer translation unit.
  */
 #ifndef AF_AVATAR_CULLER_H
 #define AF_AVATAR_CULLER_H
 
 #include "af_render.h"
 
+#include <cmath>
 #include <memory>
 
 namespace af {
+
+struct EffectiveOrbitCamera {
+    float eye[3];
+    float target[3];
+};
+
+constexpr float kCameraGroundClearance = 0.05f;
+constexpr float kCameraMinPitchDegrees = -80.0f;
+constexpr float kCameraMaxPitchDegrees = 80.0f;
+
+/* One sanitized orbit pose for rendering, picking, and frustum culling.
+   Supported values are yaw [0,360), pitch [-80,80] degrees, targetY [0,2.5] m,
+   and distance [0.3,8] m. Non-finite inputs use the standard camera defaults.
+   If target/distance cannot reach the 5 cm clearance even at +80 degrees, use
+   the complete default pose (yaw 180, pitch 4, targetY 0.95, distance 3.5). */
+inline EffectiveOrbitCamera effectiveOrbitCamera(const CameraState& cam) {
+    constexpr float kRadiansPerDegree = 3.14159265358979f / 180.0f;
+    float yawDegrees = std::isfinite(cam.yawDeg) ? cam.yawDeg : 180.0f;
+    yawDegrees = std::fmod(yawDegrees, 360.0f);
+    if (yawDegrees < 0.0f) yawDegrees += 360.0f;
+    float pitchDegrees = std::isfinite(cam.pitchDeg) ? cam.pitchDeg : 4.0f;
+    if (pitchDegrees < kCameraMinPitchDegrees) pitchDegrees = kCameraMinPitchDegrees;
+    if (pitchDegrees > kCameraMaxPitchDegrees) pitchDegrees = kCameraMaxPitchDegrees;
+    float dist = std::isfinite(cam.distance) && cam.distance > 0.0f ? cam.distance : 3.5f;
+    float targetY = std::isfinite(cam.targetY) ? cam.targetY : 0.95f;
+
+    const float maxPitch = kCameraMaxPitchDegrees * kRadiansPerDegree;
+    if (targetY + dist * std::sin(maxPitch) < kCameraGroundClearance) {
+        yawDegrees = 180.0f;
+        pitchDegrees = 4.0f;
+        dist = 3.5f;
+        targetY = 0.95f;
+    }
+    if (dist < 0.3f) dist = 0.3f;
+    if (dist > 8.0f) dist = 8.0f;
+    if (targetY < 0.0f) targetY = 0.0f;
+    if (targetY > 2.5f) targetY = 2.5f;
+
+    float minPitchSin = (kCameraGroundClearance - targetY) / dist;
+    if (minPitchSin < -1.0f) minPitchSin = -1.0f;
+    if (minPitchSin > 1.0f) minPitchSin = 1.0f;
+    const float minPitch = std::asin(minPitchSin);
+    const float requestedPitch = pitchDegrees * kRadiansPerDegree;
+    const float pitch = requestedPitch < minPitch ? minPitch : requestedPitch;
+    const float yaw = yawDegrees * kRadiansPerDegree;
+    return {{dist * std::cos(pitch) * std::sin(yaw),
+             targetY + dist * std::sin(pitch),
+             dist * std::cos(pitch) * std::cos(yaw)},
+            {0.0f, targetY, 0.0f}};
+}
 
 struct AvatarCullResult {
     bool visible = false;

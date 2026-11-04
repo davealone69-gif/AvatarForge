@@ -111,14 +111,10 @@ AvatarCullResult AvatarCuller::update(const float modelMin[3], const float model
     avatar.lodDistances[2] = kLodDistance2 * distanceScale;
     avatar.visible = true;
 
-    const float yaw = state.yawDeg * kRadiansPerDegree;
-    const float pitch = state.pitchDeg * kRadiansPerDegree;
-    const float distance = std::max(state.distance, 0.3f);
+    const EffectiveOrbitCamera orbit = effectiveOrbitCamera(state);
     Camera camera;
-    camera.position = Vec3(distance * std::cos(pitch) * std::sin(yaw),
-                           state.targetY + distance * std::sin(pitch),
-                           distance * std::cos(pitch) * std::cos(yaw));
-    camera.target = Vec3(0.0f, state.targetY, 0.0f);
+    camera.position = Vec3(orbit.eye[0], orbit.eye[1], orbit.eye[2]);
+    camera.target = Vec3(orbit.target[0], orbit.target[1], orbit.target[2]);
     camera.up = Vec3(0.0f, 1.0f, 0.0f);
     camera.fovYRadians = state.fovDeg * kRadiansPerDegree;
     camera.nearPlane = 0.05f;

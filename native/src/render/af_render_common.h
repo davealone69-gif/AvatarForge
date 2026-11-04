@@ -16,6 +16,7 @@
 
 #include "af_render.h"
 #include "af_environment.h"
+#include "af_avatar_culler.h"
 
 namespace af {
 
@@ -256,16 +257,9 @@ inline void buildCameraUbo(FrameScene* scene, const CameraState& cam, const Rend
                            const EnvironmentParams& env, const ShGlobal& sh, int width, int height,
                            bool depthZeroToOne = false) {
     const float aspect = float(width) / float(height > 0 ? height : 1);
-    const float yaw = cam.yawDeg * 3.14159265358979f / 180.0f;
-    const float pitch = cam.pitchDeg * 3.14159265358979f / 180.0f;
-    const float dist = cam.distance < 0.3f ? 0.3f : cam.distance;
-    const float tx = 0.0f, ty = cam.targetY, tz = 0.0f;
-    const Vec3 eye{
-        tx + dist * std::cos(pitch) * std::sin(yaw),
-        ty + dist * std::sin(pitch),
-        tz + dist * std::cos(pitch) * std::cos(yaw)
-    };
-    const float target[3] = {tx, ty, tz};
+    const EffectiveOrbitCamera orbit = effectiveOrbitCamera(cam);
+    const Vec3 eye{orbit.eye[0], orbit.eye[1], orbit.eye[2]};
+    const float target[3] = {orbit.target[0], orbit.target[1], orbit.target[2]};
     const float eyeArr[3] = {eye.x, eye.y, eye.z};
     const float up[3] = {0.0f, 1.0f, 0.0f};
 
@@ -398,13 +392,10 @@ inline int pickRegion(const af_engine* engine, const float rayOrigin[3], const f
 inline void screenRay(const CameraState& cam, float ndcX, float ndcY, int width, int height,
                       float outOrigin[3], float outDir[3]) {
     const float aspect = float(width) / float(height > 0 ? height : 1);
-    const float yaw = cam.yawDeg * 3.14159265358979f / 180.0f;
-    const float pitch = cam.pitchDeg * 3.14159265358979f / 180.0f;
-    const float dist = cam.distance < 0.3f ? 0.3f : cam.distance;
-    const Vec3 eye{ dist * std::cos(pitch) * std::sin(yaw),
-                    cam.targetY + dist * std::sin(pitch),
-                    dist * std::cos(pitch) * std::cos(yaw) };
-    const Vec3 fwd = vnormalize(vsub(Vec3{0.0f, cam.targetY, 0.0f}, eye));
+    const EffectiveOrbitCamera orbit = effectiveOrbitCamera(cam);
+    const Vec3 eye{orbit.eye[0], orbit.eye[1], orbit.eye[2]};
+    const Vec3 target{orbit.target[0], orbit.target[1], orbit.target[2]};
+    const Vec3 fwd = vnormalize(vsub(target, eye));
     const Vec3 right = vnormalize(vcross(fwd, Vec3{0, 1, 0}));
     const Vec3 up = vcross(right, fwd);
     const float tanHalf = std::tan(cam.fovDeg * 3.14159265358979f / 360.0f);
