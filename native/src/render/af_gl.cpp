@@ -453,6 +453,11 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
         failEgl("eglQuerySurface(size)", error);
         return false;
     }
+    if (surfaceWidth_ <= 0 || surfaceHeight_ <= 0) {
+        *error = "invalid EGL surface dimensions " + std::to_string(surfaceWidth_) + "x" +
+                 std::to_string(surfaceHeight_);
+        return false;
+    }
     (void)glGetError();   /* GL error state becomes valid only after eglMakeCurrent. */
 
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
@@ -653,8 +658,8 @@ bool GlRenderer::makeFramebufferWithTexture(GLuint* fbo, GLuint* texture, int w,
 }
 
 bool GlRenderer::createTargets(std::string* error) {
-    const int w = surfaceWidth_ > 0 ? surfaceWidth_ : 1080;
-    const int h = surfaceHeight_ > 0 ? surfaceHeight_ : 1920;
+    const int w = surfaceWidth_;
+    const int h = surfaceHeight_;
     GLint maxSamples = 1;
     glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
     const int samples = std::max(1, std::min(options_.msaaSamples, int(maxSamples)));
@@ -1515,9 +1520,20 @@ void GlRenderer::renderFrame(float deltaSeconds) {
     /* A resize between frames walks the whole target set; the window surface itself is resized by
        the compositor and picked up through eglQuerySurface. */
     int w = 0, h = 0;
-    eglQuerySurface(display_, surface_, EGL_WIDTH, &w);
-    eglQuerySurface(display_, surface_, EGL_HEIGHT, &h);
-    if (w > 0 && h > 0 && (w != surfaceWidth_ || h != surfaceHeight_)) {
+    if (!eglQuerySurface(display_, surface_, EGL_WIDTH, &w)) {
+        failEgl("eglQuerySurface(width)", &frameError_);
+        return;
+    }
+    if (!eglQuerySurface(display_, surface_, EGL_HEIGHT, &h)) {
+        failEgl("eglQuerySurface(height)", &frameError_);
+        return;
+    }
+    if (w <= 0 || h <= 0) {
+        frameError_ = "invalid EGL surface dimensions " + std::to_string(w) + "x" +
+                      std::to_string(h);
+        return;
+    }
+    if (w != surfaceWidth_ || h != surfaceHeight_) {
         if (!resize(w, h)) return;
     }
 

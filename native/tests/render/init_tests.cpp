@@ -269,6 +269,46 @@ void resizeTargetRestoreFailurePreservesFatalDiagnostic() {
     r.reset();
     check(resourcesReleased(), "failed target restoration teardown releases every tracked resource");
 }
+void nonPositiveInitialSurfaceExtentIsRejected() {
+    const std::pair<int, int> extents[] = {{0, 1280}, {720, 0}};
+    for (const auto& extent : extents) {
+        af_test::reset();
+        af_test::state.surfaceWidth = extent.first;
+        af_test::state.surfaceHeight = extent.second;
+        std::string error;
+        std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+        check(r == nullptr, "renderer rejects a non-positive initial EGL surface extent");
+        check(contains(error, "invalid EGL surface dimensions"),
+              "initial extent failure identifies the unusable EGL dimensions");
+        r.reset();
+        check(resourcesReleased(), "invalid initial EGL extent releases partial renderer resources");
+    }
+}
+void invalidRuntimeSurfaceExtentSkipsFrameUntilRecovery() {
+    af_test::reset();
+    std::string error;
+    std::unique_ptr<af::Renderer> r(af::createGlRenderer(window(), options(), &error));
+    check(r != nullptr, "runtime surface-extent fixture initializes");
+    if (r) {
+        const int drawsBefore = af_test::state.draws;
+        const int swapsBefore = af_test::state.swapBuffers;
+        const int framesBefore = r->stats().frames;
+        const int submissionsBefore = r->stats().frameSubmissions;
+        af_test::state.surfaceHeight = 0;
+        r->renderFrame(1.0f / 60.0f);
+        check(contains(r->frameError(), "invalid EGL surface dimensions"),
+              "runtime zero-height EGL surface is reported without marking context lost");
+        check(af_test::state.draws == drawsBefore && af_test::state.swapBuffers == swapsBefore &&
+              r->stats().frameSubmissions == submissionsBefore && r->stats().frames == framesBefore,
+              "invalid runtime extent issues no draws, submission, or window present");
+        af_test::state.surfaceHeight = 1280;
+        r->renderFrame(1.0f / 60.0f);
+        check(r->frameError().empty() && r->stats().frames == framesBefore + 1,
+              "renderer resumes after the EGL surface reports a valid extent again");
+    }
+    r.reset();
+    check(resourcesReleased(), "runtime surface-extent recovery teardown releases all resources");
+}
 void failureCase(af_test::Fault fault, const char* expected, const char* label, bool ext = false) {
     af_test::reset();
     af_test::state.fault = fault;
@@ -468,6 +508,8 @@ int main() {
     swapFailureIsRecoverableByOwner(); resizeAllocationFailureRestoresTargetsAndSignalsOwner();
     automaticResizeRetryUsesChangedEglExtent();
     resizeTargetRestoreFailurePreservesFatalDiagnostic();
+    nonPositiveInitialSurfaceExtentIsRejected();
+    invalidRuntimeSurfaceExtentSkipsFrameUntilRecovery();
     msaaFallback(); hdrFallback(); capabilityTokens(); angleDriverIsStillGles();
     selector(); defaultBackendSelection(); vulkanSelection(); optionSanitisation(); renderAbi();
     std::printf("Renderer host fault injection: %d checks, %d failure(s) (no physical GPU)\n", checks, failures);
