@@ -245,6 +245,13 @@ data class GenerationRequest(
     val memoryBudgetBytes: Long = 1536L * 1024 * 1024,
 )
 
+/** True when image inputs exist and at least one still needs its native analysis pass. */
+internal fun shouldRunNativeImageAnalysis(imageCount: Int, cachedAnalysisCount: Int): Boolean {
+    require(imageCount >= 0) { "image count must not be negative" }
+    require(cachedAnalysisCount in 0..imageCount) { "cached analysis count must be within the image count" }
+    return imageCount > 0 && cachedAnalysisCount < imageCount
+}
+
 /**
  * A decoded reference image.
  *
@@ -703,11 +710,14 @@ class AvatarEngine private constructor(private val appContext: Context) {
                 }
                 check(resetRc == 0) { "generation setup failed: ${NativeBridge.engineLastError(h)}" }
 
-                /* Images go in before the prompt so the prompt can override what the photo implied:
-                   the user typed the prompt last, so it wins. */
+                /* Reuse the caller's resolved spec when every reference has cached analysis. If
+                   any image is raw, analyse the full input set to resolve the missing measurements. */
                 if (request.imageA != null || request.imageB != null) {
                     val list = listOfNotNull(request.imageA, request.imageB)
-                    analyseImages(list)
+                    val cachedAnalysisCount = list.count { it.analysis != null }
+                    if (shouldRunNativeImageAnalysis(list.size, cachedAnalysisCount)) {
+                        analyseImages(list)
+                    }
                 }
 
                 currentStage = handleObj
