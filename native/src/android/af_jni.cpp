@@ -343,11 +343,11 @@ JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineRese
     return guarded(env, handle, "af_engine_reset", [&](af_engine* e) { return af_engine_reset(e, &spec); });
 }
 
-JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSetMemoryBudget(
+JNIEXPORT void JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineSetMemoryBudget(
     JNIEnv* env, jobject, jlong h, jlong bytes) {
     auto handle = lookupEngineHandle(h);
-    return guarded(env, handle, "af_engine_set_memory_budget",
-                   [&](af_engine* e) { return af_engine_set_memory_budget(e, uint64_t(bytes)); });
+    (void)guarded(env, handle, "af_engine_set_memory_budget",
+                  [&](af_engine* e) { return af_engine_set_memory_budget(e, uint64_t(bytes)); });
 }
 
 JNIEXPORT jstring JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineLastError(JNIEnv* env, jobject, jlong h) {
