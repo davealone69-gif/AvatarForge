@@ -40,6 +40,7 @@
 #include <string>
 #include "af_shaders.h"   /* the baked shader tables, checked by [10] */
 #include "../src/af_glb_read.h"
+#include "../src/af_glb.h"
 #include "../src/af_json.h"
 #include "../src/af_png.h"
 #include "../src/af_png_decode.h"
@@ -976,6 +977,170 @@ static void testAbi() {
             CHECK(json.find("\"targets\"") != std::string::npos, "GLB declares morph targets");
             CHECK(json.find("\"uri\"") == std::string::npos, "GLB references no external files");
             CHECK(json.find("KHR_materials_ior") != std::string::npos, "GLB carries the ior extension");
+
+            auto readU32LE = [](const uint8_t* p) -> uint32_t {
+                return static_cast<uint32_t>(p[0]) |
+                       (static_cast<uint32_t>(p[1]) << 8) |
+                       (static_cast<uint32_t>(p[2]) << 16) |
+                       (static_cast<uint32_t>(p[3]) << 24);
+            };
+            const uint32_t jsonBytes = readU32LE(bytes + 12);
+            const size_t jsonOffset = 20;
+            const bool jsonRange = static_cast<size_t>(jsonBytes) <= size - jsonOffset;
+            CHECK(jsonRange, "GLB JSON chunk stays within the exported file");
+            if (jsonRange) {
+                json::Json glbDoc;
+                std::string parseError;
+                const std::string fullJson(reinterpret_cast<const char*>(bytes + jsonOffset), jsonBytes);
+                const bool parsed = json::Json::parse(fullJson, &glbDoc, &parseError);
+                CHECK(parsed, "exported GLB JSON parses (%s)", parseError.c_str());
+                if (parsed) {
+                    const size_t binHeader = jsonOffset + jsonBytes;
+                    const bool hasBinHeader = binHeader <= size && size - binHeader >= 8;
+                    CHECK(hasBinHeader, "GLB has a complete binary chunk header");
+                    if (hasBinHeader) {
+                        const uint32_t binBytes = readU32LE(bytes + binHeader);
+                        const uint32_t binType = readU32LE(bytes + binHeader + 4);
+                        const size_t binOffset = binHeader + 8;
+                        const bool binRange = binType == 0x004E4942 &&
+                                              static_cast<size_t>(binBytes) <= size - binOffset;
+                        CHECK(binRange, "GLB binary chunk is in range");
+                        if (binRange) {
+                            const json::Json& accessors = glbDoc["accessors"];
+                            const json::Json& bufferViews = glbDoc["bufferViews"];
+                            size_t morphCount = 0, sparseMorphCount = 0, emptyMorphCount = 0;
+                            const json::Json& meshes = glbDoc["meshes"];
+                            for (const json::Json& mesh : meshes.items()) {
+                                for (const json::Json& primitive : mesh["primitives"].items()) {
+                                    for (const json::Json& target : primitive["targets"].items()) {
+                                        size_t accessorIndex = 0;
+                                        const bool hasIndex = target["POSITION"].asIndex(&accessorIndex);
+                                        CHECK(hasIndex, "morph target POSITION references an accessor");
+                                        if (!hasIndex) continue;
+                                        ++morphCount;
+                                        const json::Json& accessor = accessors.atOrNull(accessorIndex);
+                                        const json::Json& minimum = accessor["min"];
+                                        const json::Json& maximum = accessor["max"];
+                                        const bool shapeOk = accessor["type"].asString() == "VEC3" &&
+                                                             minimum.isArray() && maximum.isArray() &&
+                                                             minimum.size() == 3 && maximum.size() == 3;
+                                        CHECK(shapeOk, "morph POSITION accessor %zu has VEC3 min/max bounds", accessorIndex);
+                                        if (!shapeOk) continue;
+                                        double mn[3], mx[3];
+                                        bool numeric = true;
+                                        for (size_t c = 0; c < 3; ++c) {
+                                            numeric = numeric && minimum.atOrNull(c).isNumber() && maximum.atOrNull(c).isNumber();
+                                            mn[c] = minimum.atOrNull(c).asNumber();
+                                            mx[c] = maximum.atOrNull(c).asNumber();
+                                        }
+                                        CHECK(numeric, "morph POSITION accessor %zu bounds are numeric", accessorIndex);
+                                        if (!numeric) continue;
+                                        bool coversZero = true;
+                                        for (size_t c = 0; c < 3; ++c) coversZero = coversZero && mn[c] <= 0.0 && mx[c] >= 0.0;
+                                        CHECK(coversZero, "morph POSITION accessor %zu bounds include the implicit zero base", accessorIndex);
+                                        const json::Json* sparse = accessor.find("sparse");
+                                        if (sparse) {
+                                            ++sparseMorphCount;
+                                            size_t viewIndex = 0;
+                                            size_t valueCount = 0;
+                                            const bool countValid = (*sparse)["count"].asIndex(&valueCount);
+                                            const bool viewValid = (*sparse)["values"]["bufferView"].asIndex(&viewIndex);
+                                            CHECK(countValid && viewValid, "sparse morph POSITION accessor %zu has readable value metadata", accessorIndex);
+                                            if (!countValid || !viewValid) continue;
+                                            const json::Json& view = bufferViews.atOrNull(viewIndex);
+                                            size_t viewOffset = 0;
+                                            size_t byteOffset = 0;
+                                            view["byteOffset"].asIndex(&viewOffset);
+                                            (*sparse)["values"]["byteOffset"].asIndex(&byteOffset);
+                                            const size_t first = binOffset + viewOffset + byteOffset;
+                                            const size_t dataBytes = valueCount * 3 * sizeof(float);
+                                            const bool valuesInRange = first >= binOffset && first <= binOffset + binBytes &&
+                                                                       dataBytes <= binOffset + binBytes - first;
+                                            CHECK(valuesInRange, "sparse morph POSITION values stay within the binary chunk");
+                                            if (valuesInRange) {
+                                                double deltaMin[3] = {0.0, 0.0, 0.0};
+                                                double deltaMax[3] = {0.0, 0.0, 0.0};
+                                                bool finiteValues = true;
+                                                for (size_t i = 0; i < valueCount * 3; ++i) {
+                                                    float value = 0.0f;
+                                                    std::memcpy(&value, bytes + first + i * sizeof(float), sizeof(value));
+                                                    const size_t c = i % 3;
+                                                    finiteValues = finiteValues && std::isfinite(value);
+                                                    deltaMin[c] = std::min(deltaMin[c], static_cast<double>(value));
+                                                    deltaMax[c] = std::max(deltaMax[c], static_cast<double>(value));
+                                                }
+                                                bool exactExtrema = finiteValues;
+                                                for (size_t c = 0; c < 3; ++c) {
+                                                    exactExtrema = exactExtrema && std::fabs(mn[c] - deltaMin[c]) <= 1e-6 &&
+                                                                   std::fabs(mx[c] - deltaMax[c]) <= 1e-6;
+                                                }
+                                                CHECK(exactExtrema,
+                                                      "sparse morph POSITION accessor %zu bounds match zero-inclusive delta extrema", accessorIndex);
+                                            }
+                                        } else {
+                                            ++emptyMorphCount;
+                                            bool allZero = accessor["bufferView"].isNull();
+                                            for (size_t c = 0; c < 3; ++c) allZero = allZero && mn[c] == 0.0 && mx[c] == 0.0;
+                                            CHECK(allZero, "empty morph POSITION accessor %zu has zero bounds and no bufferView", accessorIndex);
+                                        }
+                                    }
+                                }
+                            }
+                            CHECK(morphCount > 0, "morph POSITION accessors were inspected");
+                            CHECK(sparseMorphCount > 0, "sparse morph POSITION case was exercised");
+                            CHECK(emptyMorphCount + sparseMorphCount == morphCount,
+                                  "every morph POSITION accessor is classified as sparse or empty");
+
+                            size_t animationInputCount = 0;
+                            for (const json::Json& animation : glbDoc["animations"].items()) {
+                                for (const json::Json& sampler : animation["samplers"].items()) {
+                                    size_t accessorIndex = 0;
+                                    const bool hasIndex = sampler["input"].asIndex(&accessorIndex);
+                                    CHECK(hasIndex, "animation sampler input references an accessor");
+                                    if (!hasIndex) continue;
+                                    ++animationInputCount;
+                                    const json::Json& accessor = accessors.atOrNull(accessorIndex);
+                                    const json::Json& minimum = accessor["min"];
+                                    const json::Json& maximum = accessor["max"];
+                                    const bool scalarBounds = accessor["type"].asString() == "SCALAR" &&
+                                                              minimum.isArray() && maximum.isArray() &&
+                                                              minimum.size() == 1 && maximum.size() == 1 &&
+                                                              minimum.atOrNull(0).isNumber() && maximum.atOrNull(0).isNumber();
+                                    CHECK(scalarBounds, "animation sampler input %zu has one-element SCALAR bounds", accessorIndex);
+                                    if (!scalarBounds) continue;
+                                    size_t viewIndex = 0;
+                                    const bool viewValid = accessor["bufferView"].asIndex(&viewIndex);
+                                    CHECK(viewValid, "animation sampler input %zu has a bufferView", accessorIndex);
+                                    if (!viewValid) continue;
+                                    const json::Json& view = bufferViews.atOrNull(viewIndex);
+                                    size_t viewOffset = 0, accessorOffset = 0, count = 0;
+                                    view["byteOffset"].asIndex(&viewOffset);
+                                    accessor["byteOffset"].asIndex(&accessorOffset);
+                                    const bool countValid = accessor["count"].asIndex(&count);
+                                    const size_t first = binOffset + viewOffset + accessorOffset;
+                                    const size_t dataBytes = count * sizeof(float);
+                                    const bool valuesInRange = countValid && first >= binOffset && first <= binOffset + binBytes &&
+                                                               dataBytes <= binOffset + binBytes - first;
+                                    CHECK(valuesInRange, "animation sampler input %zu values stay within the binary chunk", accessorIndex);
+                                    if (!valuesInRange) continue;
+                                    float actualMin = 0.0f, actualMax = 0.0f;
+                                    for (size_t i = 0; i < count; ++i) {
+                                        float value = 0.0f;
+                                        std::memcpy(&value, bytes + first + i * sizeof(float), sizeof(value));
+                                        if (i == 0 || value < actualMin) actualMin = value;
+                                        if (i == 0 || value > actualMax) actualMax = value;
+                                    }
+                                    CHECK_NEAR(minimum.atOrNull(0).asNumber(), actualMin, 1e-6,
+                                               "animation sampler input %zu minimum covers its times", accessorIndex);
+                                    CHECK_NEAR(maximum.atOrNull(0).asNumber(), actualMax, 1e-6,
+                                               "animation sampler input %zu maximum covers its times", accessorIndex);
+                                }
+                            }
+                            CHECK(animationInputCount > 0, "animation sampler input accessors were inspected");
+                        }
+                    }
+                }
+            }
         }
         af_arena_free(bytes);
 
@@ -1861,6 +2026,82 @@ static void testBlendshapeExport() {
     af_engine_destroy(e);
 }
 
+static void testEmptyMorphBounds() {
+    std::printf("\n[13a] empty morph accessor bounds in the GLB writer\n");
+    af_spec spec;
+    af_spec_init(&spec);
+    spec.sex = AF_SEX_FEMALE;
+    const BodyMetrics metrics = Anatomy::solve(spec);
+    const BodyField field(metrics);
+
+    Mesh mesh;
+    mesh.positions = {Vec3(-0.1f, 0.0f, -0.1f), Vec3(0.1f, 0.0f, -0.1f), Vec3(0.0f, 0.0f, 0.1f)};
+    mesh.indices = {0, 1, 2};
+    mesh.regions = {REGION_SKIN, REGION_SKIN, REGION_SKIN};
+    mesh.computeNormals();
+
+    Rig rig;
+    const bool rigged = rig.build(field, mesh);
+    CHECK(rigged, "minimal mesh receives a valid rig");
+    if (!rigged) return;
+
+    GlbOptions options;
+    options.embedTextures = false;
+    options.includeAnimations = false;
+    options.includeTangents = false;
+    options.groundToZero = false;
+    std::vector<uint8_t> bytes;
+    GlbResult result;
+    const bool written = writeGlb(mesh, nullptr, &rig, nullptr, metrics, spec, options, &bytes, &result);
+    CHECK(written && bytes.size() > 20, "minimal mesh exports through the production GLB writer");
+    CHECK(result.emptyMorphs == kBlendshapeCount, "all %d test morphs take the empty branch (%d)",
+          kBlendshapeCount, result.emptyMorphs);
+    if (!written || bytes.size() <= 20) return;
+
+    const uint32_t jsonBytes = static_cast<uint32_t>(bytes[12]) |
+                               (static_cast<uint32_t>(bytes[13]) << 8) |
+                               (static_cast<uint32_t>(bytes[14]) << 16) |
+                               (static_cast<uint32_t>(bytes[15]) << 24);
+    const bool jsonRange = static_cast<size_t>(jsonBytes) <= bytes.size() - 20;
+    CHECK(jsonRange, "empty-morph fixture JSON chunk stays in range");
+    if (!jsonRange) return;
+    json::Json doc;
+    std::string parseError;
+    const bool parsed = json::Json::parse(std::string(reinterpret_cast<const char*>(bytes.data() + 20), jsonBytes),
+                                          &doc, &parseError);
+    CHECK(parsed, "empty-morph fixture JSON parses (%s)", parseError.c_str());
+    if (!parsed) return;
+
+    size_t checked = 0;
+    for (const json::Json& meshDoc : doc["meshes"].items()) {
+        for (const json::Json& primitive : meshDoc["primitives"].items()) {
+            for (const json::Json& target : primitive["targets"].items()) {
+                size_t accessorIndex = 0;
+                const bool hasIndex = target["POSITION"].asIndex(&accessorIndex);
+                CHECK(hasIndex, "empty morph POSITION references an accessor");
+                if (!hasIndex) continue;
+                const json::Json& accessor = doc["accessors"].atOrNull(accessorIndex);
+                const json::Json& minimum = accessor["min"];
+                const json::Json& maximum = accessor["max"];
+                const bool valid = accessor["type"].asString() == "VEC3" && minimum.isArray() && maximum.isArray() &&
+                                   minimum.size() == 3 && maximum.size() == 3 &&
+                                   accessor["bufferView"].isNull();
+                CHECK(valid, "empty morph POSITION accessor %zu is an unbuffered VEC3 with three-element bounds", accessorIndex);
+                if (!valid) continue;
+                bool zero = true;
+                for (size_t c = 0; c < 3; ++c) {
+                    zero = zero && minimum.atOrNull(c).asNumber(1.0) == 0.0 &&
+                                   maximum.atOrNull(c).asNumber(1.0) == 0.0;
+                }
+                CHECK(zero, "empty morph POSITION accessor %zu has [0,0,0] min and max", accessorIndex);
+                ++checked;
+            }
+        }
+    }
+    CHECK(checked == static_cast<size_t>(kBlendshapeCount), "all %d empty morph accessors were inspected (%zu)",
+          kBlendshapeCount, checked);
+}
+
 
 /* ==============================================================================================
  *  [14] GLB import
@@ -2585,6 +2826,12 @@ int main(int argc, char** argv) {
     const bool quick = (argc > 1 && std::strcmp(argv[1], "--quick") == 0);
     const bool abiOnly = (argc > 1 && std::strcmp(argv[1], "--abi-only") == 0);
 
+    if (argc > 1 && std::strcmp(argv[1], "--bounds-only") == 0) {
+        testEmptyMorphBounds();
+        std::printf("\n\x1b[1mBounds-only %d checks complete: %d failure(s)\x1b[0m\n\n", g_checks, g_failures);
+        return g_failures == 0 ? 0 : 1;
+    }
+
     if (abiOnly) {
         testHandleRegistry();
         testImageAnalysisPacking();
@@ -2607,6 +2854,7 @@ int main(int argc, char** argv) {
     testAbi();
     if (!quick) testPoseComposition();
     if (!quick) testBlendshapeExport();
+    if (!quick) testEmptyMorphBounds();
     if (!quick) testGlbImport();
     if (!quick) testScene();
     if (!quick) testEngineImport();

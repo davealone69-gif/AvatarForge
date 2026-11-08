@@ -35,13 +35,24 @@ struct Accessor {
     const char* type = "SCALAR";
     size_t      count = 0;
     bool        hasBounds = false;
-    float       mn[3] = {0, 0, 0};
-    float       mx[3] = {0, 0, 0};
+    float       mn[16] = {0};
+    float       mx[16] = {0};
     bool        sparse = false;
     size_t      sparseCount = 0;
     int         sparseIndexView = -1;
     int         sparseValueView = -1;
 };
+
+size_t accessorComponentCount(const char* type) {
+    if (!type) return 0;
+    if (std::strcmp(type, "SCALAR") == 0) return 1;
+    if (std::strcmp(type, "VEC2") == 0) return 2;
+    if (std::strcmp(type, "VEC3") == 0) return 3;
+    if (std::strcmp(type, "VEC4") == 0 || std::strcmp(type, "MAT2") == 0) return 4;
+    if (std::strcmp(type, "MAT3") == 0) return 9;
+    if (std::strcmp(type, "MAT4") == 0) return 16;
+    return 0;
+}
 
 struct GlbBuilder {
     std::vector<uint8_t>   bin;
@@ -367,6 +378,8 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
             if (deltas.size() != vcount) continue;
             std::vector<uint32_t> idx;
             std::vector<float> vals;
+            float morphMin[3] = {0.0f, 0.0f, 0.0f};
+            float morphMax[3] = {0.0f, 0.0f, 0.0f};
             idx.reserve(4096);
             vals.reserve(4096 * 3);
             for (size_t i = 0; i < vcount; ++i) {
@@ -377,6 +390,12 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
                     vals.push_back(d.x);
                     vals.push_back(d.y);
                     vals.push_back(d.z);
+                    morphMin[0] = std::min(morphMin[0], d.x);
+                    morphMin[1] = std::min(morphMin[1], d.y);
+                    morphMin[2] = std::min(morphMin[2], d.z);
+                    morphMax[0] = std::max(morphMax[0], d.x);
+                    morphMax[1] = std::max(morphMax[1], d.y);
+                    morphMax[2] = std::max(morphMax[2], d.z);
                 }
             }
             if (idx.empty()) {
@@ -395,6 +414,7 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
                 empty.count = vcount;
                 empty.componentType = 5126;
                 empty.type = "VEC3";
+                empty.hasBounds = true;
                 empty.view = -1;
                 morphAcc.push_back(b.addAccessor(empty));
                 morphNames.push_back(kBlendshapeNames[c]);
@@ -405,6 +425,11 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
             a.count = vcount;
             a.componentType = 5126;
             a.type = "VEC3";
+            a.hasBounds = true;
+            for (size_t component = 0; component < 3; ++component) {
+                a.mn[component] = morphMin[component];
+                a.mx[component] = morphMax[component];
+            }
             a.sparse = true;
             a.sparseCount = idx.size();
             a.sparseIndexView = b.addView(idx.data(), idx.size() * sizeof(uint32_t), 0);
@@ -936,14 +961,17 @@ bool writeGlb(const Mesh& mesh, const UVLayout* layout, const Rig* rig, const Te
             tail += std::to_string(a.view);
         }
         if (a.hasBounds) {
+            const size_t componentCount = accessorComponentCount(a.type);
             tail += ",\"min\":[";
-            jsonNum(tail, a.mn[0]); tail += ',';
-            jsonNum(tail, a.mn[1]); tail += ',';
-            jsonNum(tail, a.mn[2]);
+            for (size_t component = 0; component < componentCount; ++component) {
+                if (component) tail += ',';
+                jsonNum(tail, a.mn[component]);
+            }
             tail += "],\"max\":[";
-            jsonNum(tail, a.mx[0]); tail += ',';
-            jsonNum(tail, a.mx[1]); tail += ',';
-            jsonNum(tail, a.mx[2]);
+            for (size_t component = 0; component < componentCount; ++component) {
+                if (component) tail += ',';
+                jsonNum(tail, a.mx[component]);
+            }
             tail += ']';
         }
         if (a.sparse) {
