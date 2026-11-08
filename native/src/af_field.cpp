@@ -834,7 +834,7 @@ float BodyField::skull(const Vec3& p) const {
     /* Cranium: an ellipsoid with the occiput pulled back and the vertex flattened slightly.
        The vertical semi-axis is exactly headH/2 so that the very top of the skull IS the
        stature landmark: a crown that overshoots makes every height check in the SDK a lie. */
-    const Vec3 radii(m_.head.rx * 1.03f, headH * 0.50f, m_.head.rz * 1.10f);
+    const Vec3 radii(m_.head.rx * 1.00f, headH * 0.49f, m_.head.rz * 1.06f);
     float d = sdEllipsoid(q, radii);
     /* Crown cap: tangent to y = crownY from below (centre at crownY - r, radius r). */
     {
@@ -847,8 +847,8 @@ float BodyField::skull(const Vec3& p) const {
                      Vec3(m_.head.rx * 0.82f, headH * 0.20f, m_.head.rz * 0.34f)), 0.030f);
     /* Mandible / jawline, narrower in front, with an angular chin. */
     d = smin(d, blob(p, {0.0f, m_.y.chinY + headH * 0.10f, 0.0f},
-                     Vec3(m_.jaw.rx * 1.02f, headH * 0.14f, m_.jaw.rz * 1.02f)), 0.032f);
-    d = smin(d, blob(p, chin_, Vec3(m_.head.rx * 0.34f, headH * 0.07f, m_.head.rz * 0.34f)), 0.022f);
+                     Vec3(m_.jaw.rx * 0.96f, headH * 0.12f, m_.jaw.rz * 0.98f)), 0.032f);
+    d = smin(d, blob(p, chin_, Vec3(m_.head.rx * 0.29f, headH * 0.055f, m_.head.rz * 0.30f)), 0.022f);
     for (int s = 0; s < 2; ++s) {
         d = smin(d, blob(p, jawCorner_[s], Vec3(m_.jaw.rx * 0.34f, headH * 0.09f, m_.jaw.rz * 0.42f)), 0.024f);
         d = smin(d, blob(p, cheek_[s], Vec3(m_.head.rx * 0.34f, headH * 0.11f, m_.head.rz * 0.30f)), 0.026f);
