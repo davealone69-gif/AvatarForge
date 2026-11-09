@@ -1,8 +1,12 @@
 # AvatarForge
 
-A standalone Android app that **generates, auto-rigs, animates and renders a photorealistic
-full-body 3D avatar entirely on the device** — from a text prompt, a photo, or a two-image
-multi-reference flow.
+**AvatarForge is the native 3D avatar engine, C ABI, Kotlin SDK and renderer test lab used by 3D-Mega-Hub.**
+
+3D-Mega-Hub is the final user-facing Android application. AvatarForge is not a competing product app:
+it owns the avatar-generation kernel, rigging, skinning, blendshapes, animation, GLB import/export,
+native renderer experiments and engine diagnostics. Its `app/` module is a development and
+verification harness for exercising the engine; user-facing product workflows belong in 3D-Mega-Hub.
+
 
 No server. No network of any kind. No game engine. The app must work in airplane mode, and an
 `INTERNET` permission in the manifest is treated as a build failure.
@@ -39,7 +43,7 @@ still missing.
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
 | `rust/af-sys/`, `rust/af/` | Raw FFI bindings and the safe Rust wrapper |
-| `app/` | Jetpack Compose UI (input → progress → viewer/editor → export) |
+| `app/` | Development/diagnostic harness for exercising the engine; not the final product UI |
 | `sdk/` | Documented Kotlin SDK (`AvatarEngine.health/capabilities/generateFromText/generateFromImage/…`) |
 | `abi/afcore.abi.json` | Generated ABI manifest — sizes, offsets, enum values, symbol list |
 | `tools/` | Build scripts and every verification gate (see below) |
@@ -97,7 +101,7 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
 Not yet chosen. Add a `LICENSE` before publishing this repository.
 
 
-## Download and install the Android APK
+## Download and install the Android diagnostic-harness APK
 
 **Fastest route:** open the [Android APK workflow](https://github.com/davealone69-gif/AvatarForge/actions/workflows/android-apk.yml) and open the latest successful run. Under **Artifacts**, download `AvatarForge-Android-<commit>` and extract the ZIP. Install `AvatarForge-debug-arm64.apk` for testing on a modern ARM64 Android phone.
 
