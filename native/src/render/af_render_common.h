@@ -16,6 +16,7 @@
 #ifndef AF_RENDER_COMMON_H
 #define AF_RENDER_COMMON_H
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
