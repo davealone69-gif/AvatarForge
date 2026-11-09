@@ -1131,8 +1131,10 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         if (!resize(w, h)) return;
     }
 
-    updateScene(deltaSeconds);
+    /* Animation deforms the CPU mesh and refreshes its submesh AABBs. Build the camera,
+       frustum and scene only after those bounds describe the geometry we will upload/draw. */
     updateAnimation(deltaSeconds);
+    updateScene(deltaSeconds);
     ensureGeometryBuffers();
 
     drawShadowPass();
