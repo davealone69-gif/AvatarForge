@@ -17,6 +17,7 @@
 #define AF_RENDER_COMMON_H
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -161,8 +162,17 @@ struct VertexLayout {
     static constexpr uint32_t tangentOffset = 24;
     static constexpr uint32_t uvOffset = 40;
     static constexpr uint32_t colorOffset = 48;
+    static constexpr uint32_t jointsOffset = 64;
+    static constexpr uint32_t weightsOffset = 72;
 };
 static_assert(VertexLayout::stride == 88, "af_vertex must stay 88 bytes for the renderer's stride");
+static_assert(offsetof(af_vertex, pos) == VertexLayout::posOffset, "position offset mismatch");
+static_assert(offsetof(af_vertex, normal) == VertexLayout::normalOffset, "normal offset mismatch");
+static_assert(offsetof(af_vertex, tangent) == VertexLayout::tangentOffset, "tangent offset mismatch");
+static_assert(offsetof(af_vertex, uv) == VertexLayout::uvOffset, "UV offset mismatch");
+static_assert(offsetof(af_vertex, color) == VertexLayout::colorOffset, "colour offset mismatch");
+static_assert(offsetof(af_vertex, joints) == VertexLayout::jointsOffset, "joint offset mismatch");
+static_assert(offsetof(af_vertex, weights) == VertexLayout::weightsOffset, "weight offset mismatch");
 
 /* Local copies of the shader-side constants, so af_render_common.h does not depend on GLSL. */
 enum {
@@ -271,10 +281,30 @@ inline void buildCameraUbo(FrameScene* scene, const CameraState& cam, const Rend
     const float eyeArr[3] = {eye.x, eye.y, eye.z};
     const float up[3] = {0.0f, 1.0f, 0.0f};
 
-    /* The only backend difference in the whole camera: Vulkan's clip space is [0,1] in depth with
-       +Y down, GL's is [-1,1] with +Y up. The Y direction is reconciled in the vertex shader
-       (AF_CLIP_Y) so a single projection formula serves both. */
-    const Mat4 proj = matPerspective(cam.fovDeg, aspect, 0.05f, 60.0f, depthZeroToOne);
+    /* Derive clipping planes from the actual model bounds. A fixed 5 cm / 60 m range works for
+       the default avatar, but can clip imported GLBs with a different scale or origin. The
+       bounding sphere encloses the model AABB; padding prevents edge clipping during animation. */
+    float zNear = 0.05f;
+    float zFar = 60.0f;
+    if (scene->hasModel) {
+        const float cx = 0.5f * (scene->modelMin[0] + scene->modelMax[0]);
+        const float cy = 0.5f * (scene->modelMin[1] + scene->modelMax[1]);
+        const float cz = 0.5f * (scene->modelMin[2] + scene->modelMax[2]);
+        const float dx = scene->modelMax[0] - scene->modelMin[0];
+        const float dy = scene->modelMax[1] - scene->modelMin[1];
+        const float dz = scene->modelMax[2] - scene->modelMin[2];
+        const float radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float ex = eye.x - cx, ey = eye.y - cy, ez = eye.z - cz;
+        const float centreDistance = std::sqrt(ex * ex + ey * ey + ez * ez);
+        if (std::isfinite(radius) && std::isfinite(centreDistance) && radius > 0.0f) {
+            const float padding = std::max(0.05f, radius * 0.10f);
+            zNear = std::max(0.01f, centreDistance - radius - padding);
+            zFar = std::max(zNear + 1.0f, centreDistance + radius + padding);
+        }
+    }
+    const float safeFov = std::isfinite(cam.fovDeg) ? std::clamp(cam.fovDeg, 10.0f, 120.0f) : 32.0f;
+    /* Column-major matrices and column vectors: clip = Projection * View * Position. */
+    const Mat4 proj = matPerspective(safeFov, aspect, zNear, zFar, depthZeroToOne);
     const Mat4 view = matLookAt(eyeArr, target, up);
     const Mat4 vp = matMul(proj, view);
 
