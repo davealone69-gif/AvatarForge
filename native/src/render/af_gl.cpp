@@ -577,7 +577,7 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     activeTargetOptions_ = options_;
 
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
+    glDepthFunc(GL_LESS);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
