@@ -1057,8 +1057,8 @@ int32_t applyCurrentPose(af_engine* e) {
         e->verts[i].normal[1] = e->mesh.normals[i].y;
         e->verts[i].normal[2] = e->mesh.normals[i].z;
     }
-    refreshDeformedSubmeshBounds(e);
     updateStats(e);
+    refreshDeformedSubmeshBounds(e);
     return static_cast<int32_t>(AF_OK);
 }
 
