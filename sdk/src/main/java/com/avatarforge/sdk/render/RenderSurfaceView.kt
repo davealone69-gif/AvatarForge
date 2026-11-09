@@ -67,6 +67,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     private var renderer: AvatarRenderer? = null
     @Volatile private var visible = false
     @Volatile private var surfaceAvailable = false
+    @Volatile private var released = false
 
     init {
         holder.addCallback(this)
@@ -117,6 +118,7 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Starts/stops the frame loop. Called from the host lifecycle. */
     fun setFrameLoopEnabled(enabled: Boolean) {
+        if (released) return
         visible = enabled
         handler.removeCallbacks(frameLoop)
         frameLoop.resetClock()
@@ -173,9 +175,11 @@ class RenderSurfaceView @JvmOverloads constructor(
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        if (released) return
         val surface: Surface = holder.surface
         surfaceAvailable = true
         handler.post {
+            if (released || !surfaceAvailable) return@post
             try {
                 renderer?.destroy()
                 renderer = AvatarRenderer.create(surface, settings)
@@ -200,7 +204,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (released || !surfaceAvailable) return
         handler.post {
+            if (released || !surfaceAvailable) return@post
             renderer?.resize(width, height)
             if (visible && renderer != null) {
                 handler.removeCallbacks(frameLoop)
@@ -210,6 +216,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        if (released) return
         /* Stop scheduling immediately. The HandlerThread serialises this teardown behind any
            frame already executing, so no native frame can overlap EGL destruction. */
         surfaceAvailable = false
@@ -243,6 +250,8 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Call from the host's onDestroy: stops the thread and frees the GPU objects. */
     fun release() {
+        if (released) return
+        released = true
         visible = false
         surfaceAvailable = false
         handler.removeCallbacks(frameLoop)
