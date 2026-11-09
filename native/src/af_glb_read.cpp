@@ -169,6 +169,16 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         if (error) *error = "glTF: byteStride smaller than the element size";
         return AF_ERR_INVALID_ARG;
     }
+    if ((byteOffset % static_cast<size_t>(csize)) != 0 ||
+        (static_cast<uint64_t>(bvOffset) % static_cast<uint64_t>(csize)) != 0) {
+        if (error) *error = "glTF: accessor byte offset is not aligned to its component type";
+        return AF_ERR_INVALID_ARG;
+    }
+    if (bvStride != elementBytes &&
+        (bvStride < 4 || bvStride > 252 || (bvStride % 4) != 0)) {
+        if (error) *error = "glTF: vertex byteStride must be 4-byte aligned and between 4 and 252";
+        return AF_ERR_INVALID_ARG;
+    }
     /* Everything in 64-bit: count * stride overflows 32 bits at 4 G and a hostile file can claim
        it. The addition cannot wrap because each term is bounded by size_t. */
     const uint64_t start = static_cast<uint64_t>(bvOffset) + static_cast<uint64_t>(byteOffset);
@@ -314,6 +324,18 @@ int readAccessorFloats(const uint8_t* bin, size_t binSize, const json::Json& doc
 /* Indices as u32, whatever their stored width. */
 int readIndices(const uint8_t* bin, size_t binSize, const json::Json& doc, int accessorIndex,
                 std::vector<uint32_t>* out, std::string* error) {
+    const json::Json& accessor =
+        doc["accessors"].atOrNull(static_cast<size_t>(accessorIndex < 0 ? 0 : accessorIndex));
+    if (accessorIndex < 0 || accessor.isNull() || accessor["type"].stringOr("") != "SCALAR") {
+        if (error) *error = "glTF: indices must reference a valid SCALAR accessor";
+        return AF_ERR_INVALID_ARG;
+    }
+    const int indexType = accessor["componentType"].asInt(0);
+    if ((indexType != 5121 && indexType != 5123 && indexType != 5125) ||
+        accessor["normalized"].asBool(false)) {
+        if (error) *error = "glTF: indices must use non-normalized UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT";
+        return AF_ERR_INVALID_ARG;
+    }
     std::vector<float> raw;
     size_t count = 0;
     const int rc = readAccessorFloats(bin, binSize, doc, accessorIndex, 1, &raw, &count, error);
@@ -364,12 +386,25 @@ AttributeKey attributeKey(const json::Json& prim) {
 int buildPrimitive(const uint8_t* bin, size_t binSize, const json::Json& doc, const json::Json& prim,
                    int meshIndex, const std::string& meshName, std::vector<af_vertex>* pool,
                    bool indicesOnly, ImportedPrimitive* out, std::string* error) {
+    const int primitiveMode = prim["mode"].asInt(4);
+    if (primitiveMode != 4) {
+        if (error) *error = "glTF: only TRIANGLES primitives (mode 4) are supported by this renderer";
+        return AF_ERR_UNSUPPORTED;
+    }
     int posIndex = -1;
     if (!attribute(prim, "POSITION", &posIndex)) {
         /* A primitive without positions has nothing to draw; the spec allows it (a points-cloud
            variant), the renderer does not. Skipping with a warning is handled by the caller. */
         out->meshName = meshName;
         return AF_ERR_UNSUPPORTED;
+    }
+    const json::Json& positionAccessor =
+        doc["accessors"].atOrNull(static_cast<size_t>(posIndex));
+    if (positionAccessor.isNull() || positionAccessor["type"].stringOr("") != "VEC3" ||
+        positionAccessor["componentType"].asInt(0) != 5126 ||
+        positionAccessor["normalized"].asBool(false)) {
+        if (error) *error = "glTF: POSITION must be a non-normalized FLOAT VEC3 accessor";
+        return AF_ERR_INVALID_ARG;
     }
     std::vector<float> positions;
     size_t vertexCount = 0;
