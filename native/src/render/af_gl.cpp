@@ -593,13 +593,6 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
  *  Geometry and atlas
  * ============================================================================================ */
 void GlRenderer::ensureGeometryBuffers() {
-    auto rejectGeometry = [&](const char* reason) {
-        geometryValid_ = false;
-        vertexCount_ = vcount;
-        indexCount_ = icount;
-        meshDirty_ = false;
-        std::fprintf(stderr, "[AvatarForge] GLES geometry rejected: %s\n", reason);
-    };
     if (!engine_) {
         geometryValid_ = false;
         vertexCount_ = indexCount_ = 0;
@@ -611,6 +604,13 @@ void GlRenderer::ensureGeometryBuffers() {
     const uint32_t* indices = af_engine_indices(engine_);
     const int32_t submeshCount = af_engine_submesh_count(engine_);
     const af_submesh* submeshes = af_engine_submeshes(engine_);
+    auto rejectGeometry = [&](const char* reason) {
+        geometryValid_ = false;
+        vertexCount_ = vcount;
+        indexCount_ = icount;
+        meshDirty_ = false;
+        std::fprintf(stderr, "[AvatarForge] GLES geometry rejected: %s\n", reason);
+    };
     if (!meshDirty_ && vertexCount_ == vcount && indexCount_ == icount) return;
     if (vcount <= 0 || icount <= 0 || !verts || !indices) {
         rejectGeometry("missing vertices or triangle indices");
