@@ -645,6 +645,19 @@ void GlRenderer::ensureGeometryBuffers() {
             rejectGeometry("submesh vertex range exceeds the vertex buffer");
             return;
         }
+        if (sm.index_count > 0 && sm.vertex_count == 0) {
+            rejectGeometry("non-empty submesh has an empty vertex range");
+            return;
+        }
+        const uint32_t firstVertex = static_cast<uint32_t>(sm.vertex_offset);
+        const uint32_t vertexEnd = firstVertex + static_cast<uint32_t>(sm.vertex_count);
+        for (int32_t j = 0; j < sm.index_count; ++j) {
+            const uint32_t index = indices[sm.index_offset + j];
+            if (index < firstVertex || index >= vertexEnd) {
+                rejectGeometry("submesh index references a vertex outside its declared vertex range");
+                return;
+            }
+        }
         if ((sm.index_count % 3) != 0) {
             rejectGeometry("triangle submesh index count is not divisible by three");
             return;
