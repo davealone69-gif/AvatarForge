@@ -160,7 +160,8 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         return AF_ERR_INVALID_ARG;
     }
     size_t bvStride = 0;
-    if (bvJson.find("byteStride") && !bvJson["byteStride"].asIndex(&bvStride)) {
+    const bool hasExplicitStride = bvJson.find("byteStride") != nullptr;
+    if (hasExplicitStride && !bvJson["byteStride"].asIndex(&bvStride)) {
         if (error) *error = "glTF: bufferView with an invalid byteStride";
         return AF_ERR_INVALID_ARG;
     }
@@ -174,7 +175,7 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         if (error) *error = "glTF: accessor byte offset is not aligned to its component type";
         return AF_ERR_INVALID_ARG;
     }
-    if (bvStride != elementBytes &&
+    if (hasExplicitStride &&
         (bvStride < 4 || bvStride > 252 || (bvStride % 4) != 0)) {
         if (error) *error = "glTF: vertex byteStride must be 4-byte aligned and between 4 and 252";
         return AF_ERR_INVALID_ARG;
@@ -188,7 +189,10 @@ int resolveAccessor(const uint8_t* bin, size_t binSize, const json::Json& doc, i
         if (error) *error = "glTF: accessor range exceeds the binary chunk";
         return AF_ERR_INVALID_ARG;
     }
-    if (start + span > static_cast<uint64_t>(bvOffset) + static_cast<uint64_t>(bvLength)) {
+    if (static_cast<uint64_t>(bvOffset) > static_cast<uint64_t>(binSize) ||
+        static_cast<uint64_t>(bvLength) > static_cast<uint64_t>(binSize) - static_cast<uint64_t>(bvOffset) ||
+        start < static_cast<uint64_t>(bvOffset) ||
+        start + span > static_cast<uint64_t>(bvOffset) + static_cast<uint64_t>(bvLength)) {
         if (error) *error = "glTF: accessor range exceeds its bufferView";
         return AF_ERR_INVALID_ARG;
     }
@@ -497,11 +501,29 @@ int buildPrimitive(const uint8_t* bin, size_t binSize, const json::Json& doc, co
             (*pool)[i].uv[1] = scratch[i * 2 + 1];
         }
     }
-    present = readVec("COLOR_0", 4, &scratch);
-    if (present < 0) return present;
-    if (present == 0) {
+    int colorIndex = -1;
+    if (attribute(prim, "COLOR_0", &colorIndex)) {
+        const json::Json& colorAccessor =
+            doc["accessors"].atOrNull(static_cast<size_t>(colorIndex));
+        const std::string colorType = colorAccessor["type"].stringOr("");
+        const int colorComponents = colorType == "VEC3" ? 3 : colorType == "VEC4" ? 4 : 0;
+        if (colorComponents == 0) {
+            if (error) *error = "glTF: COLOR_0 must be VEC3 or VEC4";
+            return AF_ERR_INVALID_ARG;
+        }
+        size_t colorCount = 0;
+        const int colorRc = readAccessorFloats(bin, binSize, doc, colorIndex, colorComponents,
+                                               &scratch, &colorCount, error);
+        if (colorRc != AF_OK) return colorRc;
+        if (colorCount != vertexCount) {
+            if (error) *error = "glTF: COLOR_0 count differs from POSITION count";
+            return AF_ERR_INVALID_ARG;
+        }
         for (size_t i = 0; i < vertexCount; ++i) {
-            for (int c = 0; c < 4; ++c) (*pool)[i].color[c] = scratch[i * 4 + static_cast<size_t>(c)];
+            for (int c = 0; c < colorComponents; ++c)
+                (*pool)[i].color[c] = scratch[i * static_cast<size_t>(colorComponents) +
+                                               static_cast<size_t>(c)];
+            if (colorComponents == 3) (*pool)[i].color[3] = 1.0f;
         }
     }
     present = readVec("JOINTS_0", 4, &scratch);
