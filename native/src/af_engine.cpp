@@ -957,6 +957,37 @@ int32_t af_engine_dirty_mask(af_engine* engine) {
 namespace {
 
 /* Applies the current pose + blendshape weights and refreshes the renderable vertex buffer. */
+/* Refresh per-submesh bounds from the exact deformed positions consumed by the renderer.
+   The index ranges are already grouped by material, so each bound covers only its own draw. */
+void refreshDeformedSubmeshBounds(af_engine* e) {
+    if (!e || e->verts.empty()) return;
+    for (af_submesh& sm : e->submeshes) {
+        Vec3 mn(1e30f, 1e30f, 1e30f);
+        Vec3 mx(-1e30f, -1e30f, -1e30f);
+        bool haveVertex = false;
+        const size_t first = sm.index_offset < 0 ? 0u : static_cast<size_t>(sm.index_offset);
+        const size_t count = sm.index_count < 0 ? 0u : static_cast<size_t>(sm.index_count);
+        const size_t end = std::min(e->indices.size(), first + count);
+        for (size_t i = first; i < end; ++i) {
+            const uint32_t index = e->indices[i];
+            if (index >= e->verts.size()) continue;
+            const af_vertex& v = e->verts[index];
+            const Vec3 p(v.pos[0], v.pos[1], v.pos[2]);
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+            mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+            haveVertex = true;
+        }
+        if (!haveVertex) {
+            sm.bounds_min[0] = sm.bounds_min[1] = sm.bounds_min[2] = 0.0f;
+            sm.bounds_max[0] = sm.bounds_max[1] = sm.bounds_max[2] = 0.0f;
+            continue;
+        }
+        sm.bounds_min[0] = mn.x; sm.bounds_min[1] = mn.y; sm.bounds_min[2] = mn.z;
+        sm.bounds_max[0] = mx.x; sm.bounds_max[1] = mx.y; sm.bounds_max[2] = mx.z;
+    }
+}
+
 int32_t applyCurrentPose(af_engine* e) {
     if (e->rig.jointCount() == 0) return static_cast<int32_t>(AF_ERR_NOT_READY);
     const int J = e->rig.jointCount();
@@ -1001,6 +1032,7 @@ int32_t applyCurrentPose(af_engine* e) {
         e->verts[i].normal[1] = e->mesh.normals[i].y;
         e->verts[i].normal[2] = e->mesh.normals[i].z;
     }
+    refreshDeformedSubmeshBounds(e);
     updateStats(e);
     return static_cast<int32_t>(AF_OK);
 }
