@@ -20,6 +20,13 @@
 
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <new>
+#if defined(__ANDROID__)
+#include <android/bitmap.h>
+#include <android/imagedecoder.h>
+#include <dlfcn.h>
+#endif
 
 namespace af {
 namespace {
@@ -29,6 +36,57 @@ constexpr uint32_t CHUNK_JSON = 0x4E4F534Au;
 constexpr uint32_t CHUNK_BIN = 0x004E4942u;
 constexpr int MAX_NODE_DEPTH = 256;
 
+constexpr size_t MAX_DECODED_IMAGE_BYTES = 64u * 1024u * 1024u;
+bool looksLikeWebp(const uint8_t* data, size_t size) {
+ return data && size >= 12 && std::memcmp(data,"RIFF",4)==0 && std::memcmp(data+8,"WEBP",4)==0;
+}
+bool decodePlatformImage(const uint8_t* data,size_t size,DecodedImage* out,std::string* error) {
+#if defined(__ANDROID__)
+ if(!data||size==0||!out){if(error)*error="platform image decoder received empty input";return false;}
+ struct DecoderApi {
+  void* library=dlopen("libjnigraphics.so",RTLD_NOW|RTLD_LOCAL);
+  using Create=int(*)(const void*,size_t,AImageDecoder**);
+  using GetHeader=const AImageDecoderHeaderInfo*(*)(const AImageDecoder*);
+  using GetDimension=int32_t(*)(const AImageDecoderHeaderInfo*);
+  using SetFormat=int32_t(*)(AImageDecoder*,int32_t);
+  using SetUnpremultiplied=int32_t(*)(AImageDecoder*,bool);
+  using GetStride=size_t(*)(AImageDecoder*);
+  using Decode=int(*)(AImageDecoder*,void*,size_t,size_t);
+  using Delete=void(*)(AImageDecoder*);
+  Create create=library?reinterpret_cast<Create>(dlsym(library,"AImageDecoder_createFromBuffer")):nullptr;
+  GetHeader getHeader=library?reinterpret_cast<GetHeader>(dlsym(library,"AImageDecoder_getHeaderInfo")):nullptr;
+  GetDimension getWidth=library?reinterpret_cast<GetDimension>(dlsym(library,"AImageDecoderHeaderInfo_getWidth")):nullptr;
+  GetDimension getHeight=library?reinterpret_cast<GetDimension>(dlsym(library,"AImageDecoderHeaderInfo_getHeight")):nullptr;
+  SetFormat setFormat=library?reinterpret_cast<SetFormat>(dlsym(library,"AImageDecoder_setAndroidBitmapFormat")):nullptr;
+  SetUnpremultiplied setUnpremultiplied=library?reinterpret_cast<SetUnpremultiplied>(dlsym(library,"AImageDecoder_setUnpremultipliedRequired")):nullptr;
+  GetStride getStride=library?reinterpret_cast<GetStride>(dlsym(library,"AImageDecoder_getMinimumStride")):nullptr;
+  Decode decode=library?reinterpret_cast<Decode>(dlsym(library,"AImageDecoder_decodeImage")):nullptr;
+  Delete destroy=library?reinterpret_cast<Delete>(dlsym(library,"AImageDecoder_delete")):nullptr;
+  bool ready()const{return create&&getHeader&&getWidth&&getHeight&&setFormat&&setUnpremultiplied&&getStride&&decode&&destroy;}
+ };
+ static const DecoderApi api;
+ if(!api.ready()){if(error)*error="Android AImageDecoder API is unavailable (requires Android 11 / API 30 or newer)";return false;}
+ AImageDecoder* decoder=nullptr;const int cr=api.create(data,size,&decoder);
+ if(cr!=ANDROID_IMAGE_DECODER_SUCCESS||!decoder){if(error)*error="AImageDecoder_createFromBuffer failed: "+std::to_string(cr);return false;}
+ struct Guard{AImageDecoder* p;DecoderApi::Delete d;~Guard(){if(p&&d)d(p);}}guard{decoder,api.destroy};
+ const AImageDecoderHeaderInfo* hi=api.getHeader(decoder);
+ if(!hi){if(error)*error="AImageDecoder returned no image header";return false;}
+ const int32_t w=api.getWidth(hi),h=api.getHeight(hi);
+ if(w<=0||h<=0||w>8192||h>8192){if(error)*error="decoded image dimensions are outside the supported 1..8192 range";return false;}
+ if(api.setFormat(decoder,static_cast<int32_t>(ANDROID_BITMAP_FORMAT_RGBA_8888))!=ANDROID_IMAGE_DECODER_SUCCESS||
+    api.setUnpremultiplied(decoder,true)!=ANDROID_IMAGE_DECODER_SUCCESS){if(error)*error="AImageDecoder could not select straight-alpha RGBA8888 output";return false;}
+ const size_t stride=api.getStride(decoder),row=static_cast<size_t>(w)*4u;
+ if(stride<row||static_cast<size_t>(h)>SIZE_MAX/stride||stride*static_cast<size_t>(h)>MAX_DECODED_IMAGE_BYTES||static_cast<size_t>(h)>SIZE_MAX/row){if(error)*error="decoded image exceeds the bounded RGBA memory limit";return false;}
+ try{std::vector<uint8_t> tmp(stride*static_cast<size_t>(h));const int rc=api.decode(decoder,tmp.data(),stride,tmp.size());
+  if(rc!=ANDROID_IMAGE_DECODER_SUCCESS){if(error)*error="AImageDecoder_decodeImage failed: "+std::to_string(rc);return false;}
+  out->width=w;out->height=h;out->rgba.resize(row*static_cast<size_t>(h));
+  for(int32_t y=0;y<h;++y)std::memcpy(out->rgba.data()+static_cast<size_t>(y)*row,tmp.data()+static_cast<size_t>(y)*stride,row);
+  return true;
+ }catch(const std::bad_alloc&){if(error)*error="not enough memory for decoded image";out->width=out->height=0;out->rgba.clear();return false;}
+#else
+ (void)data;(void)size;(void)out;if(error)*error="platform image decoding is available only on Android API 30+";return false;
+#endif
+}
 uint32_t rd32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
@@ -724,11 +782,13 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
     for (const auto& e : doc["extensionsUsed"].items()) {
         if (e.isString()) out->extensionsUsed.push_back(e.asString());
     }
+    bool requiredWebpExtension = false;
     for (const auto& e : doc["extensionsRequired"].items()) {
-        if (e.isString()) {
-            if (error) *error = "GLB: requires unsupported extension '" + e.asString() + "'";
-            return AF_ERR_UNSUPPORTED;
-        }
+        if (!e.isString()) continue;
+        const std::string extension = e.asString();
+        if (extension == "EXT_texture_webp") { requiredWebpExtension = true; continue; }
+        if (error) *error = "GLB: requires unsupported extension '" + extension + "'";
+        return AF_ERR_UNSUPPORTED;
     }
 
     /* ---- nodes and the scene ---- */
@@ -830,6 +890,28 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
 
     /* ---- textures (images decoded to RGBA8; the texture list is parallel to images) ---- */
     const json::Json& images = doc["images"];
+    std::vector<bool> webpImageRequired(images.size(), false);
+    bool hasWebpTextureExtension = false;
+    for (const auto& texture : doc["textures"].items()) {
+        const json::Json& webp = texture["extensions"]["EXT_texture_webp"];
+        if (webp.isNull()) continue;
+        hasWebpTextureExtension = true;
+        const int sourceIndex = webp["source"].asInt(-1);
+        if (sourceIndex < 0 || static_cast<size_t>(sourceIndex) >= images.size()) {
+            if (error) *error = "GLB: EXT_texture_webp references an invalid image source";
+            return AF_ERR_INVALID_ARG;
+        }
+        const json::Json& image = images.at(static_cast<size_t>(sourceIndex));
+        if (image["mimeType"].stringOr("") != "image/webp") {
+            if (error) *error = "GLB: EXT_texture_webp source image must declare mimeType image/webp";
+            return AF_ERR_INVALID_ARG;
+        }
+        webpImageRequired[static_cast<size_t>(sourceIndex)] = true;
+    }
+    if (requiredWebpExtension && !hasWebpTextureExtension) {
+        if (error) *error = "GLB: declares EXT_texture_webp as required but no texture uses the extension";
+        return AF_ERR_INVALID_ARG;
+    }
     for (size_t i = 0; i < images.size(); ++i) {
         const json::Json& img = images.at(i);
         ImportedTexture tex;
@@ -858,19 +940,23 @@ int importGlb(const uint8_t* data, size_t size, GlbAsset* out, std::string* erro
         const uint8_t* bytes = binChunk ? binChunk + bvOffset : nullptr;
         std::string reason;
         DecodedImage decoded;
-        if (!bytes) {
-            reason = "no binary chunk";
-        } else if (looksLikePng(bytes, bvLength)) {
-            if (!decodePng(bytes, bvLength, &decoded, &reason)) {
-                out->warnings.push_back({"PNG decode failed", reason});
-            }
-        } else if (bvLength >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8) {
-            reason = "JPEG is not supported by this decoder";
-            out->warnings.push_back({"image is JPEG", reason});
-        } else {
-            reason = "unrecognised image bytes";
-            out->warnings.push_back({"image format", reason});
+        if (webpImageRequired[i] && (!bytes || !looksLikeWebp(bytes, bvLength))) {
+            if (error) *error = "GLB: EXT_texture_webp source image does not contain a valid RIFF/WebP payload";
+            return AF_ERR_INVALID_ARG;
         }
+        if (!bytes) reason = "no binary chunk";
+        else if (looksLikePng(bytes, bvLength)) {
+            if (!decodePng(bytes, bvLength, &decoded, &reason)) out->warnings.push_back({"PNG decode failed", reason});
+        } else if (looksLikeWebp(bytes, bvLength) || (bvLength >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8)) {
+            if (!decodePlatformImage(bytes, bvLength, &decoded, &reason)) {
+                const bool webp = looksLikeWebp(bytes, bvLength);
+                out->warnings.push_back({webp ? "WebP decode failed" : "JPEG decode failed", reason});
+                if (webp && webpImageRequired[i] && requiredWebpExtension) {
+                    if (error) *error = "GLB requires EXT_texture_webp but the embedded WebP image could not be decoded: " + reason;
+                    return AF_ERR_UNSUPPORTED;
+                }
+            }
+        } else { reason = "unrecognised image bytes"; out->warnings.push_back({"image format", reason}); }
         if (!decoded.rgba.empty()) {
             tex.width = decoded.width;
             tex.height = decoded.height;

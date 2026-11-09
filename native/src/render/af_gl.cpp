@@ -665,30 +665,39 @@ void GlRenderer::ensureGeometryBuffers() {
     }
     geometryValid_ = true;
 
+    auto drainGlErrors = []() { for (int n=0;n<16;++n) { if (glGetError()==GL_NO_ERROR) break; } };
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
     if (vbytes > vertexCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbytes + vbytes / 4), nullptr, GL_DYNAMIC_DRAW);
-        vertexCapacity_ = vbytes + vbytes / 4;
-        vertexCount_ = 0;   /* force a full upload below */
+        const GLint64 capacity=vbytes+vbytes/4; drainGlErrors();
+        glBufferData(GL_ARRAY_BUFFER,GLsizeiptr(capacity),nullptr,GL_DYNAMIC_DRAW);
+        const GLenum err=glGetError();
+        if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES vertex allocation failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(capacity));return;}
+        vertexCapacity_=capacity;vertexCount_=0;
     }
-    if (meshDirty_ || vertexCount_ != vcount) {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), verts);
-        vertexCount_ = vcount;
+    if(meshDirty_||vertexCount_!=vcount){
+        drainGlErrors();glBufferSubData(GL_ARRAY_BUFFER,0,GLsizeiptr(vbytes),verts);
+        const GLenum err=glGetError();
+        if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES vertex upload failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(vbytes));return;}
+        vertexCount_=vcount;
     }
-
-    if (icount > 0 && indices) {
-        const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
-        if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
-        if (ibytes > indexCapacity_) {
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibytes + ibytes / 4), nullptr, GL_STATIC_DRAW);
-            indexCapacity_ = ibytes + ibytes / 4;
-            indexCount_ = 0;
+    if(icount>0&&indices){
+        const GLint64 ibytes=GLint64(icount)*sizeof(uint32_t);
+        if(indexIbo_==0)glGenBuffers(1,&indexIbo_);
+        if(indexIbo_==0){geometryValid_=false;std::fprintf(stderr,"[AvatarForge] GLES index buffer creation returned zero\\n");return;}
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,indexIbo_);
+        if(ibytes>indexCapacity_){
+            const GLint64 capacity=ibytes+ibytes/4;drainGlErrors();
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER,GLsizeiptr(capacity),nullptr,GL_STATIC_DRAW);
+            const GLenum err=glGetError();
+            if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES index allocation failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(capacity));return;}
+            indexCapacity_=capacity;indexCount_=0;
         }
-        if (meshDirty_ || indexCount_ != icount) {
-            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
-            indexCount_ = icount;
+        if(meshDirty_||indexCount_!=icount){
+            drainGlErrors();glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,0,GLsizeiptr(ibytes),indices);
+            const GLenum err=glGetError();
+            if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES index upload failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(ibytes));return;}
+            indexCount_=icount;
         }
     }
     vertexCount_ = vcount;
@@ -976,7 +985,9 @@ void GlRenderer::drawForwardPass() {
     }
 
     /* ---- the avatar: one draw per submesh so each gets its own material block ---- */
-    if (engine_ && geometryValid_ && vertexCount_ > 0 && indexCount_ > 0) {
+    const bool avatarDrawable=engine_&&geometryValid_&&vertexCount_>0&&indexCount_>0;
+    if(!avatarDrawable&&stats_.frames%120==0)std::fprintf(stderr,"[AvatarForge] GLES avatar draw skipped: engine=%d geometryValid=%d uploadedVerts=%d uploadedIndices=%d engineVerts=%d engineIndices=%d\\n",engine_?1:0,geometryValid_?1:0,vertexCount_,indexCount_,engine_?af_engine_vertex_count(engine_):0,engine_?af_engine_index_count(engine_):0);
+    if (avatarDrawable) {
         glUseProgram(forwardProgram_);
         glBindVertexArray(avatarVao_);
         glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
@@ -1004,8 +1015,10 @@ void GlRenderer::drawForwardPass() {
             glBindBufferRange(GL_UNIFORM_BUFFER, 1, materialUbo_, GLintptr(i) * materialStride_,
                               sizeof(MaterialUbo));
             const size_t byteOffset = static_cast<size_t>(sm.index_offset) * sizeof(uint32_t);
-            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(sm.index_count), GL_UNSIGNED_INT,
-                           reinterpret_cast<const void*>(byteOffset));
+            for(int drain=0;drain<16;++drain){if(glGetError()==GL_NO_ERROR)break;}
+            glDrawElements(GL_TRIANGLES,static_cast<GLsizei>(sm.index_count),GL_UNSIGNED_INT,reinterpret_cast<const void*>(byteOffset));
+            const GLenum drawError=glGetError();
+            if(drawError!=GL_NO_ERROR&&stats_.frames%120==0)std::fprintf(stderr,"[AvatarForge] GLES glDrawElements failed: error=0x%x submesh=%d count=%d offset=%d\\n",unsigned(drawError),i,sm.index_count,sm.index_offset);
             ++drawCalls_;
         }
         triangles_ = indexCount_ / 3;
