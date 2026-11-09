@@ -960,31 +960,56 @@ namespace {
 /* Refresh per-submesh bounds from the exact deformed positions consumed by the renderer.
    The index ranges are already grouped by material, so each bound covers only its own draw. */
 void refreshDeformedSubmeshBounds(af_engine* e) {
-    if (!e || e->verts.empty()) return;
+    if (!e) return;
+    const size_t vertexCount = e->verts.size();
     for (af_submesh& sm : e->submeshes) {
-        Vec3 mn(1e30f, 1e30f, 1e30f);
-        Vec3 mx(-1e30f, -1e30f, -1e30f);
-        bool haveVertex = false;
-        const size_t first = sm.index_offset < 0 ? 0u : static_cast<size_t>(sm.index_offset);
-        const size_t count = sm.index_count < 0 ? 0u : static_cast<size_t>(sm.index_count);
-        const size_t end = std::min(e->indices.size(), first + count);
-        for (size_t i = first; i < end; ++i) {
-            const uint32_t index = e->indices[i];
-            if (index >= e->verts.size()) continue;
-            const af_vertex& v = e->verts[index];
-            const Vec3 p(v.pos[0], v.pos[1], v.pos[2]);
-            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
-            mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
-            mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
-            haveVertex = true;
-        }
-        if (!haveVertex) {
+        const bool validRange =
+            sm.vertex_offset >= 0 && sm.vertex_count >= 0 &&
+            static_cast<size_t>(sm.vertex_offset) <= vertexCount &&
+            static_cast<size_t>(sm.vertex_count) <=
+                vertexCount - static_cast<size_t>(sm.vertex_offset);
+        if (!validRange || sm.vertex_count == 0) {
             sm.bounds_min[0] = sm.bounds_min[1] = sm.bounds_min[2] = 0.0f;
             sm.bounds_max[0] = sm.bounds_max[1] = sm.bounds_max[2] = 0.0f;
             continue;
         }
-        sm.bounds_min[0] = mn.x; sm.bounds_min[1] = mn.y; sm.bounds_min[2] = mn.z;
-        sm.bounds_max[0] = mx.x; sm.bounds_max[1] = mx.y; sm.bounds_max[2] = mx.z;
+
+        const size_t first = static_cast<size_t>(sm.vertex_offset);
+        const size_t last = first + static_cast<size_t>(sm.vertex_count);
+        Vec3 mn(std::numeric_limits<float>::max(),
+                std::numeric_limits<float>::max(),
+                std::numeric_limits<float>::max());
+        Vec3 mx(std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::lowest());
+        bool haveFiniteVertex = false;
+
+        /* Use the submesh's declared vertex span and the post-skinning ABI buffer. This includes
+           every vertex belonging to the submesh and never follows potentially corrupt indices. */
+        for (size_t i = first; i < last; ++i) {
+            const af_vertex& vertex = e->verts[i];
+            const Vec3 p(vertex.pos[0], vertex.pos[1], vertex.pos[2]);
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+            mn.x = std::min(mn.x, p.x);
+            mn.y = std::min(mn.y, p.y);
+            mn.z = std::min(mn.z, p.z);
+            mx.x = std::max(mx.x, p.x);
+            mx.y = std::max(mx.y, p.y);
+            mx.z = std::max(mx.z, p.z);
+            haveFiniteVertex = true;
+        }
+
+        if (!haveFiniteVertex) {
+            sm.bounds_min[0] = sm.bounds_min[1] = sm.bounds_min[2] = 0.0f;
+            sm.bounds_max[0] = sm.bounds_max[1] = sm.bounds_max[2] = 0.0f;
+            continue;
+        }
+        sm.bounds_min[0] = mn.x;
+        sm.bounds_min[1] = mn.y;
+        sm.bounds_min[2] = mn.z;
+        sm.bounds_max[0] = mx.x;
+        sm.bounds_max[1] = mx.y;
+        sm.bounds_max[2] = mx.z;
     }
 }
 
