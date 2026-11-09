@@ -364,6 +364,49 @@ bool attribute(const json::Json& prim, const char* name, int* outIndex) {
     return *outIndex >= 0;
 }
 
+/* The importer expands source accessors into the renderer's canonical af_vertex layout. Validate
+   each glTF semantic before converting it so an incompatible component/type pair is never
+   silently interpreted as another attribute. */
+bool validateVertexAttributeAccessor(const json::Json& doc, const json::Json& prim,
+                                     const char* name, std::string* error) {
+    int index = -1;
+    if (!attribute(prim, name, &index)) return true;
+    const json::Json& acc = doc["accessors"].atOrNull(static_cast<size_t>(index));
+    if (acc.isNull()) {
+        if (error) *error = std::string("glTF: missing accessor for ") + name;
+        return false;
+    }
+    const std::string type = acc["type"].stringOr("");
+    const int component = acc["componentType"].asInt(0);
+    const bool normalized = acc["normalized"].asBool(false);
+    bool valid = false;
+    if (std::strcmp(name, "POSITION") == 0) {
+        valid = type == "VEC3" && component == 5126 && !normalized;
+    } else if (std::strcmp(name, "NORMAL") == 0) {
+        valid = type == "VEC3" && component == 5126 && !normalized;
+    } else if (std::strcmp(name, "TANGENT") == 0) {
+        valid = type == "VEC4" && component == 5126 && !normalized;
+    } else if (std::strcmp(name, "TEXCOORD_0") == 0) {
+        valid = type == "VEC2" &&
+                ((component == 5126 && !normalized) ||
+                 ((component == 5121 || component == 5123) && normalized));
+    } else if (std::strcmp(name, "COLOR_0") == 0) {
+        valid = (type == "VEC3" || type == "VEC4") &&
+                ((component == 5126 && !normalized) ||
+                 ((component == 5121 || component == 5123) && normalized));
+    } else if (std::strcmp(name, "JOINTS_0") == 0) {
+        valid = type == "VEC4" && (component == 5121 || component == 5123) && !normalized;
+    } else if (std::strcmp(name, "WEIGHTS_0") == 0) {
+        valid = type == "VEC4" &&
+                ((component == 5126 && !normalized) ||
+                 ((component == 5121 || component == 5123) && normalized));
+    }
+    if (!valid && error) {
+        *error = std::string("glTF: unsupported component type/normalization for ") + name;
+    }
+    return valid;
+}
+
 /* A primitive's attribute identity: the accessor index of every attribute it reads. Two primitives
    with the same key can share one vertex pool, because they read exactly the same vertices. */
 struct AttributeKey {
@@ -401,6 +444,12 @@ int buildPrimitive(const uint8_t* bin, size_t binSize, const json::Json& doc, co
            variant), the renderer does not. Skipping with a warning is handled by the caller. */
         out->meshName = meshName;
         return AF_ERR_UNSUPPORTED;
+    }
+    static const char* const attributeNames[] = {
+        "POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "COLOR_0", "JOINTS_0", "WEIGHTS_0"
+    };
+    for (const char* name : attributeNames) {
+        if (!validateVertexAttributeAccessor(doc, prim, name, error)) return AF_ERR_INVALID_ARG;
     }
     const json::Json& positionAccessor =
         doc["accessors"].atOrNull(static_cast<size_t>(posIndex));
