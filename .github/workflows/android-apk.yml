@@ -56,6 +56,19 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000
           fi
 
+      - name: Run native host regression harness
+        run: |
+          chmod +x ./tools/build_host.sh
+          ./tools/build_host.sh test
+
+      - name: Build ARM64 native libraries from this branch's source
+        run: |
+          set -euo pipefail
+          chmod +x ./tools/build_android.sh
+          AF_NDK="$ANDROID_NDK_HOME" \
+            AF_CMAKE="$ANDROID_SDK_ROOT/cmake/3.22.1/bin/cmake" \
+            ./tools/build_android.sh arm64-v8a android-26
+
       - name: Verify required ARM64 native libraries exist
         run: |
           set -euo pipefail
