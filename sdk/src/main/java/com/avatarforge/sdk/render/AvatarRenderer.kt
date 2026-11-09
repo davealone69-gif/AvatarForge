@@ -234,9 +234,16 @@ class AvatarRenderer private constructor(private var handle: Long) {
     }
 
     fun destroy() {
-        if (handle != 0L) {
-            NativeBridge.rendererDestroy(handle)
-            handle = 0L
+        val current = handle
+        if (current != 0L) {
+            /* Called only by RenderSurfaceView's owning HandlerThread. Drain GPU work before
+               JNI deletes GL/Vulkan resources and releases the EGL surface/context. */
+            try {
+                NativeBridge.rendererWaitIdle(current)
+            } finally {
+                NativeBridge.rendererDestroy(current)
+                handle = 0L
+            }
         }
     }
 }

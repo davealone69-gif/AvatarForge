@@ -17,12 +17,11 @@
  *               WEIGHTS_0); indices of u8/u16/u32; node hierarchies with matrix or TRS; skins with
  *               inverse bind matrices; animation samplers with LINEAR/STEP/CUBICSPLINE keyframes;
  *               materials with the metallic-roughness parameters and base-colour/emissive factors;
- *               embedded images in PNG (decoded to RGBA8).
+ *               embedded images in PNG and WebP (decoded to RGBA8); WebP/JPEG use Android AImageDecoder (API 30+).
  *
- *   REJECTED    glTF extensions of any kind (the file is reported as unsupported: an extension can
- *               change the meaning of everything else, and guessing would be worse than refusing);
- *               JPEG images (reported per-image, import continues - the model is still usable
- *               without its albedo map, and the caller is told exactly which image and why);
+ *   REJECTED    glTF extensions other than EXT_texture_webp. WebP is accepted only with image/webp source metadata
+ *               and RIFF/WEBP bytes; required WebP decode failures reject import. Optional decode
+ *               failures are reported per-image.
  *               Draco/meshopt compression; non-glTF JSON.
  *
  * Robustness contract: `importGlb` NEVER crashes or reads out of bounds on malformed input. Every

@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -175,6 +176,7 @@ private:
     int triangles_ = 0;
     bool targetsDirty_ = false;
     bool contextLost_ = false;
+    bool geometryValid_ = false;
 };
 
 /* ============================================================================================
@@ -212,6 +214,9 @@ bool GlRenderer::createContext(ANativeWindow* window, std::string* error) {
         *error = "eglMakeCurrent failed";
         return false;
     }
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
     eglQuerySurface(display_, surface_, EGL_WIDTH, &surfaceWidth_);
     eglQuerySurface(display_, surface_, EGL_HEIGHT, &surfaceHeight_);
 
@@ -482,6 +487,15 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     if (!createContext(window, error)) return false;
     if (!createPrograms(error)) return false;
 
+    /* Buffer objects must exist before glVertexAttribPointer captures them in a VAO. */
+    glGenBuffers(1, &vertexVbo_);
+    glGenBuffers(1, &groundVbo_);
+    glGenBuffers(1, &lineVbo_);
+    if (!vertexVbo_ || !groundVbo_ || !lineVbo_) {
+        *error = "failed to allocate GLES vertex buffer names";
+        return false;
+    }
+
     glGenVertexArrays(1, &avatarVao_);
     glGenVertexArrays(1, &groundVao_);
     glGenVertexArrays(1, &emptyVao_);
@@ -526,12 +540,10 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
 
     const float quad[12] = {-1.0f, 0.0f, -1.0f, 1.0f, 0.0f, -1.0f,
                             -1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f};
-    glGenBuffers(1, &groundVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, groundVbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 
     lineCapacity_ = GLint64(4096 * 28);
-    glGenBuffers(1, &lineVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, lineVbo_);
     glBufferData(GL_ARRAY_BUFFER, lineCapacity_, nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -565,7 +577,7 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
     activeTargetOptions_ = options_;
 
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
+    glDepthFunc(GL_LESS);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
@@ -581,40 +593,115 @@ bool GlRenderer::init(ANativeWindow* window, const RendererOptions& options, std
  *  Geometry and atlas
  * ============================================================================================ */
 void GlRenderer::ensureGeometryBuffers() {
-    if (!engine_) return;
+    if (!engine_) {
+        geometryValid_ = false;
+        vertexCount_ = indexCount_ = 0;
+        return;
+    }
     const int32_t vcount = af_engine_vertex_count(engine_);
     const int32_t icount = af_engine_index_count(engine_);
     const af_vertex* verts = af_engine_vertices(engine_);
     const uint32_t* indices = af_engine_indices(engine_);
-    if (vcount <= 0 || !verts) return;
+    const int32_t submeshCount = af_engine_submesh_count(engine_);
+    const af_submesh* submeshes = af_engine_submeshes(engine_);
+    auto rejectGeometry = [&](const char* reason) {
+        geometryValid_ = false;
+        vertexCount_ = vcount;
+        indexCount_ = icount;
+        meshDirty_ = false;
+        std::fprintf(stderr, "[AvatarForge] GLES geometry rejected: %s\n", reason);
+    };
+    if (!meshDirty_ && vertexCount_ == vcount && indexCount_ == icount) return;
+    if (vcount <= 0 || icount <= 0 || !verts || !indices) {
+        rejectGeometry("missing vertices or triangle indices");
+        return;
+    }
+    if (submeshCount < 0 || (submeshCount > 0 && !submeshes)) {
+        rejectGeometry("invalid submesh table");
+        return;
+    }
+    if (GLint64(vcount) > std::numeric_limits<GLsizeiptr>::max() / VertexLayout::stride ||
+        GLint64(icount) > std::numeric_limits<GLsizeiptr>::max() / GLint64(sizeof(uint32_t))) {
+        rejectGeometry("GPU buffer byte size overflows GLsizeiptr");
+        return;
+    }
 
+    /* Validate CPU-side indices and every draw range before any GPU upload or draw. */
+    for (int32_t i = 0; i < icount; ++i) {
+        if (indices[i] >= static_cast<uint32_t>(vcount)) {
+            rejectGeometry("index references a vertex outside the vertex buffer");
+            return;
+        }
+    }
+    for (int32_t i = 0; i < submeshCount; ++i) {
+        const af_submesh& sm = submeshes[i];
+        if (sm.index_offset < 0 || sm.index_count < 0 ||
+            sm.index_offset > icount || sm.index_count > icount - sm.index_offset) {
+            rejectGeometry("submesh index range exceeds the index buffer");
+            return;
+        }
+        if (sm.vertex_offset < 0 || sm.vertex_count < 0 ||
+            sm.vertex_offset > vcount || sm.vertex_count > vcount - sm.vertex_offset) {
+            rejectGeometry("submesh vertex range exceeds the vertex buffer");
+            return;
+        }
+        if (sm.index_count > 0 && sm.vertex_count == 0) {
+            rejectGeometry("non-empty submesh has an empty vertex range");
+            return;
+        }
+        const uint32_t firstVertex = static_cast<uint32_t>(sm.vertex_offset);
+        const uint32_t vertexEnd = firstVertex + static_cast<uint32_t>(sm.vertex_count);
+        for (int32_t j = 0; j < sm.index_count; ++j) {
+            const uint32_t index = indices[sm.index_offset + j];
+            if (index < firstVertex || index >= vertexEnd) {
+                rejectGeometry("submesh index references a vertex outside its declared vertex range");
+                return;
+            }
+        }
+        if ((sm.index_count % 3) != 0) {
+            rejectGeometry("triangle submesh index count is not divisible by three");
+            return;
+        }
+    }
+    geometryValid_ = true;
+
+    auto drainGlErrors = []() { for (int n=0;n<16;++n) { if (glGetError()==GL_NO_ERROR) break; } };
     const GLint64 vbytes = GLint64(vcount) * VertexLayout::stride;
-    if (vertexVbo_ == 0) glGenBuffers(1, &vertexVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
     if (vbytes > vertexCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vbytes + vbytes / 4), nullptr, GL_DYNAMIC_DRAW);
-        vertexCapacity_ = vbytes + vbytes / 4;
-        vertexCount_ = 0;   /* force a full upload below */
+        const GLint64 capacity=vbytes+vbytes/4; drainGlErrors();
+        glBufferData(GL_ARRAY_BUFFER,GLsizeiptr(capacity),nullptr,GL_DYNAMIC_DRAW);
+        const GLenum err=glGetError();
+        if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES vertex allocation failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(capacity));return;}
+        vertexCapacity_=capacity;vertexCount_=0;
     }
-    if (meshDirty_ || vertexCount_ != vcount) {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(vbytes), verts);
-        vertexCount_ = vcount;
+    if(meshDirty_||vertexCount_!=vcount){
+        drainGlErrors();glBufferSubData(GL_ARRAY_BUFFER,0,GLsizeiptr(vbytes),verts);
+        const GLenum err=glGetError();
+        if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES vertex upload failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(vbytes));return;}
+        vertexCount_=vcount;
     }
-
-    if (icount > 0 && indices) {
-        const GLint64 ibytes = GLint64(icount) * sizeof(uint32_t);
-        if (indexIbo_ == 0) glGenBuffers(1, &indexIbo_);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexIbo_);
-        if (ibytes > indexCapacity_) {
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(ibytes + ibytes / 4), nullptr, GL_STATIC_DRAW);
-            indexCapacity_ = ibytes + ibytes / 4;
-            indexCount_ = 0;
+    if(icount>0&&indices){
+        const GLint64 ibytes=GLint64(icount)*sizeof(uint32_t);
+        if(indexIbo_==0)glGenBuffers(1,&indexIbo_);
+        if(indexIbo_==0){geometryValid_=false;std::fprintf(stderr,"[AvatarForge] GLES index buffer creation returned zero\\n");return;}
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,indexIbo_);
+        if(ibytes>indexCapacity_){
+            const GLint64 capacity=ibytes+ibytes/4;drainGlErrors();
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER,GLsizeiptr(capacity),nullptr,GL_STATIC_DRAW);
+            const GLenum err=glGetError();
+            if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES index allocation failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(capacity));return;}
+            indexCapacity_=capacity;indexCount_=0;
         }
-        if (indexCount_ != icount) {
-            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
-            indexCount_ = icount;
+        if(meshDirty_||indexCount_!=icount){
+            drainGlErrors();glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,0,GLsizeiptr(ibytes),indices);
+            const GLenum err=glGetError();
+            if(err!=GL_NO_ERROR){geometryValid_=false;glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);std::fprintf(stderr,"[AvatarForge] GLES index upload failed: error=0x%x bytes=%lld\\n",unsigned(err),static_cast<long long>(ibytes));return;}
+            indexCount_=icount;
         }
     }
+    vertexCount_ = vcount;
+    indexCount_ = icount;
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     meshDirty_ = false;
 }
@@ -847,11 +934,12 @@ void GlRenderer::setClip(int clip, float speed, bool loop) {
  *  Draw
  * ============================================================================================ */
 void GlRenderer::drawShadowPass() {
-    if (!options_.enableShadows || !engine_ || indexCount_ == 0) return;
+    if (!options_.enableShadows || !engine_ || !geometryValid_ || indexCount_ == 0) return;
     const int size = options_.shadowMapSize;
     glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
     glViewport(0, 0, size, size);
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
 
@@ -873,6 +961,7 @@ void GlRenderer::drawForwardPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, msaaFbo_);
     glViewport(0, 0, surfaceWidth_, surfaceHeight_);
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glClearColor(0.055f, 0.075f, 0.11f, 1.0f);
@@ -896,7 +985,9 @@ void GlRenderer::drawForwardPass() {
     }
 
     /* ---- the avatar: one draw per submesh so each gets its own material block ---- */
-    if (engine_ && vertexCount_ > 0 && indexCount_ > 0) {
+    const bool avatarDrawable=engine_&&geometryValid_&&vertexCount_>0&&indexCount_>0;
+    if(!avatarDrawable&&stats_.frames%120==0)std::fprintf(stderr,"[AvatarForge] GLES avatar draw skipped: engine=%d geometryValid=%d uploadedVerts=%d uploadedIndices=%d engineVerts=%d engineIndices=%d\\n",engine_?1:0,geometryValid_?1:0,vertexCount_,indexCount_,engine_?af_engine_vertex_count(engine_):0,engine_?af_engine_index_count(engine_):0);
+    if (avatarDrawable) {
         glUseProgram(forwardProgram_);
         glBindVertexArray(avatarVao_);
         glBindBuffer(GL_ARRAY_BUFFER, vertexVbo_);
@@ -913,11 +1004,21 @@ void GlRenderer::drawForwardPass() {
         const af_submesh* submeshes = af_engine_submeshes(engine_);
         const int n = af_engine_submesh_count(engine_);
         for (int i = 0; i < n; ++i) {
+            const af_submesh& sm = submeshes[i];
+            /* Re-check immediately before converting the element offset to a byte pointer. */
+            if (sm.index_offset < 0 || sm.index_count < 0 ||
+                sm.index_offset > indexCount_ || sm.index_count > indexCount_ - sm.index_offset) {
+                geometryValid_ = false;
+                std::fprintf(stderr, "[AvatarForge] skipped invalid submesh draw range %d\n", i);
+                continue;
+            }
             glBindBufferRange(GL_UNIFORM_BUFFER, 1, materialUbo_, GLintptr(i) * materialStride_,
                               sizeof(MaterialUbo));
-            const int offset = submeshes[i].index_offset;
-            glDrawElements(GL_TRIANGLES, submeshes[i].index_count, GL_UNSIGNED_INT,
-                           reinterpret_cast<const void*>(size_t(offset) * sizeof(uint32_t)));
+            const size_t byteOffset = static_cast<size_t>(sm.index_offset) * sizeof(uint32_t);
+            for(int drain=0;drain<16;++drain){if(glGetError()==GL_NO_ERROR)break;}
+            glDrawElements(GL_TRIANGLES,static_cast<GLsizei>(sm.index_count),GL_UNSIGNED_INT,reinterpret_cast<const void*>(byteOffset));
+            const GLenum drawError=glGetError();
+            if(drawError!=GL_NO_ERROR&&stats_.frames%120==0)std::fprintf(stderr,"[AvatarForge] GLES glDrawElements failed: error=0x%x submesh=%d count=%d offset=%d\\n",unsigned(drawError),i,sm.index_count,sm.index_offset);
             ++drawCalls_;
         }
         triangles_ = indexCount_ / 3;
@@ -1043,8 +1144,10 @@ void GlRenderer::renderFrame(float deltaSeconds) {
         if (!resize(w, h)) return;
     }
 
-    updateScene(deltaSeconds);
+    /* Animation deforms the CPU mesh and refreshes its submesh AABBs. Build the camera,
+       frustum and scene only after those bounds describe the geometry we will upload/draw. */
     updateAnimation(deltaSeconds);
+    updateScene(deltaSeconds);
     ensureGeometryBuffers();
 
     drawShadowPass();
@@ -1117,22 +1220,39 @@ void GlRenderer::destroyTargets() {
 
 void GlRenderer::destroyAll() {
     if (display_ != EGL_NO_DISPLAY && context_ != EGL_NO_CONTEXT) {
-        eglMakeCurrent(display_, surface_, surface_, context_);
-        destroyTargets();
-        const GLuint programs[7] = {forwardProgram_, shadowProgram_, groundProgram_, lineProgram_,
-                                    bloomDownProgram_, bloomUpProgram_, compositeProgram_};
-        for (GLuint p : programs) if (p) glDeleteProgram(p);
-        const GLuint buffers[6] = {cameraUbo_, postUbo_, materialUbo_, vertexVbo_, indexIbo_, groundVbo_};
-        for (GLuint b : buffers) if (b) glDeleteBuffers(1, &b);
-        if (lineVbo_) glDeleteBuffers(1, &lineVbo_);
-        for (int i = 0; i < AF_TEX_COUNT; ++i) if (atlasTexture_[i]) glDeleteTextures(1, &atlasTexture_[i]);
-        const GLuint vaos[4] = {avatarVao_, groundVao_, emptyVao_, lineVao_};
-        for (GLuint v : vaos) if (v) glDeleteVertexArrays(1, &v);
-        eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        const EGLBoolean madeCurrent = eglMakeCurrent(display_, surface_, surface_, context_);
+        if (madeCurrent == EGL_TRUE) {
+            destroyTargets();
+            const GLuint programs[7] = {forwardProgram_, shadowProgram_, groundProgram_, lineProgram_,
+                                        bloomDownProgram_, bloomUpProgram_, compositeProgram_};
+            for (GLuint p : programs) if (p) glDeleteProgram(p);
+            const GLuint buffers[6] = {cameraUbo_, postUbo_, materialUbo_, vertexVbo_, indexIbo_, groundVbo_};
+            for (GLuint b : buffers) if (b) glDeleteBuffers(1, &b);
+            if (lineVbo_) glDeleteBuffers(1, &lineVbo_);
+            for (int i = 0; i < AF_TEX_COUNT; ++i) if (atlasTexture_[i]) glDeleteTextures(1, &atlasTexture_[i]);
+            const GLuint vaos[4] = {avatarVao_, groundVao_, emptyVao_, lineVao_};
+            for (GLuint v : vaos) if (v) glDeleteVertexArrays(1, &v);
+        } else {
+            std::fprintf(stderr, "[AvatarForge] EGL teardown: make-current failed (0x%x); skipping GL deletes\n",
+                         static_cast<unsigned int>(eglGetError()));
+        }
+        /* Unbind before destroying either EGL object. The render thread is the sole owner here. */
+        if (eglGetCurrentContext() == context_) {
+            if (eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) != EGL_TRUE) {
+                std::fprintf(stderr, "[AvatarForge] EGL teardown: unbind failed (0x%x)\n",
+                             static_cast<unsigned int>(eglGetError()));
+            }
+        }
     }
     if (display_ != EGL_NO_DISPLAY) {
-        if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_, surface_);
-        if (context_ != EGL_NO_CONTEXT) eglDestroyContext(display_, context_);
+        if (surface_ != EGL_NO_SURFACE && eglDestroySurface(display_, surface_) != EGL_TRUE) {
+            std::fprintf(stderr, "[AvatarForge] EGL teardown: eglDestroySurface failed (0x%x)\n",
+                         static_cast<unsigned int>(eglGetError()));
+        }
+        if (context_ != EGL_NO_CONTEXT && eglDestroyContext(display_, context_) != EGL_TRUE) {
+            std::fprintf(stderr, "[AvatarForge] EGL teardown: eglDestroyContext failed (0x%x)\n",
+                         static_cast<unsigned int>(eglGetError()));
+        }
         eglTerminate(display_);
     }
     display_ = EGL_NO_DISPLAY;

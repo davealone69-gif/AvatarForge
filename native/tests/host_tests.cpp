@@ -1240,6 +1240,7 @@ static void testShaderTables() {
         {"line", AF_STAGE_VERT},    {"line", AF_STAGE_FRAG},
         {"fullscreen", AF_STAGE_VERT},
         {"bloom_down", AF_STAGE_FRAG}, {"bloom_up", AF_STAGE_FRAG}, {"composite", AF_STAGE_FRAG},
+        {"forward_plus", AF_STAGE_COMP},
     };
     const int wanted = static_cast<int>(sizeof(want) / sizeof(want[0]));
     CHECK(afShaderCount() == wanted, "every pipeline stage is baked into the SPIR-V table (%d of %d)",

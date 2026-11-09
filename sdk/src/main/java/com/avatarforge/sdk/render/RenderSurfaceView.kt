@@ -27,6 +27,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -64,7 +65,9 @@ class RenderSurfaceView @JvmOverloads constructor(
         private set
 
     private var renderer: AvatarRenderer? = null
-    private var visible = false
+    @Volatile private var visible = false
+    @Volatile private var surfaceAvailable = false
+    @Volatile private var released = false
 
     init {
         holder.addCallback(this)
@@ -115,10 +118,11 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Starts/stops the frame loop. Called from the host lifecycle. */
     fun setFrameLoopEnabled(enabled: Boolean) {
+        if (released) return
         visible = enabled
         handler.removeCallbacks(frameLoop)
         frameLoop.resetClock()
-        if (enabled) handler.post(frameLoop)
+        if (enabled && surfaceAvailable) handler.post(frameLoop)
     }
 
     /* ------------------------------------------------------------------ render thread --------- */
@@ -129,10 +133,14 @@ class RenderSurfaceView @JvmOverloads constructor(
         fun resetClock() { lastNs = 0L }
 
         override fun run() {
+            if (!visible || !surfaceAvailable) {
+                resetClock()
+                return
+            }
             val r = renderer
             if (r == null) {
                 resetClock()
-                if (visible) handler.postDelayed(this, FRAME_RETRY_MS)
+                if (visible && surfaceAvailable) handler.postDelayed(this, FRAME_RETRY_MS)
                 return
             }
             val frameStartNs = System.nanoTime()
@@ -147,7 +155,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                 _error.value = t.message ?: t.javaClass.simpleName
                 return
             }
-            if (visible) {
+            if (visible && surfaceAvailable) {
                 /* The previous loop always slept 16 ms *after* doing the render work. A 22 ms
                    frame therefore became 38 ms (~26 FPS), which falsely triggered the quality
                    downgrade. Sleep only for the unused part of the 60 Hz budget. */
@@ -167,8 +175,11 @@ class RenderSurfaceView @JvmOverloads constructor(
     /* ------------------------------------------------------------------ SurfaceHolder --------- */
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        if (released) return
         val surface: Surface = holder.surface
+        surfaceAvailable = true
         handler.post {
+            if (released || !surfaceAvailable) return@post
             try {
                 renderer?.destroy()
                 renderer = AvatarRenderer.create(surface, settings)
@@ -183,7 +194,7 @@ class RenderSurfaceView @JvmOverloads constructor(
                  * Restart it only after the renderer and Surface are both ready.
                  */
                 handler.removeCallbacks(frameLoop)
-                if (visible) handler.post(frameLoop)
+                if (visible && surfaceAvailable) handler.post(frameLoop)
             } catch (t: Throwable) {
                 renderer = null
                 _rendererInfo.value = null
@@ -193,7 +204,9 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (released || !surfaceAvailable) return
         handler.post {
+            if (released || !surfaceAvailable) return@post
             renderer?.resize(width, height)
             if (visible && renderer != null) {
                 handler.removeCallbacks(frameLoop)
@@ -203,16 +216,30 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        /* Synchronous: the renderer must be gone before the Surface is invalidated, otherwise the
-           next frame draws into a dead native window. */
+        if (released) return
+        /* Stop scheduling immediately. The HandlerThread serialises this teardown behind any
+           frame already executing, so no native frame can overlap EGL destruction. */
+        surfaceAvailable = false
+        handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
         val latch = java.util.concurrent.CountDownLatch(1)
-        handler.post {
-            renderer?.destroy()
-            renderer = null
-            rendererInfoValueReset()
-            latch.countDown()
+        val posted = handler.post {
+            try {
+                Log.i(TAG, "surfaceDestroyed: render loop quiesced; EGL teardown starting")
+                renderer?.destroy()
+                renderer = null
+                rendererInfoValueReset()
+                Log.i(TAG, "surfaceDestroyed: renderer destroyed; EGL teardown complete")
+            } catch (t: Throwable) {
+                _error.value = "Surface teardown failed: ${t.message ?: t.javaClass.simpleName}"
+                Log.e(TAG, "surfaceDestroyed: renderer teardown failed", t)
+            } finally {
+                latch.countDown()
+            }
         }
-        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        check(posted) { "render thread rejected surface teardown" }
+        /* Do not time out: Android may invalidate the Surface only after this callback returns. */
+        latch.await()
     }
 
     private fun rendererInfoValueReset() {
@@ -223,15 +250,33 @@ class RenderSurfaceView @JvmOverloads constructor(
 
     /** Call from the host's onDestroy: stops the thread and frees the GPU objects. */
     fun release() {
-        setFrameLoopEnabled(false)
-        val latch = java.util.concurrent.CountDownLatch(1)
-        handler.post {
+        if (released) return
+        released = true
+        visible = false
+        surfaceAvailable = false
+        handler.removeCallbacks(frameLoop)
+        frameLoop.resetClock()
+        if (Looper.myLooper() == thread.looper) {
             renderer?.destroy()
             renderer = null
-            latch.countDown()
+            thread.quitSafely()
+            return
         }
-        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val posted = handler.post {
+            try {
+                Log.i(TAG, "release: render loop quiesced; EGL teardown starting")
+                renderer?.destroy()
+                renderer = null
+                Log.i(TAG, "release: renderer destroyed; EGL teardown complete")
+            } finally {
+                latch.countDown()
+            }
+        }
+        check(posted) { "render thread rejected release" }
+        latch.await()
         thread.quitSafely()
+        thread.join()
     }
 
     /** The engine this view renders; kept for the render-thread closures. */
@@ -248,6 +293,7 @@ class RenderSurfaceView @JvmOverloads constructor(
     }
 
     private companion object {
+        const val TAG = "AvatarForge"
         /* 60 Hz target. The kernel's own budget controller steps quality down if frames take too
            long, so this interval is a ceiling on CPU submissions, not a promise the GPU will
            keep - the honest number is in RendererStats.fps. */

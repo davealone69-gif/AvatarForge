@@ -40,6 +40,7 @@
 #include <vulkan/vulkan_android.h>
 
 #include <algorithm>
+#include <android/log.h>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -2460,7 +2461,9 @@ void VulkanRenderer::recordForwardPass(VkCommandBuffer cmd, uint32_t imageIndex)
     }
 
     /* ---- the avatar --------------------------------------------------------------------------- */
-    if (engine_ && vertexCount_ > 0 && vertexBuffer_ != VK_NULL_HANDLE && indexCount_ > 0) {
+    const bool avatarDrawable=engine_&&vertexCount_>0&&vertexBuffer_!=VK_NULL_HANDLE&&indexCount_>0;
+    if(!avatarDrawable&&stats_.frames%120==0)__android_log_print(ANDROID_LOG_WARN,"AvatarForgeRender","Vulkan avatar draw skipped: engine=%d uploadedVerts=%d uploadedIndices=%d vertexBuffer=%d indexBuffer=%d engineVerts=%d engineIndices=%d",engine_?1:0,vertexCount_,indexCount_,vertexBuffer_!=VK_NULL_HANDLE?1:0,indexBuffer_!=VK_NULL_HANDLE?1:0,engine_?af_engine_vertex_count(engine_):0,engine_?af_engine_index_count(engine_):0);
+    if (avatarDrawable) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline_);
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_, &offset);

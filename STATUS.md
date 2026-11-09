@@ -9,6 +9,15 @@ arm64 debug APK, release APK, and SDK AAR in `artifacts/` were rebuilt from the 
 statically checked. **Nothing has been run on a device yet** — see *Device verification* below for
 what that means and what is outstanding.
 
+### Focused GLES repair branch (2026-11-10)
+
+The branch `fix/gles-glb-integrity-lifecycle` contains focused source changes for GLES VAO buffer
+binding, GLB accessor/index validation, engine submesh bounds, model-aware camera clipping and
+synchronous Surface/EGL teardown. These changes are **not yet build-verified or device-verified**.
+The branch-specific instructions are in `BUILD_AND_VERIFY.md`; the evidence ledger is
+`VERIFICATION_LEDGER.md`. Geometry and lifecycle remain **UNVERIFIED** until the fresh branch APK
+is installed and exercised on the SM-S921B.
+
 ### 2026-10-18 continuation status
 
 - The complete 28-float image-analysis wire format and 1–4 record regressions pass. The full native
