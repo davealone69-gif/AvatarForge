@@ -383,9 +383,13 @@ bool validateVertexAttributeAccessor(const json::Json& doc, const json::Json& pr
     if (std::strcmp(name, "POSITION") == 0) {
         valid = type == "VEC3" && component == 5126 && !normalized;
     } else if (std::strcmp(name, "NORMAL") == 0) {
-        valid = type == "VEC3" && component == 5126 && !normalized;
+        valid = type == "VEC3" &&
+                ((component == 5126 && !normalized) ||
+                 ((component == 5120 || component == 5122) && normalized));
     } else if (std::strcmp(name, "TANGENT") == 0) {
-        valid = type == "VEC4" && component == 5126 && !normalized;
+        valid = type == "VEC4" &&
+                ((component == 5126 && !normalized) ||
+                 ((component == 5120 || component == 5122) && normalized));
     } else if (std::strcmp(name, "TEXCOORD_0") == 0) {
         valid = type == "VEC2" &&
                 ((component == 5126 && !normalized) ||
