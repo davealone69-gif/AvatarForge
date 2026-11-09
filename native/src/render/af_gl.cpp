@@ -673,7 +673,7 @@ void GlRenderer::ensureGeometryBuffers() {
             indexCapacity_ = ibytes + ibytes / 4;
             indexCount_ = 0;
         }
-        if (indexCount_ != icount) {
+        if (meshDirty_ || indexCount_ != icount) {
             glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(ibytes), indices);
             indexCount_ = icount;
         }
