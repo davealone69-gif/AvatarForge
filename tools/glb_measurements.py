@@ -400,7 +400,8 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
                     "uri_present": "uri" in image}
                    for i, image in enumerate(doc.get("images", []))],
         "measurement_confidence": {
-            "world_mesh_bounds": "computed_from_POSITION_vertices_and_node_world_transforms",
+            "world_mesh_bounds": "computed_from_POSITION_vertices_and_node_world_transforms_for_unskinned_mesh_instances_only",
+            "world_mesh_bounds_scope": "active_scene; skinned mesh instances are excluded until skin deformation is evaluated",
             "height": "coordinate_units_only; metric height unavailable" if not scale else
                       "metric conversion supplied externally; validate scale provenance",
             "joint_positions": "computed_from_joint_node_world_origins",
