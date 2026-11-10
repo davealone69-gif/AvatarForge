@@ -214,3 +214,40 @@ is connected. It is deliberately isolated from the production procedural generat
 - **AI integration:** explicitly out of scope until the deterministic measurement/edit/verification loop is closed.
 
 The initial Dropbox search did not locate a file named `diagnostic-seed.glb`. The extractor must not be run against a substitute without recording and approving the exact source asset.
+
+
+### Phase 5 — Reusable components in the other 3D repositories (read-only inventory)
+
+The measurement loop must not overlook existing work elsewhere in the user's repository collection.
+Before reimplementing a capability, screen the relevant repositories and record exact reusable
+components, their build/runtime evidence, dependencies, license, Android suitability and integration
+cost. This is an inventory and evaluation task, not permission to alter or merge donor repositories.
+
+Known repository roles and candidates:
+
+| Repository | Current role / candidate parts | Handling |
+|---|---|---|
+| **3D-Mega-Hub** | Sole integrated Android application and integration target; proven GLB display path for the user's tested fixture/build | Preserve the working path. Integration target only. |
+| **AvatarForge** | Standalone native engine, SDK, procedural generator and test lab; current home of this measurement-extractor work | Keep standalone. Do not turn it into the Hub app. |
+| **3DDD / 3Double D** | Separate Filament + glTF/GLB rendering stack; candidate renderer/import components | Inspect and benchmark independently. No assumed merge. |
+| **3D4ME** | Avatar editor and geometry work | Inspect for reusable editor, geometry and measurement logic. |
+| **Morph-Lab** | 3D game / character work | Inspect for reusable character, mesh and animation components. |
+| **Three.js / Expo GL editor** | Browser/mobile 3D editor work | Inspect asset editing, transform and GLB handling. |
+| **Grok-Girls renderer** | Custom GLES high-definition renderer work | Inspect renderer/material/shader techniques and device evidence. |
+| **Avatar Studio / character-studio projects** | Additional avatar authoring and character tooling | Identify exact repository names and inspect before considering reuse. |
+
+This list is a starting register, not a claim that every item has been freshly inspected or is
+buildable. First enumerate the user's full GitHub repository collection, including forks and
+partially started projects, then classify each candidate. Do not rely on repository names or README
+claims as proof that a component works.
+
+For each candidate component, record: repository and immutable commit SHA; source path and API;
+license/provenance; dependencies; target platforms; build/test/runtime evidence; GLB/glTF version
+and feature coverage; coordinate/unit conventions; rig/skin/morph/animation support; renderer and
+material constraints; and the smallest isolated reuse experiment.
+
+**Hard boundary:** no donor branch edits, cherry-picks, merges, code copying or licensing assumptions
+are authorized by this inventory. Keep donor repositories intact. Any selected component must first
+pass isolated tests and an explicit compatibility review; integration changes belong in
+3D-Mega-Hub only after the user authorizes that integration. AvatarForge remains a standalone
+engine/test lab.
