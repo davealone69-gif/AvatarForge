@@ -1336,6 +1336,30 @@ static void testPoseComposition() {
     CHECK(walkMoved > static_cast<size_t>(n) / 4, "the walk poses most of the body (%zu of %d verts)", walkMoved, n);
     CHECK(nearest(bind, walkA) > 0.05f, "walk displacement is macroscopic (max %.3f m)",
           (double)nearest(bind, walkA));
+    /* Renderer culling bounds must follow the CPU-skinned vertex buffer, not the bind pose. */
+    {
+        const af_submesh* submeshes = af_engine_submeshes(e);
+        const int32_t submeshCount = af_engine_submesh_count(e);
+        bool boundsContainAllVertices = submeshes != nullptr && submeshCount > 0;
+        for (int32_t s = 0; boundsContainAllVertices && s < submeshCount; ++s) {
+            const af_submesh& sm = submeshes[s];
+            if (sm.vertex_offset < 0 || sm.vertex_count < 0 || sm.vertex_offset > n || sm.vertex_count > n - sm.vertex_offset) {
+                boundsContainAllVertices = false;
+                break;
+            }
+            for (int32_t i = sm.vertex_offset; i < sm.vertex_offset + sm.vertex_count; ++i) {
+                const af_vertex& v = walkA[static_cast<size_t>(i)];
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (v.pos[axis] < sm.bounds_min[axis] - 1.0e-4f || v.pos[axis] > sm.bounds_max[axis] + 1.0e-4f) {
+                        boundsContainAllVertices = false;
+                        break;
+                    }
+                }
+                if (!boundsContainAllVertices) break;
+            }
+        }
+        CHECK(boundsContainAllVertices, "post-skinning submesh bounds contain every deformed vertex");
+    }
 
     std::printf("     %d vertices / %d joints; the walk moves %zu of them, max %.3f m\n",
                 n, joints, walkMoved, (double)nearest(bind, walkA));
