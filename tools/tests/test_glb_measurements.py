@@ -110,5 +110,36 @@ class GlbMeasurementTests(unittest.TestCase):
         self.assertEqual(result["coordinate_system"]["units"], "unknown GLB coordinate units")
 
 
+    def test_skinned_mesh_does_not_claim_node_only_world_bounds(self):
+        doc, binary = base_doc()
+        doc["nodes"][0]["skin"] = 0
+        doc["skins"] = [{"joints": [0]}]
+        result = self.run_extract(doc, binary)
+        instance = result["geometry"]["mesh_instances"][0]
+        self.assertTrue(instance["skinned"])
+        self.assertIsNone(instance["world_bounds"])
+        self.assertEqual(instance["bounds_status"], "UNAVAILABLE_WITHOUT_SKIN_DEFORMATION")
+        self.assertIsNone(result["geometry"]["world_bounds"])
+
+    def test_only_active_scene_nodes_contribute_to_bounds(self):
+        doc, binary = base_doc()
+        doc["nodes"].append({"mesh": 0, "translation": [100, 0, 0]})
+        result = self.run_extract(doc, binary)
+        self.assertEqual(result["scene"]["active_node_count"], 1)
+        self.assertEqual(result["scene"]["mesh_instance_count"], 1)
+        self.assertEqual(result["geometry"]["world_bounds"]["max"], [1.0, 1.0, 0.0])
+
+    def test_position_accessor_must_be_float_vec3(self):
+        doc, binary = base_doc()
+        doc["accessors"][0]["type"] = "VEC2"
+        path = make_glb(doc, binary)
+        try:
+            with self.assertRaises(gm.GlbError):
+                gm.extract(path)
+        finally:
+            os.unlink(path)
+
+
+
 if __name__ == "__main__":
     unittest.main()
