@@ -50,6 +50,10 @@ def read_glb(path: str) -> tuple[dict[str, Any], bytes, dict[str, Any]]:
         off = end
     if not chunks or chunks[0][0] != JSON_CHUNK:
         raise GlbError("first chunk must be JSON")
+    if len(chunks[0][1]) % 4:
+        raise GlbError("JSON chunk length must be a multiple of four bytes")
+    if any(len(payload) % 4 for kind, payload in chunks if kind == BIN_CHUNK):
+        raise GlbError("BIN chunk length must be a multiple of four bytes")
     if sum(1 for kind, _ in chunks if kind == JSON_CHUNK) != 1:
         raise GlbError("GLB must contain exactly one JSON chunk")
     if sum(1 for kind, _ in chunks if kind == BIN_CHUNK) > 1:
@@ -65,8 +69,13 @@ def read_glb(path: str) -> tuple[dict[str, Any], bytes, dict[str, Any]]:
     if buffers:
         if len(buffers) != 1 or "uri" in buffers[0]:
             raise GlbError("only one embedded GLB buffer is supported")
-        if buffers[0].get("byteLength", 0) > len(blob):
+        declared_buffer_length = buffers[0].get("byteLength")
+        if not isinstance(declared_buffer_length, int) or declared_buffer_length < 0:
+            raise GlbError("embedded buffer has invalid byteLength")
+        if declared_buffer_length > len(blob):
             raise GlbError("buffer byteLength exceeds BIN chunk")
+        # Exclude GLB BIN chunk alignment padding from all subsequent accessor bounds checks.
+        blob = blob[:declared_buffer_length]
     elif blob:
         raise GlbError("BIN chunk exists without a buffer declaration")
     return doc, blob, {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
@@ -239,8 +248,27 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
     all_world_points = []
     primitive_count = vertex_count = triangle_count = 0
     warnings = []
+    scenes = doc.get("scenes", [])
+    active_scene = doc.get("scene", 0)
+    if scenes:
+        if not isinstance(active_scene, int) or not 0 <= active_scene < len(scenes):
+            raise GlbError(f"active scene index out of range: {active_scene}")
+        roots = scenes[active_scene].get("nodes", [])
+    else:
+        roots = [i for i, parent in enumerate(parents) if parent is None]
+        active_scene = None
+    active_nodes: set[int] = set()
+    stack = list(roots)
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, int) or not 0 <= current < len(nodes):
+            raise GlbError(f"scene references invalid root/child node {current}")
+        if current in active_nodes:
+            continue
+        active_nodes.add(current)
+        stack.extend(nodes[current].get("children", []))
     for ni, node in enumerate(nodes):
-        if "mesh" not in node:
+        if ni not in active_nodes or "mesh" not in node:
             continue
         mi = node["mesh"]
         if not isinstance(mi, int) or not 0 <= mi < len(meshes):
@@ -253,8 +281,17 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
             if "POSITION" not in attrs:
                 warnings.append(f"mesh {mi} primitive {pi} has no POSITION accessor")
                 continue
-            positions = accessor_values(doc, blob, attrs["POSITION"])
-            world_positions = [transform_point(worlds[ni], p[:3]) for p in positions]
+            position_accessors = doc.get("accessors", [])
+            position_index = attrs["POSITION"]
+            if not isinstance(position_index, int) or not 0 <= position_index < len(position_accessors):
+                raise GlbError(f"mesh {mi} primitive {pi} references invalid POSITION accessor")
+            position_accessor = position_accessors[position_index]
+            if position_accessor.get("type") != "VEC3" or position_accessor.get("componentType") != 5126:
+                raise GlbError(f"mesh {mi} primitive {pi} POSITION must be a FLOAT VEC3 accessor")
+            positions = accessor_values(doc, blob, position_index)
+            local_positions = [tuple(p[:3]) for p in positions]
+            is_skinned = "skin" in node
+            world_positions = [] if is_skinned else [transform_point(worlds[ni], p) for p in local_positions]
             instance_points.extend(world_positions)
             all_world_points.extend(world_positions)
             primitive_count += 1
@@ -292,7 +329,15 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
                            "local_accessor_max": doc["accessors"][attrs["POSITION"]].get("max")})
         mesh_instances.append({"node_index": ni, "node_name": node.get("name", f"node_{ni}"),
                                "mesh_index": mi, "mesh_name": meshes[mi].get("name", f"mesh_{mi}"),
-                               "world_bounds": bounds(instance_points), "primitives": p_rows})
+                               "skinned": "skin" in node,
+                               "local_geometry_bounds": bounds([tuple(p[:3]) for prim in prims
+                                   if "POSITION" in prim.get("attributes", {})
+                                   for p in accessor_values(doc, blob, prim["attributes"]["POSITION"])]),
+                               "world_bounds": bounds(instance_points) if "skin" not in node else None,
+                               "bounds_status": "UNAVAILABLE_WITHOUT_SKIN_DEFORMATION" if "skin" in node else "COMPUTED_FROM_NODE_WORLD_TRANSFORM",
+                               "primitives": p_rows})
+        if "skin" in node:
+            warnings.append(f"node {ni}: skinned mesh world bounds are not computed; skin deformation and inverse-bind matrices must be applied")
     joint_rows = []
     for si, skin in enumerate(doc.get("skins", [])):
         joints = skin.get("joints", [])
@@ -326,7 +371,8 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
                               "meters_per_unit": scale,
                               "height_axis": "Y", "height_axis_is_convention_not_proven": True},
         "scene": {"scene_count": len(doc.get("scenes", [])),
-                  "active_scene": doc.get("scene", 0),
+                  "active_scene": active_scene,
+                  "active_node_count": len(active_nodes),
                   "node_count": len(nodes), "mesh_count": len(meshes),
                   "mesh_instance_count": len(mesh_instances),
                   "primitive_count": primitive_count, "vertex_count_sum": vertex_count,
