@@ -120,6 +120,8 @@ class GlbMeasurementTests(unittest.TestCase):
         self.assertIsNone(instance["world_bounds"])
         self.assertEqual(instance["bounds_status"], "UNAVAILABLE_WITHOUT_SKIN_DEFORMATION")
         self.assertIsNone(result["geometry"]["world_bounds"])
+        self.assertIsNone(result["geometry"]["height_axis_units"])
+        self.assertEqual(result["geometry"]["height_status"], "UNAVAILABLE_SKINNED_MESHES_EXCLUDED")
 
     def test_only_active_scene_nodes_contribute_to_bounds(self):
         doc, binary = base_doc()
