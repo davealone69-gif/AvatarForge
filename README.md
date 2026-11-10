@@ -172,6 +172,17 @@ is connected. It is deliberately isolated from the production procedural generat
 - Never overwrite the source. All generated files go to a separate output directory.
 - If the named `diagnostic-seed.glb` is unavailable, stop and report the missing input; do not silently substitute another model.
 
+### Current execution ledger (2026-11-10)
+
+- **Branch:** `work/glb-measurement-pipeline`; based on current `main` with 0 commits behind and 10 commits ahead at the last compare.
+- **Extractor source:** PARTIAL. `tools/glb_measurements.py` validates GLB v2 container lengths, embedded-buffer bounds, accessor offsets/alignment, POSITION format, index ranges and primitive topology. It limits geometry traversal to the active scene and deliberately withholds world bounds/height for skinned meshes until deformation is evaluated.
+- **Regression tests:** PARTIAL. `tools/tests/test_glb_measurements.py` contains synthetic GLB tests for translated bounds, triangle modes, indexed geometry, invalid indices, invalid headers, units, active scenes and skinned-mesh exclusion.
+- **CI definition:** REAL + VERIFIED as a committed workflow file at `.github/workflows/glb-measurements.yml`; execution result is UNVERIFIED because no successful run/check evidence has been retrieved.
+- **Extractor execution:** UNVERIFIED. The tests have not been executed in this environment, and no fixture output has been independently checked yet.
+- **Seed asset:** BLOCKED. Dropbox search found `/mylove.glb` (9,287,272 bytes; Dropbox content hash `388a94e7495e809577356ba6cf9890a13fe38f8cd4c63ba3228109d19a24b398`) but did not find `diagnostic-seed.glb`. No substitute was used and no backup was created.
+- **5% dummy edit / round-trip:** MISSING. This cannot be implemented safely until the exact seed is identified, its skeleton/landmarks are validated, and the extractor has passed its tests.
+- **Donor screening:** PARTIAL. Exact source files and immutable revisions for Grok-Girls, 3DDD, 3d-models and New-app are recorded below. Build, runtime, license and phone evidence remain unverified.
+
 ### Phase 1 — Build the read-only GLB extractor
 
 - Parse the GLB v2 header and JSON/BIN chunks with strict length, alignment, bounds and accessor validation.
