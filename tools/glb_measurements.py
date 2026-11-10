@@ -103,11 +103,20 @@ def accessor_values(doc: dict[str, Any], blob: bytes, accessor_index: int) -> li
         view = views[view_index]
         if view.get("buffer", 0) != 0:
             raise GlbError("only embedded buffer 0 is supported")
-        base = int(view.get("byteOffset", 0)) + byte_offset
+        view_offset = view.get("byteOffset", 0)
+        view_length = view.get("byteLength")
+        if (not isinstance(view_offset, int) or view_offset < 0 or
+                not isinstance(view_length, int) or view_length < 0):
+            raise GlbError(f"accessor {accessor_index}: bufferView has invalid byte range")
+        if not isinstance(byte_offset, int) or byte_offset < 0:
+            raise GlbError(f"accessor {accessor_index}: invalid accessor byteOffset")
+        base = view_offset + byte_offset
         step = int(stride or elem_size)
         if step < elem_size:
             raise GlbError(f"accessor {accessor_index}: byteStride smaller than element")
-        view_end = int(view.get("byteOffset", 0)) + int(view.get("byteLength", 0))
+        if stride is not None and (not isinstance(stride, int) or stride < 4 or stride > 252 or stride % 4):
+            raise GlbError(f"accessor {accessor_index}: invalid glTF byteStride")
+        view_end = view_offset + view_length
         if base < int(view.get("byteOffset", 0)) or (n and base + (n - 1) * step + elem_size > view_end):
             raise GlbError(f"accessor {accessor_index}: data exceeds bufferView")
         if n and base + (n - 1) * step + elem_size > len(blob):
@@ -127,8 +136,13 @@ def accessor_values(doc: dict[str, Any], blob: bytes, accessor_index: int) -> li
 
     if "bufferView" in acc:
         vi = acc["bufferView"]
+        if not isinstance(vi, int) or not 0 <= vi < len(views):
+            raise GlbError(f"accessor {accessor_index}: bufferView index out of range")
+        accessor_offset = acc.get("byteOffset", 0)
+        if not isinstance(accessor_offset, int) or accessor_offset < 0:
+            raise GlbError(f"accessor {accessor_index}: invalid byteOffset")
         view = views[vi]
-        values = decode_from_view(vi, int(acc.get("byteOffset", 0)), count, view.get("byteStride"))
+        values = decode_from_view(vi, accessor_offset, count, view.get("byteStride"))
     sparse = acc.get("sparse")
     if sparse:
         n = sparse.get("count", 0)
@@ -137,8 +151,10 @@ def accessor_values(doc: dict[str, Any], blob: bytes, accessor_index: int) -> li
         ix = sparse["indices"]
         if ix.get("componentType") not in (5121, 5123, 5125):
             raise GlbError(f"accessor {accessor_index}: invalid sparse index type")
-        if ix["bufferView"] >= len(views):
+        if not isinstance(ix.get("bufferView"), int) or not 0 <= ix["bufferView"] < len(views):
             raise GlbError("sparse index bufferView out of range")
+        if not isinstance(ix.get("byteOffset", 0), int) or ix.get("byteOffset", 0) < 0:
+            raise GlbError("sparse indices have invalid byteOffset")
         iv = views[ix["bufferView"]]
         if iv.get("buffer", 0) != 0:
             raise GlbError("sparse indices must use embedded buffer 0")
