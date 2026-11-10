@@ -174,7 +174,7 @@ is connected. It is deliberately isolated from the production procedural generat
 
 ### Current execution ledger (2026-11-10)
 
-- **Branch:** `work/glb-measurement-pipeline`; based on current `main` with 0 commits behind and 19 commits ahead at the last compare.
+- **Branch:** `work/glb-measurement-pipeline`; compared against current `main`: 0 commits behind; changes remain isolated on this branch.
 - **Review:** Draft PR [#24](https://github.com/davealone69-gif/AvatarForge/pull/24) is open and unmerged; it is a review/CI gate, not a release claim.
 - **Extractor source:** PARTIAL. `tools/glb_measurements.py` validates GLB v2 container lengths, embedded-buffer bounds, accessor offsets/alignment, POSITION format, index ranges and primitive topology. It limits geometry traversal to the active scene and deliberately withholds world bounds/height for skinned meshes until deformation is evaluated.
 - **Regression tests:** PARTIAL. `tools/tests/test_glb_measurements.py` contains synthetic GLB tests for translated bounds, triangle modes, indexed geometry, invalid indices, invalid headers, units, active scenes and skinned-mesh exclusion.
