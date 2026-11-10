@@ -586,6 +586,25 @@ class AvatarEngine private constructor(private val appContext: Context) {
         return destination
     }
 
+    /**
+     * Imports a self-contained GLB into this engine. The renderer already attached to [nativeHandle]
+     * sees the imported geometry after [AvatarRenderer.invalidateMesh] or a fresh attach.
+     *
+     * The native importer currently applies geometry, indices, metallic-roughness material values
+     * and embedded PNG base-colour textures. It deliberately reports unsupported skin/animation
+     * adoption as warnings and does not pretend the imported skeleton is active.
+     *
+     * Returns [vertices, indices, submeshes, joints, materials] after the import.
+     */
+    fun importGlb(source: File): IntArray {
+        require(source.isFile && source.canRead()) { "GLB source is not a readable file: ${source.absolutePath}" }
+        require(source.extension.equals("glb", ignoreCase = true)) { "GLB source must have a .glb extension" }
+        val h = openHandle()
+        val rc = NativeBridge.engineImportGlb(h, source.absolutePath)
+        check(rc == 0) { "GLB import failed: ${NativeBridge.engineLastError(h)}" }
+        return counts()
+    }
+
     /** Exports the same .glb to memory: the SDK contract offers both, and callers embedding the
      *  model in another container need the bytes without a second file. */
     fun exportGlbBytes(source: EngineResult): ByteArray {
