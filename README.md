@@ -157,3 +157,60 @@ Install from the phone: download the APK, open it in Downloads, and allow instal
 ## Renderer recovery retest (2026-10-21)
 
 A separate recovery build is available for retesting the reported black-viewer / 0 FPS failure. Its physical-device result is still **UNVERIFIED**. See [renderer recovery notes and checksums](docs/RENDERER_RECOVERY_2026-10-21.md) for the bundle identity, exact checksums, download source, and device acceptance checklist. The APK/AAR binaries are not GitHub release assets yet; the notes link to the original Dropbox bundle.
+
+
+## GLB measurement pipeline: implementation plan (2026-11-10)
+
+This work establishes a reproducible measurement and controlled-edit loop before any AI generator
+is connected. It is deliberately isolated from the production procedural generator and renderer.
+
+### Phase 0 — Preserve the source asset
+
+- Identify the exact diagnostic seed GLB and verify its Dropbox metadata before use.
+- Create a separate, immutable backup copy before parsing or modifying the asset.
+- Record source path, byte size, Dropbox content hash when available, and a locally computed SHA-256.
+- Never overwrite the source. All generated files go to a separate output directory.
+- If the named `diagnostic-seed.glb` is unavailable, stop and report the missing input; do not silently substitute another model.
+
+### Phase 1 — Build the read-only GLB extractor
+
+- Parse the GLB v2 header and JSON/BIN chunks with strict length, alignment, bounds and accessor validation.
+- Resolve node hierarchy and local-to-world transforms, including matrix and TRS forms.
+- Report world-space mesh bounds, dimensions, vertex/triangle counts and coordinate-axis convention.
+- Report whether metric units are actually known. GLB coordinates are not assumed to be metres without external scale evidence.
+- If skins exist, report joint names, hierarchy, inverse-bind-matrix availability and world-space joint positions.
+- Distinguish skeletal joint positions from geometric landmarks; do not invent missing anatomy.
+- Emit deterministic JSON with source identity, measurements, confidence/availability flags and parser warnings.
+
+### Phase 2 — Controlled dummy edit
+
+- Apply one explicit edit: increase measured leg length by 5%.
+- Only run the edit when the source has a usable skeleton and a validated leg-joint chain, or when an explicitly selected geometric method is supported.
+- Preserve unrelated geometry, skin weights, materials, textures, node hierarchy and GLB validity.
+- Write a new GLB; never modify the seed or its backup.
+- If the required joints/landmarks cannot be identified safely, fail closed with a specific reason rather than guessing.
+
+### Phase 3 — Round-trip verification
+
+- Re-run the extractor on the edited GLB.
+- Compare requested and observed changes, including absolute and percentage deltas.
+- Assert the leg-length delta is 5% within a documented tolerance and unrelated dimensions remain unchanged within tolerance.
+- Validate GLB structure and record output SHA-256, tool version, parameters and pass/fail result.
+- Include automated fixtures for malformed headers, invalid accessors, transforms, skinned and unskinned assets.
+
+### Phase 4 — Visual and renderer diagnostics
+
+- Keep visual inspection separate from numerical measurement.
+- Record the reported blue-texture glitch and investigate material/texture assignment, depth overlap and Z-fighting independently.
+- Do not label overlapping surfaces as Z-fighting without depth/geometry evidence.
+- Preserve the known working GLB display path; no renderer or production-generator changes are part of this measurement task.
+
+### Acceptance gates and status
+
+- **Backup:** REAL + VERIFIED only after a distinct backup exists and its content hash matches the source.
+- **Extractor:** REAL + VERIFIED only after tests pass and output is independently checked against known fixture values.
+- **Dummy edit:** REAL + VERIFIED only after the generated GLB re-imports and the requested measurement delta is observed.
+- **Visual comparison:** UNVERIFIED until the source and output are inspected under matched camera, scale and lighting.
+- **AI integration:** explicitly out of scope until the deterministic measurement/edit/verification loop is closed.
+
+The initial Dropbox search did not locate a file named `diagnostic-seed.glb`. The extractor must not be run against a substitute without recording and approving the exact source asset.
