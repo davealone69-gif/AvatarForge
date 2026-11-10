@@ -117,7 +117,11 @@ def accessor_values(doc: dict[str, Any], blob: bytes, accessor_index: int) -> li
         if stride is not None and (not isinstance(stride, int) or stride < 4 or stride > 252 or stride % 4):
             raise GlbError(f"accessor {accessor_index}: invalid glTF byteStride")
         view_end = view_offset + view_length
-        if base < int(view.get("byteOffset", 0)) or (n and base + (n - 1) * step + elem_size > view_end):
+        if view_end > len(blob):
+            raise GlbError(f"accessor {accessor_index}: bufferView exceeds declared buffer length")
+        if base % component_size or step % component_size:
+            raise GlbError(f"accessor {accessor_index}: data is not component-aligned")
+        if base < view_offset or (n and base + (n - 1) * step + elem_size > view_end):
             raise GlbError(f"accessor {accessor_index}: data exceeds bufferView")
         if n and base + (n - 1) * step + elem_size > len(blob):
             raise GlbError(f"accessor {accessor_index}: data exceeds BIN chunk")
