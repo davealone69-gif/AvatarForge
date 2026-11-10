@@ -1,8 +1,16 @@
 # AvatarForge
 
-A standalone Android app that **generates, auto-rigs, animates and renders a photorealistic
-full-body 3D avatar entirely on the device** — from a text prompt, a photo, or a two-image
-multi-reference flow.
+A standalone Android 3D engine, avatar-generation SDK and test lab. It contains a deterministic
+procedural avatar generator, a separate GLB import/export pipeline, native rigging and animation,
+and custom rendering backends. These are distinct capabilities: successful GLB display does not
+prove generated avatars have the same visual quality, and generator host tests do not prove Android
+GPU rendering.
+
+**Generation status:** the procedural pipeline is implemented and has host-side geometry, rig,
+blendshape and GLB tests. Its visual likeness, facial detail, anatomy, proportions, material realism
+and quality against real reference models still need measured comparison. Photo analysis currently
+feeds structured measurements/features into the generator; it is not a neural identity-reconstruction
+system. Do not describe it as photorealistic reconstruction until reference-image comparisons prove it.
 
 No server. No network of any kind. No game engine. The app must work in airplane mode, and an
 `INTERNET` permission in the manifest is treated as a build failure.
@@ -20,14 +28,52 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
 
 ## Status, in one paragraph
 
-The kernel, renderer, SDK and app are written and build. The host test harness passes **386 checks
-with 0 failures**; the C++ kernel implements **47/47** ABI symbols, and the Rust core implements
-15/47 against the same ABI with byte-identical results on everything it covers. **Nothing in this
-repository has been run on a physical Android device yet** — there is no phone and no GPU in the
-build environment — so the honest claim is *implemented and host-verified*, not *device-proven*.
-`DEVICE.md` is the ordered sheet a human runs on hardware, and `tools/device_check.sh` collects the
-evidence in one command. `STATUS.md` keeps the per-phase state and the list of what is deliberately
-still missing.
+The kernel, renderer, SDK and app have build and host-test evidence recorded in STATUS.md. That
+status file currently contains conflicting host-check totals (386 and 405), so the exact current
+count is **UNVERIFIED until a fresh harness run reconciles it**. The C++ kernel implements 47/47
+ABI symbols; the Rust core implements 15/47 with parity on the symbols it covers. Physical-device
+rendering and generation quality are not established by those host checks. DEVICE.md is the ordered
+hardware test sheet, and tools/device_check.sh collects evidence when a device is attached.
+
+
+## Reference-model benchmark: mylove.glb
+
+The user's supplied reference file is recorded as a **static display/geometry benchmark**, not as a
+ready-made generator input. Its inspected metadata is:
+
+| Property | Reference model |
+|---|---:|
+| File size | 9,287,272 bytes (about 9.29 MB) |
+| glTF | GLB 2.0, valid declared file length |
+| Scene / nodes | 1 scene / 2 nodes |
+| Meshes / materials | 1 mesh / 1 material |
+| Geometry | 163,756 vertices / 144,073 triangles |
+| Textures | 2 images/textures, both 2048 × 2048 WebP |
+| Vertex attributes | positions, normals and UVs present |
+| Skeleton / animations | none / 0 animations |
+
+The generator's existing host records describe different test fixtures: one generated model was
+reported at 285,657 vertices / 382,388 triangles; a separate 34 MB GLB round-trip fixture contains
+266,797 shared-pool vertices, 10 primitives, 71 joints, 52 morph targets and 5 PNG images. These are
+not the same asset and must not be collapsed into one measurement.
+
+**What the comparison says:** the generator already creates more raw geometry than the reference
+model in the cited host fixture, so simply increasing polygon count is not the next quality fix. The
+reference is static and has no rig or morph targets; it cannot validate generated skinning or facial
+animation. The useful next comparisons are silhouette/proportions, face topology/detail, normals,
+UV layout, texture quality, material response and measured body dimensions.
+
+**Not safely transferable yet:** the available GLB inspection record contains no trustworthy tape
+measurements or af_spec values (height, chest, waist, hip, shoulder width, inseam, etc.). Vertex
+count and triangle count are not body measurements. Do not feed guessed anthropometry into the
+procedural generator. Extract the model's position bounds and metric scale first; then derive
+cross-section/landmark measurements where topology permits, and record confidence for every value.
+
+Visual comparison inputs supplied on 2026-11-10 are in the user's Dropbox /Model folder:
+generated_avatar_diagnostic.png and two Screenshot_20261110_*.jpg captures. A measured side-by-side
+visual review is still **PENDING**; the image files are not treated as numerical geometry evidence.
+
+See docs/REFERENCE_MODEL_COMPARISON.md for the detailed feature matrix and next measurement steps.
 
 ## Repository layout
 
