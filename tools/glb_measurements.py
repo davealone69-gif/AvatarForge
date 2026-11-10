@@ -259,19 +259,32 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
             all_world_points.extend(world_positions)
             primitive_count += 1
             vertex_count += len(positions)
+            mode = prim.get("mode", 4)
+            if not isinstance(mode, int) or mode not in range(7):
+                raise GlbError(f"mesh {mi} primitive {pi} has invalid glTF primitive mode {mode}")
             indices = prim.get("indices")
-            tris = 0
+            element_count = len(positions)
             if indices is not None:
+                index_accessor = doc.get("accessors", [])[indices]
+                if index_accessor.get("type") != "SCALAR" or index_accessor.get("componentType") not in (5121, 5123, 5125):
+                    raise GlbError(f"mesh {mi} primitive {pi} indices must use an unsigned SCALAR accessor")
                 idx = accessor_values(doc, blob, indices)
-                if len(idx) % 3:
-                    warnings.append(f"mesh {mi} primitive {pi} index count is not divisible by 3")
-                else:
-                    tris = len(idx) // 3
-            elif prim.get("mode", 4) == 4:
-                tris = len(positions) // 3
+                if any(v < 0 or v >= len(positions) or not float(v).is_integer() for row in idx for v in row):
+                    raise GlbError(f"mesh {mi} primitive {pi} contains an out-of-range or non-integer index")
+                element_count = len(idx)
+            if mode == 4:
+                tris = element_count // 3
+                if element_count % 3:
+                    warnings.append(f"mesh {mi} primitive {pi}: TRIANGLES element count is not divisible by 3; trailing elements ignored")
+            elif mode in (5, 6):
+                tris = max(0, element_count - 2)
+            else:
+                tris = 0
+            if mode in (0, 1, 2, 3):
+                warnings.append(f"mesh {mi} primitive {pi}: primitive mode {mode} is not a triangle topology; triangle count is zero")
             triangle_count += tris
-            p_rows.append({"primitive": pi, "position_accessor": attrs["POSITION"],
-                           "vertex_count": len(positions), "triangle_count": tris,
+            p_rows.append({"primitive": pi, "mode": mode, "position_accessor": attrs["POSITION"],
+                           "vertex_count": len(positions), "element_count": element_count, "triangle_count": tris,
                            "local_accessor_min": doc["accessors"][attrs["POSITION"]].get("min"),
                            "local_accessor_max": doc["accessors"][attrs["POSITION"]].get("max")})
         mesh_instances.append({"node_index": ni, "node_name": node.get("name", f"node_{ni}"),
