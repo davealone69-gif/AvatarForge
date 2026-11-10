@@ -749,6 +749,21 @@ JNIEXPORT jlong JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineCop
     return jlong(tex.byte_size);
 }
 
+JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineImportGlb(
+    JNIEnv* env, jobject, jlong h, jstring path) {
+    EngineHandle* handle = asHandle(h);
+    if (!path) {
+        throwIllegalArgument(env, "GLB path is null");
+        return AF_ERR_INVALID_ARG;
+    }
+    const char* text = env->GetStringUTFChars(path, nullptr);
+    if (!text) return AF_ERR_INVALID_ARG;
+    const jint rc = guarded(env, handle, "af_engine_import_glb",
+                            [&](af_engine* e) { return af_engine_import_glb(e, text); });
+    env->ReleaseStringUTFChars(path, text);
+    return rc;
+}
+
 JNIEXPORT jint JNICALL Java_com_avatarforge_sdk_internal_NativeBridge_engineExportGlb(
     JNIEnv* env, jobject, jlong h, jstring path) {
     EngineHandle* handle = asHandle(h);
