@@ -246,6 +246,26 @@ license/provenance; dependencies; target platforms; build/test/runtime evidence;
 and feature coverage; coordinate/unit conventions; rig/skin/morph/animation support; renderer and
 material constraints; and the smallest isolated reuse experiment.
 
+### Fresh source-level donor screening (2026-11-10)
+
+The following candidate files were located and fetched from immutable source revisions. This confirms
+that the files exist at those revisions; it does **not** establish that they build, run correctly,
+are licensed for reuse, or work on the target Samsung device.
+
+| Donor | Inspected source at exact revision | Candidate capability | Current evidence / next gate |
+|---|---|---|---|
+| **Grok-Girls** | [GltfAvatarLoader.kt](https://github.com/davealone69-gif/Grok-Girls/blob/fd638fde15ab8dae51bfeec8da320590128d1e49/native/app/src/main/java/com/aura/avatarstudio/renderer/GltfAvatarLoader.kt) (blob `33fba04869dd1b4b4ffc678d3d5e708ab6fe10a5`); [native README](https://github.com/davealone69-gif/Grok-Girls/blob/fd638fde15ab8dae51bfeec8da320590128d1e49/native/README.md) | Android GLB parser, PBR material data, skin joints/weights, morph targets; native GLES 3.0 renderer and animation described by its README | **SOURCE INSPECTED; BUILD/RUNTIME/LICENCE UNVERIFIED.** Inspect accessor edge cases, image decoding, shader limits and GL-thread ownership; run fixture parity tests before any reuse. |
+| **3DDD** | [GltfDocument.kt](https://github.com/davealone69-gif/3DDD/blob/186e54f05847d5e73ac40c9477a18d18108569dc/app/src/main/java/com/threedd/studio/data/gltf/GltfDocument.kt) (blob `1b45a9a593346bf3d83011f6982504135cb97d66`); [RuntimePipelineTest.kt](https://github.com/davealone69-gif/3DDD/blob/186e54f05847d5e73ac40c9477a18d18108569dc/app/src/androidTest/java/com/threedd/studio/RuntimePipelineTest.kt) (blob `e7205b07d03ab6199bcc19e5358ad03efa707e32`); [README](https://github.com/davealone69-gif/3DDD/blob/186e54f05847d5e73ac40c9477a18d18108569dc/README.md) | Filament renderer, glTF/GLB parsing, node transforms, skinning, animation, morphs, texture decode and runtime tests | **SOURCE + TESTS INSPECTED; CURRENT CI/DEVICE/LICENCE UNVERIFIED.** Evaluate as an isolated renderer/import reference; verify native library loading, backend selection, teardown and target-device compatibility. |
+| **3d-models** | [SkeletonMatrices.kt](https://github.com/davealone69-gif/3d-models/blob/d0ba624ef7ce9174b5425476518c4662d340a377/app/src/main/java/com/aura/avatarstudio/renderer/SkeletonMatrices.kt) (blob `703bf5657f8847abe13703ed7b66ae6a3186701d`); [GltfTextures.kt](https://github.com/davealone69-gif/3d-models/blob/d0ba624ef7ce9174b5425476518c4662d340a377/app/src/main/java/com/aura/avatarstudio/renderer/GltfTextures.kt) (blob `5b5ac38661e0fe5637646172f3a21c2275584828`) | Android GLES skeleton matrix calculation and glTF texture/sampler handling | **SOURCE INSPECTED; BUILD/RUNTIME/LICENCE UNVERIFIED.** Compare matrix conventions and texture orientation against reference fixtures. |
+| **New-app** | [FilamentRenderer.kt](https://github.com/davealone69-gif/New-app/blob/231c37ae898b36bb2f5da492bcf98c3b4f9720bc/app/src/main/java/com/threedoubled/app/renderer/FilamentRenderer.kt) (blob `10f1b9c0e8b4f9ba6376297089193c8b9c8eb0ec`) | Separate Filament renderer / viewport lifecycle | **SOURCE INSPECTED; BUILD/RUNTIME/LICENCE UNVERIFIED.** Compare engine singleton, GL thread, surface lifecycle and destroy order; do not assume it solves the Hub's native library loading failure. |
+
+The connected GitHub owner inventory returned 100 repositories on the first page and no second page.
+This is the visible connected-account inventory, not proof that every fork or external repository
+has been covered. Search also surfaced related projects such as `3d-models`, `Grok-Girls`,
+`New-app`, `3DDD`, `3d4me`, `Morph-Lab`, `Aura-Studio`, `Aura-Studio-Avatar`,
+`AuraAvatarStudio`, `3D-Mega-Hub` and `AvatarForge`. Continue screening the full inventory
+before calling the donor audit complete.
+
 **Hard boundary:** no donor branch edits, cherry-picks, merges, code copying or licensing assumptions
 are authorized by this inventory. Keep donor repositories intact. Any selected component must first
 pass isolated tests and an explicit compatibility review; integration changes belong in
