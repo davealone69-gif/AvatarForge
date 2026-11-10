@@ -368,11 +368,11 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
         joints = skin.get("joints", [])
         if not isinstance(joints, list) or not joints:
             raise GlbError(f"skin {si} must contain at least one joint")
-        if len(joints) != len(set(joints)):
-            raise GlbError(f"skin {si} contains duplicate joint nodes")
         for joint_node in joints:
             if not isinstance(joint_node, int) or not 0 <= joint_node < len(nodes):
                 raise GlbError(f"skin {si} contains invalid joint node {joint_node}")
+        if len(joints) != len(set(joints)):
+            raise GlbError(f"skin {si} contains duplicate joint nodes")
         skeleton_root = skin.get("skeleton")
         if skeleton_root is not None and (not isinstance(skeleton_root, int) or not 0 <= skeleton_root < len(nodes)):
             raise GlbError(f"skin {si} has invalid skeleton root {skeleton_root}")
