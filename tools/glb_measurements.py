@@ -380,8 +380,11 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
     if scale is not None and (not math.isfinite(scale) or scale <= 0):
         raise GlbError("--meters-per-unit must be a finite positive number")
     dimensions = overall["dimensions"] if overall else None
+    has_skinned_meshes = any(instance["skinned"] for instance in mesh_instances)
     height_axis = 1  # glTF has no mandatory up axis; this is a convention, not an assumption.
-    height_units = dimensions[height_axis] if dimensions else None
+    height_units = dimensions[height_axis] if dimensions and not has_skinned_meshes else None
+    if has_skinned_meshes:
+        warnings.append("overall world bounds and height are partial because active skinned mesh instances are excluded")
     return {
         "schema": "avatarforge.glb-measurements.v1",
         "source": {"path": os.path.basename(path), **file_info},
@@ -400,7 +403,9 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
                   "skin_count": len(doc.get("skins", [])),
                   "animation_count": len(doc.get("animations", []))},
         "geometry": {"world_bounds": overall,
+                     "world_bounds_status": "PARTIAL_SKINNED_MESHES_EXCLUDED" if has_skinned_meshes else "COMPLETE_FOR_ACTIVE_UNSKINNED_MESHES",
                      "height_axis_units": height_units,
+                     "height_status": "UNAVAILABLE_SKINNED_MESHES_EXCLUDED" if has_skinned_meshes else "COORDINATE_UNITS_ONLY_UP_AXIS_UNVERIFIED",
                      "height_m": height_units * scale if height_units is not None and scale else None,
                      "mesh_instances": mesh_instances},
         "skins": [{"skin_index": i, "name": skin.get("name"),
