@@ -180,7 +180,7 @@ is connected. It is deliberately isolated from the production procedural generat
 - **Regression tests:** PARTIAL. `tools/tests/test_glb_measurements.py` contains synthetic GLB tests for translated bounds, triangle modes, indexed geometry, invalid indices, invalid headers, units, active scenes and skinned-mesh exclusion.
 - **CI definition:** REAL + VERIFIED as a committed workflow file at `.github/workflows/glb-measurements.yml`; execution result is UNVERIFIED because no successful run/check evidence has been retrieved.
 - **Extractor execution:** UNVERIFIED. The tests have not been executed in this environment, and no fixture output has been independently checked yet.
-- **Seed asset:** BLOCKED. Dropbox search found `/mylove.glb` (9,287,272 bytes; Dropbox content hash `388a94e7495e809577356ba6cf9890a13fe38f8cd4c63ba3228109d19a24b398`) but did not find `diagnostic-seed.glb`. No substitute was used and no backup was created.
+- **Seed asset:** BLOCKED. Dropbox searches did not find `diagnostic-seed.glb`. `/mylove.glb` (9,287,272 bytes; Dropbox content hash `388a94e7495e809577356ba6cf9890a13fe38f8cd4c63ba3228109d19a24b398`) and `/3d finally kind of/avatar-1337.glb` (34,558,456 bytes; Dropbox revision `0165e0b7c6377670000000368f04ea3`) exist as separate assets. Neither has been substituted, edited or backed up.
 - **5% dummy edit / round-trip:** MISSING. This cannot be implemented safely until the exact seed is identified, its skeleton/landmarks are validated, and the extractor has passed its tests.
 - **Donor screening:** PARTIAL. Exact source files and immutable revisions for Grok-Girls, 3DDD, 3d-models and New-app are recorded below. Build, runtime, license and phone evidence remain unverified.
 
