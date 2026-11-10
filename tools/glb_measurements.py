@@ -293,6 +293,11 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
         mi = node["mesh"]
         if not isinstance(mi, int) or not 0 <= mi < len(meshes):
             raise GlbError(f"node {ni} references invalid mesh {mi}")
+        if "skin" in node:
+            skin_index = node["skin"]
+            skins = doc.get("skins", [])
+            if not isinstance(skin_index, int) or not 0 <= skin_index < len(skins):
+                raise GlbError(f"node {ni} references invalid skin {skin_index}")
         prims = meshes[mi].get("primitives", [])
         instance_points = []
         p_rows = []
@@ -361,10 +366,28 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
     joint_rows = []
     for si, skin in enumerate(doc.get("skins", [])):
         joints = skin.get("joints", [])
+        if not isinstance(joints, list) or not joints:
+            raise GlbError(f"skin {si} must contain at least one joint")
+        if len(joints) != len(set(joints)):
+            raise GlbError(f"skin {si} contains duplicate joint nodes")
+        for joint_node in joints:
+            if not isinstance(joint_node, int) or not 0 <= joint_node < len(nodes):
+                raise GlbError(f"skin {si} contains invalid joint node {joint_node}")
+        skeleton_root = skin.get("skeleton")
+        if skeleton_root is not None and (not isinstance(skeleton_root, int) or not 0 <= skeleton_root < len(nodes)):
+            raise GlbError(f"skin {si} has invalid skeleton root {skeleton_root}")
         ibm_index = skin.get("inverseBindMatrices")
-        ibms = accessor_values(doc, blob, ibm_index) if ibm_index is not None else None
-        if ibms is not None and len(ibms) != len(joints):
-            warnings.append(f"skin {si}: inverseBindMatrices count {len(ibms)} != joints {len(joints)}")
+        ibms = None
+        if ibm_index is not None:
+            accessors = doc.get("accessors", [])
+            if not isinstance(ibm_index, int) or not 0 <= ibm_index < len(accessors):
+                raise GlbError(f"skin {si} has invalid inverseBindMatrices accessor")
+            ibm_accessor = accessors[ibm_index]
+            if ibm_accessor.get("type") != "MAT4" or ibm_accessor.get("componentType") != 5126:
+                raise GlbError(f"skin {si} inverseBindMatrices must be a FLOAT MAT4 accessor")
+            if ibm_accessor.get("count") != len(joints):
+                raise GlbError(f"skin {si} inverseBindMatrices count must equal joint count")
+            ibms = accessor_values(doc, blob, ibm_index)
         for ji, ni in enumerate(joints):
             if not isinstance(ni, int) or not 0 <= ni < len(nodes):
                 raise GlbError(f"skin {si} joint {ji} references invalid node")
