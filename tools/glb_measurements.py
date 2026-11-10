@@ -265,7 +265,10 @@ def extract(path: str, meters_per_unit: float | None = None) -> dict[str, Any]:
             indices = prim.get("indices")
             element_count = len(positions)
             if indices is not None:
-                index_accessor = doc.get("accessors", [])[indices]
+                accessors = doc.get("accessors", [])
+                if not isinstance(indices, int) or not 0 <= indices < len(accessors):
+                    raise GlbError(f"mesh {mi} primitive {pi} references invalid index accessor {indices}")
+                index_accessor = accessors[indices]
                 if index_accessor.get("type") != "SCALAR" or index_accessor.get("componentType") not in (5121, 5123, 5125):
                     raise GlbError(f"mesh {mi} primitive {pi} indices must use an unsigned SCALAR accessor")
                 idx = accessor_values(doc, blob, indices)
