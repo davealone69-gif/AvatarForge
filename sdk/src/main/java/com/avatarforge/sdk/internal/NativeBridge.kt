@@ -90,6 +90,8 @@ internal object NativeBridge {
 
     external fun engineStage(handle: Long, stage: Int): Int
     external fun engineRunAll(handle: Long): Int
+    /** Imports a self-contained GLB into the engine's renderable mesh. */
+    external fun engineImportGlb(handle: Long, path: String): Int
     external fun engineDirtyMask(handle: Long): Int
 
     /* ------------------------------------------------------------------ posing --------------- */

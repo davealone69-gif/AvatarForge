@@ -12,6 +12,7 @@
 package com.avatarforge.sdk.render
 
 import android.view.Surface
+import com.avatarforge.sdk.AvatarEngine
 import com.avatarforge.sdk.internal.NativeBridge
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -158,6 +159,20 @@ class AvatarRenderer private constructor(private var handle: Long) {
         val rc = NativeBridge.rendererAttachEngine(handle, engineHandle)
         check(rc == 0) { "renderer refused the engine (${NativeBridge.engineLastError(engineHandle)})" }
         if (invalidate) NativeBridge.rendererInvalidateMesh(handle)
+    }
+
+    /**
+     * Imports a GLB and immediately attaches the updated engine buffers to this renderer.
+     * Must be called on this renderer's owning render thread. The engine must not be used
+     * concurrently from another thread during the import.
+     *
+     * The returned counters are [vertices, indices, submeshes, joints, materials].
+     * Imported foreign skinning and animation are not activated by the current engine importer.
+     */
+    fun importGlb(engine: AvatarEngine, source: java.io.File): IntArray {
+        val result = engine.importGlb(source)
+        attachEngine(engine.nativeHandle, invalidate = true)
+        return result
     }
 
     fun invalidateMesh() = NativeBridge.rendererInvalidateMesh(handle)
