@@ -222,3 +222,12 @@ The user also supplied a full source snapshot in Dropbox:
 - **UNVERIFIED (current):** current Hub integration of the complete AvatarForge engine. A README, copied source tree, AAR or passing host test alone does not prove runtime integration.
 - No current device test is implied by this handoff record.
 
+
+
+## Interim product architecture and adult-anatomy status (2026-11-15)
+
+- **Do not split the product into multiple apps yet.** Keep the integrated user experience together while the avatar quality/runtime foundations are being brought to target quality. Preserve clear internal subsystem/API boundaries and independent build/test seams so a later split is possible without a rewrite. Reassess splitting only when measured complexity, ownership, release cadence, security or performance justifies it.
+- AvatarForge remains the reusable engine/SDK and test lab; it is not being converted into a second competing product UI. Integration into 3D-Mega-Hub must preserve AvatarForge's standalone buildability.
+- **Adult anatomy: PARTIAL / UNVERIFIED.** The branch contains an adult-only customization contract at `config/customization/adult-anatomy.inputs.json`, a user input schema at `requirements/custom-inputs/adult-anatomy.user.json`, and SDK safety tests at `sdk/src/test/java/com/avatarforge/sdk/AdultSafetyTest.kt`. The contract explicitly marks all detailed genital/anatomy controls `BLOCKED_ENGINE_GEOMETRY` and says it is not proof geometry exists. The SDK gate requires explicit adult-mode confirmation and age 18+, and rejects minor/teen prompt markers for unclothed generation. These are code/test contracts, not proof of a working adult anatomical mesh or rendered output.
+- Keep adult mode disabled by default, separately opt-in, with a clear 18+ gate, adult-only fictional subjects, consent/ownership checks for reference material, private handling of adult assets, and provider-policy checks. Reject minors and ambiguous-age prompts. Never report a provider as supporting adult output without a successful end-to-end generation test.
+- Next adult-engine work is not a UI toggle: implement and validate the missing anatomy geometry/deformation/material/LOD path behind the existing contract, then verify actual rendered output and performance on GLES. Keep controls hidden while their engine geometry remains blocked.
