@@ -18,6 +18,7 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                               GLB export / GLB import ◀───────────────┘
 ```
 
+- [Adult model, render and video integration](docs/ADULT_MODEL_RENDER_VIDEO_INTEGRATION.md): Grok-Girls visual/video port scope, Blender/MPFB2 anatomy pipeline, real 3D video requirements and acceptance gates.
 ## Status, in one paragraph
 
 The current native source passes **464 host checks with 0 failures**; the C++ kernel implements **47/47**
