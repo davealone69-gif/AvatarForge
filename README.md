@@ -14,7 +14,7 @@ photo ───────┼──▶ anthropometry ─▶ SDF body field ─�
                        └──▶ skeleton ─▶ skin weights ─▶ 52 ARKit ─▶ 15 clips
                                                           blendshapes
                                                                       │
-                              Vulkan / GLES 3.1 renderer ◀────────────┤
+                              Production GLES 3.1 / experimental Vulkan renderer ◀──┤
                               GLB export / GLB import ◀───────────────┘
 ```
 
@@ -39,7 +39,7 @@ but have not been exercised on hardware. The checked-in 0.10.1 APK/AAR predate t
 |---|---|
 | `native/include/afcore.h` | **The shared C ABI** — the single contract every native implementation answers to |
 | `native/src/` | C++17 engine kernel: anatomy → field → isosurface → UV → bake → rig → blendshapes → clips → GLB |
-| `native/src/render/` | Custom Vulkan (primary) and OpenGL ES 3.1 (fallback) renderers, GPU profiles and compressed atlas uploads |
+| `native/src/render/` | Custom OpenGL ES 3.1 production renderer and experimental Vulkan backend, GPU profiles and compressed atlas uploads |
 | `native/third_party/` | Vendored Apache-2.0 ASTC Encoder and Etc2Comp codecs |
 | `native/src/android/` | JNI bridge |
 | `rust/af-core/` | Rust implementation of the same ABI — engine logic, anatomy, prompt grammar, tables |
@@ -101,9 +101,53 @@ tools/device_check.sh --apk artifacts/avatarforge-debug-arm64.apk --soak 120
   than looking rigged and not animating.
 * **A missing measurement is never a zero.** The frame profiler reports `-1` for GPU timings on
   devices that cannot measure them instead of a plausible-looking `0.0`.
-* **The custom renderer stays custom.** Vulkan is the primary backend and OpenGL ES 3.1 the
-  fallback; no third-party engine is linked.
+* **The custom renderer stays custom.** OpenGL ES 3.1 is the production priority for the target Galaxy S24; Vulkan remains experimental and must not block GLES delivery. No third-party game engine is linked.
 * **Determinism.** The same spec produces byte-identical geometry, and that is asserted, not assumed.
+
+## Engineering quality directive (2026-11-15)
+
+**Standing objective: build the best practical digital-human engine, correctly the first time.**
+This is an engine-wide quality requirement, not a hair-only feature request and not permission to
+replace working systems indiscriminately.
+
+- **Quality before convenience:** target convincing, anatomically coherent digital humans with
+  high-quality geometry, materials, lighting, rendering, animation and asset fidelity. Performance
+  is an engineering constraint; do not use it as an excuse for avoidable visual defects.
+- **Research before consequential engineering decisions:** for each major upgrade, investigate
+  current authoritative specifications, platform/API constraints, proven production techniques and
+  relevant device/GPU behavior. Compare viable approaches, record sources and trade-offs in the
+  implementation notes, then choose and implement. Do not turn research into a reason to delay
+  ordinary coding.
+- **One durable architecture:** inspect and reuse the best existing implementation; replace only
+  demonstrably inadequate machinery. No disposable prototypes presented as production, duplicate
+  pipelines, competing renderers, superficial patches or repeated rebuilds caused by avoidable
+  architectural shortcuts.
+- **Target-device truth:** the primary phone target is Samsung SM-S921B, Exynos 2400, Xclipse 940,
+  Android API 37. OpenGL ES is the production renderer priority. Vulkan is experimental for this
+  device and must not block GLES. Any backend or feature claim requires compilation and runtime
+  evidence on the relevant target.
+- **Measure, do not guess:** profile CPU, GPU, memory, draw calls, overdraw, frame pacing and thermal
+  behavior. Missing measurements remain unavailable, never zero. Keep visual comparisons and
+  device results tied to exact source and artifact identities.
+- **Quality gates:** validate topology, normals, UVs, tangents, materials, skeletons, animation,
+  asset packaging and LODs automatically where possible. Review real multi-angle rendered output.
+  A successful host test or build is not proof of visual quality or physical-device behavior.
+- **No premature completion:** label every claim REAL + VERIFIED, UNVERIFIED, PARTIAL, MISSING or
+  BLOCKED. "Fixed" requires evidence for the affected behavior; Android runtime acceptance requires
+  installation and testing on the installed app on the target phone.
+- **Implementation ownership:** after a short baseline inspection and focused research, execute the
+  work continuously. Deliver code, tests, build artifacts and a concise README handover, not another
+  plan in place of implementation. Keep `main` stable and do not merge or force-push without
+  authorization.
+
+The quality roadmap is engine-wide: (1) geometry and rendering foundation; (2) reusable asset
+authoring, baking, packaging and validation; (3) AI-assisted generation, correction and QA;
+(4) animation and physics; (5) measured S24 performance and thermal adaptation. These are
+integrated production capabilities, not isolated demos. Existing capabilities must be audited
+against this standard before being rebuilt.
+
+**Status of this directive:** recorded in documentation only. It does not claim that these upgrades
+have been implemented, built, visually accepted or device-verified.
 
 ## Licence
 
