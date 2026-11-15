@@ -184,3 +184,41 @@ commit does not claim a new build or a phone-runtime pass.
 
 **Runtime status remains UNVERIFIED:** the update's own report says the Galaxy S24 installation, rendering,
 offline generation, GPU behavior, performance and thermal/lifecycle acceptance have not been tested.
+
+
+## Architecture boundary and preserved known-good handoff (2026-11-15)
+
+**Do not turn the whole ecosystem into one monolithic application.** These are separate concerns with explicit boundaries:
+
+- **AvatarForge** remains the standalone engine/SDK and engineering test lab. It owns avatar generation, rigging, deformation, animation, rendering, asset validation and engine diagnostics. It must remain independently buildable/testable and usable by more than one host.
+- **3D-Mega-Hub** is the intended integrated end-user product/host app. It may consume AvatarForge through its SDK/native interface as an embedded engine component. That does **not** mean copying the entire AvatarForge app/UI into the Hub, merging the repositories, or coupling unrelated services and tools into one Android process.
+- **3DDD and other donor projects** remain separate donor/source projects. Reuse only proven components behind narrow interfaces; preserve donor identity, history and independent testability.
+- Keep engine, SDK, host UI, asset pipeline, AI/provider adapters, voice, storage and optional services as separately owned modules/processes where their lifecycle, permissions, dependencies or resource needs justify it. One user-facing installable product is a packaging decision, not a mandate for one codebase/module/process.
+- Do not create a competing AvatarForge replacement inside 3D-Mega-Hub. Integrate the proven engine capability, not a second engine.
+
+### User-supplied baseline: preserve, do not ask for it again
+
+The user previously supplied a working pre-integration AvatarForge APK in Dropbox:
+
+- File: `AvatarForge-pre-integration-debug-f12a35acefd1 (1).apk`
+- Dropbox location: `/AvatarForge/3d engine/AvatarForge-pre-integration-debug-f12a35acefd1 (1).apk`
+- Size: **11,026,696 bytes**
+- Historical recorded test evidence: **5/5 app tests passed and 43/43 SDK tests passed**; JobHandle retention was included in the SDK coverage. The contemporaneous handoff described the Samsung engine as working/visible.
+- Classification: **HISTORICAL KNOWN-GOOD RECOVERY BASELINE** for comparison and regression recovery. This is not evidence that the current branch or current APK has the same behavior, and it is not a current S24 verification result. Preserve the original unchanged; compare new builds against it and never overwrite/relabel it as a newer build.
+
+The user also supplied a full source snapshot in Dropbox:
+
+- `/Update/AvatarForge-fixed-3b98600/AvatarForge/`
+- This is a source tree, not merely an APK: it contains `app/`, `engine/`, `native/`, `sdk/`, `rust/`, `abi/`, `tools/`, `docs/`, `requirements/`, `prebuilt/`, `artifacts/`, build files, `README.md`, `PROJECT_STATUS.md`, `BUILD.md`, `DEVICE.md` and `DEVELOPMENT.md`.
+- Treat this as an existing user-supplied implementation/reference snapshot. Inspect and compare it before asking for any skeleton, rig, source copy or test baseline again. Do not assume it is identical to the live GitHub head; verify exact files/SHAs before selectively porting.
+- Source snapshot checkpoint: [Dropbox PROJECT_STATUS.md](https://www.dropbox.com/scl/fi/bwbd3qrr432poip5epnpv) and [Dropbox README.md](https://www.dropbox.com/scl/fi/lgkron1i7uco8yhiylr4r).
+
+**Resume rule:** Before requesting a user re-upload or proposing a replacement skeleton, inspect this Dropbox source snapshot and the preserved pre-integration APK first. The user has already supplied the baseline. If a file is inaccessible, state the exact access limitation and continue with accessible material; do not ask them to resend something already located.
+
+### Evidence distinction
+
+- **REAL + VERIFIED (historical record):** the original supplied APK was recorded as passing 5/5 app tests and 43/43 SDK tests at handoff time.
+- **UNVERIFIED (current):** whether that APK still installs/runs on the present Android version, and whether the Dropbox source snapshot is byte-for-byte represented by any current GitHub branch.
+- **UNVERIFIED (current):** current Hub integration of the complete AvatarForge engine. A README, copied source tree, AAR or passing host test alone does not prove runtime integration.
+- No current device test is implied by this handoff record.
+
