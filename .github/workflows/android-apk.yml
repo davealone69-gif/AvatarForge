@@ -117,3 +117,40 @@ jobs:
             dist/AvatarForge-debug-arm64.apk
             dist/AvatarForge-release-arm64.apk
             dist/AvatarForge-sdk.aar
+
+  publish-latest-apk:
+    name: Publish latest APK download
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AvatarForge-Android-${{ github.sha }}
+          path: release-apk
+      - name: Stage direct APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find release-apk -type f -name '*debug*.apk' -print -quit)"
+          test -n "$apk"
+          mkdir -p release-assets
+          cp "$apk" release-assets/latest-debug.apk
+      - name: Publish latest debug APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-${{ github.run_number }}-${{ github.run_attempt }}
+          name: Latest Android debug build #${{ github.run_number }}
+          body: |
+            Automated debug/test APK from commit ${{ github.sha }}.
+            This is not a production-signed release.
+          files: release-assets/latest-debug.apk
+          make_latest: true
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
