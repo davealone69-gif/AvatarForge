@@ -1,5 +1,11 @@
 # AvatarForge
 
+## Download the latest Android APK
+
+[**⬇ Download latest debug APK**](https://github.com/davealone69-gif/AvatarForge/releases/latest/download/latest-debug.apk)
+
+This direct download is refreshed after each successful Android build on `main`. It is a debug/test APK, not a production-signed release.
+
 A standalone Android app that **generates, auto-rigs, animates and renders a photorealistic
 full-body 3D avatar entirely on the device** — from a text prompt, a photo, or a two-image
 multi-reference flow.
